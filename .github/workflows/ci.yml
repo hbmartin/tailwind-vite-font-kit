@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Needed to push the metrics note back to the repo.
+permissions:
+  contents: write
+
+concurrency:
+  # Notes pushes serialise badly; one run per ref at a time.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Registry builds and is valid JSON
+        run: |
+          pnpm registry:build
+          node -e "
+            const d = require('./registry/r/fonts.json');
+            if (d.type !== 'registry:base') throw new Error('unexpected type: ' + d.type);
+            if (!d.devDependencies?.includes('tailwind-font-kit')) throw new Error('missing devDependency');
+            if (d.files[0].target !== '~/fonts.config.mjs') throw new Error('target must be project-root');
+            console.log('registry ok');
+          "
+          # Fail if the committed registry output is stale.
+          git diff --exit-code registry/r || {
+            echo '::error::registry/r is out of date — run `pnpm registry:build` and commit.'
+            exit 1
+          }
+
+      - name: Build fixture
+        working-directory: test/fixture
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm build
+
+      - name: Collect metrics
+        id: metrics
+        run: |
+          node scripts/collect-metrics.mjs test/fixture > metrics.json
+          cat metrics.json
+
+      - name: Assert invariants
+        run: |
+          node -e "
+            const m = require('./metrics.json');
+            const must = {
+              googleapisRefs: 0, gstaticRefs: 0, blinkMacSystemFontLocals: 0,
+              leakedThemeAtRule: 0, defaultFontFamilyIsVar: 1, themeVarsWithFallback: 2,
+            };
+            const bad = Object.entries(must).filter(([k, v]) => m[k] !== v);
+            if (bad.length) {
+              for (const [k, v] of bad) console.error(\`::error::\${k} = \${m[k]}, expected \${v}\`);
+              process.exit(1);
+            }
+            if (m.fontFaceWithSizeAdjust < 8) {
+              console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
+              process.exit(1);
+            }
+            console.log('invariants ok');
+          "
+
+      - name: Job summary
+        run: |
+          {
+            echo '### Font metrics'
+            echo ''
+            echo '| metric | value |'
+            echo '|---|---|'
+            node -e "
+              const m = require('./metrics.json');
+              for (const [k, v] of Object.entries(m)) console.log(\`| \${k} | \${v} |\`);
+            "
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Notes are per-commit, so PR runs would attach to a commit that may never land.
+      - name: Write metrics to git notes
+        if: github.event_name == 'push'
+        run: ./scripts/write-note.sh metrics.json

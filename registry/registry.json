@@ -1,0 +1,25 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "tailwind-font-kit",
+  "homepage": "https://github.com/hbmartin/tailwind-font-kit",
+  "items": [
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "fonts",
+      "type": "registry:base",
+      "title": "TanStack Start font pipeline",
+      "description": "Self-hosted Google fonts with metric-matched fallbacks, wired into Tailwind v4's @theme. One Vite plugin; your styles.css and __root.tsx are never touched.",
+      "author": "hbmartin",
+      "categories": ["fonts", "performance"],
+      "devDependencies": ["tailwind-font-kit"],
+      "files": [
+        {
+          "path": "registry/files/fonts.config.mjs",
+          "type": "registry:file",
+          "target": "~/fonts.config.mjs"
+        }
+      ],
+      "docs": "Two steps left.\n\n1. Add fonts() to vite.config.ts, BEFORE tailwindcss() — both are enforce:'pre', so array order decides:\n\n     import { fonts } from 'tailwind-font-kit'\n\n     plugins: [\n       nitro(),\n       fonts(),\n       tailwindcss(),\n       tanstackStart(),\n       viteReact(),\n     ]\n\n2. Edit fonts.config.mjs to name the fonts you want.\n\nAlready have fonts wired up? Run `npx tss-fonts adopt` instead — it reads the Google @import and --font-* vars you already have, writes them into fonts.config.mjs, and removes them from your CSS. It prints a diff and supports --dry-run.\n\nNote: shadcn cannot edit vite.config.ts (no codemods, by design), which is why step 1 is manual. `npx tss-fonts init` will do it for you."
+    }
+  ]
+}
