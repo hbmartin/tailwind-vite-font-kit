@@ -37,7 +37,7 @@
     "README.md"
   ],
   "scripts": {
-    "registry:build": "shadcn build registry/registry.json --output registry/r",
+    "registry:build": "npx --yes shadcn@4 build registry/registry.json --output registry/r",
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "peerDependencies": {
