@@ -30,22 +30,32 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          # Installs the root lockfile and nothing else, so this shares a cache key
+          # with ci.yml's `checks` job by design — same dependency set, same store.
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      # Node 22 ships npm 10, which predates trusted publishing.
+      # Node 22 ships npm 10, which predates trusted publishing. Pinned rather than
+      # `@latest`: this is the one job that sees the OIDC token, so the npm that
+      # handles it is a fixed version, not whatever the registry served that morning.
+      # 11.5.1 is the first release with trusted publishing.
       - name: Upgrade npm
         run: |
           npm config set prefix ~/.local
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          PATH="$HOME/.local/bin:$PATH" npm install -g npm@latest
+          PATH="$HOME/.local/bin:$PATH" npm install -g npm@11.5.1
 
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The tag arrives through the environment, not through `${{ }}` expanded into the
+      # script source — a release name is free text, and expansion happens before the
+      # shell ever sees quoting.
       - name: Tag matches package.json version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          tag="${{ github.event.release.tag_name }}"
+          tag="$RELEASE_TAG"
           pkg="v$(node -p "require('./package.json').version")"
           if [ "$tag" != "$pkg" ]; then
             echo "::error::release tag $tag does not match package.json ($pkg)"

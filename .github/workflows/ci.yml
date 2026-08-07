@@ -32,6 +32,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
+          # No cache-dependency-path: the default is the root lockfile, which is exactly
+          # what this job installs. All three matrix legs share one key — the key has no
+          # Node version in it — and that is correct, because the pnpm store they build
+          # is identical.
           cache: pnpm
 
       - name: Install
@@ -80,6 +84,16 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          # setup-node's cache key is `node-cache-<os>-<arch>-pnpm-<lockfile hash>` —
+          # the Node version is *not* in it. This job installs test/fixture into the
+          # same pnpm store as the root install, so without naming the fixture lockfile
+          # here it would compute the same key as `checks` and race it: whichever job
+          # saved first won, and every later run got an exact key hit, which makes
+          # cache-save return early. The fixture's deps then never entered the cache
+          # and were re-fetched on every run. Two lockfiles, one hash, its own key.
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            test/fixture/pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile
