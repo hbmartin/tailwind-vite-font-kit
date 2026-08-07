@@ -31,6 +31,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # This job clones, installs and builds a separate repo. A `contents: write`
+          # token persisted in .git/config would be readable by every install script and
+          # build step that runs; the note step below configures it after all of that.
+          persist-credentials: false
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -96,7 +100,14 @@ jobs:
 
       - name: Append CLS to the git note
         if: always() && hashFiles('cls-metrics.json') != ''
-        run: ./scripts/write-note.sh cls-metrics.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Credentials land here rather than at checkout, so the untrusted build and
+          # sweep steps above never run alongside a write-scoped token on disk.
+          git config --local "http.https://github.com/.extraheader" \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          ./scripts/write-note.sh cls-metrics.json
 
       - name: Open an issue on failure
         if: failure()
