@@ -1,7 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // DROP-IN for a reusable font generator: decide what to do about `opsz`.
-// Everything here is offline — fontkit + @capsizecss/metrics, no network, no
-// browser. Reads the axes out of the woff2 you are ACTUALLY going to serve.
+// Everything here is offline — no network, no browser. Reads the axes out of the woff2
+// you are ACTUALLY going to serve.
+//
+// Nothing in src/ imports this, so its dependencies are deliberately NOT the kit's —
+// install them in the project that uses it:
+//   pnpm add -D fontkit @capsizecss/unpack   # + wawoff2, only if you call toSfnt()
 //
 //   import { detectAxes, toSfnt, planOpsz, buildFallbackCss } from './opsz-policy.mjs'
 //
