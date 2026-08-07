@@ -1,0 +1,52 @@
+{
+  "name": "tailwind-font-kit",
+  "version": "0.1.0",
+  "description": "Self-hosted Google fonts with metric-matched fallbacks for TanStack Start + Tailwind v4, as one Vite plugin",
+  "keywords": [
+    "vite-plugin",
+    "tanstack-start",
+    "tailwindcss",
+    "fonts",
+    "cls",
+    "web-vitals",
+    "size-adjust"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hbmartin/tailwind-font-kit.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.18.0",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./index.d.ts",
+  "bin": {
+    "tss-fonts": "./bin/tss-fonts.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "extras",
+    "index.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "registry:build": "npx --yes shadcn@4 build registry/registry.json --output registry/r",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "peerDependencies": {
+    "vite": "^6 || ^7 || ^8"
+  },
+  "dependencies": {
+    "@capsizecss/metrics": "^4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
