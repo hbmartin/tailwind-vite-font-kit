@@ -4,7 +4,7 @@
 // Link: preload header, SSR) is covered by the weekly job against the reference app.
 import { defineConfig } from 'vite'
 import tailwindcss from '@tailwindcss/vite'
-import { fonts } from 'tailwind-font-kit'
+import { fonts } from 'tailwind-vite-font-kit'
 
 export default defineConfig({
   plugins: [fonts(), tailwindcss()],

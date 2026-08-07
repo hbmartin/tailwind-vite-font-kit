@@ -1,4 +1,4 @@
-// tailwind-font-kit — the whole Google-font pipeline as ONE Vite plugin.
+// tailwind-vite-font-kit — the whole Google-font pipeline as ONE Vite plugin.
 //
 //   plugins: [ nitro(), fonts({ families: [...] }), tailwindcss(), tanstackStart(), viteReact() ]
 //
@@ -63,10 +63,13 @@ export function fonts(userOptions = {}) {
     for (const name of candidates) {
       const p = join(r, name)
       if (!existsSync(p)) continue
-      const mod = await import(pathToFileURL(p).href)
+      // Cache-busted so a dev-server restart in the same process sees edits.
+      const mod = await import(pathToFileURL(p).href + `?t=${Date.now()}`)
       Object.assign(opts, { ...(mod.default ?? mod), ...userOptions })
+      configFile = p
       log(`loaded ${name}`)
-      return
+      if (opts.families?.length) return
+      break // config found but no families in it — fall through to the error
     }
     throw new Error(
       '[tss-fonts] no families configured. Either pass them inline:\n' +
@@ -81,14 +84,13 @@ export function fonts(userOptions = {}) {
   let gen = null
   let entrySeen = 0
   let warnedConflict = false
+  let configFile = null
 
   const outDirFor = (r) =>
-    opts.output === 'commit'
-      ? resolve(r, typeof opts.output === 'string' && opts.output !== 'commit' ? opts.output : '.tss-fonts')
-      : join(r, 'node_modules', '.cache', 'tss-fonts')
+    opts.output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
 
   return {
-    name: 'tailwind-font-kit',
+    name: 'tailwind-vite-font-kit',
     // MUST beat @tailwindcss/vite, which is also `pre`. Between two `pre` plugins the
     // array order decides, so this plugin has to be listed before tailwindcss().
     enforce: 'pre',
@@ -98,6 +100,9 @@ export function fonts(userOptions = {}) {
       isServe = env.command === 'serve'
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
+      if (opts.output !== 'cache' && opts.output !== 'commit') {
+        throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
+      }
       const outDir = outDirFor(root)
       mkdirSync(outDir, { recursive: true })
 
@@ -174,6 +179,17 @@ export function fonts(userOptions = {}) {
 
     // Dev has no bundle, so serve the same bytes off the generated dir.
     configureServer(server) {
+      // Generation happens once, in config() — a config-file edit needs a restart, and
+      // configFileDependencies does not cover files loaded by a plugin, so watch it here.
+      if (configFile) {
+        server.watcher.add(configFile)
+        server.watcher.on('change', (f) => {
+          if (resolve(f) === configFile) {
+            log(`${relative(root, configFile)} changed — restarting dev server`)
+            server.restart()
+          }
+        })
+      }
       const prefix = opts.publicPath.replace(/\/$/, '') + '/'
       server.middlewares.use((req, res, next) => {
         const url = (req.url || '').split('?')[0]
@@ -216,6 +232,9 @@ export function fonts(userOptions = {}) {
         // The entry is whatever stylesheet imports 'tailwindcss' — detect by CONTENT,
         // not by path, so it works regardless of what the project calls the file.
         if (!/@import\s+["']tailwindcss["']/.test(code)) return
+        // Counted BEFORE the already-injected check: an entry that carries the import
+        // (hand-added, or a re-transform) is still a seen entry, not a buildEnd failure.
+        entrySeen++
         if (code.includes('fonts.gen.css')) return
 
         // We do NOT rewrite the user's CSS. `npx tss-fonts adopt` does that once, with a
@@ -252,13 +271,15 @@ export function fonts(userOptions = {}) {
         // directory, so the specifier must be relative to the entry, not the root.
         let spec = relative(dirname(id.split('?')[0]), gen.cssPath).split(/[\\/]/).join('/')
         if (!spec.startsWith('.')) spec = './' + spec
-        entrySeen++
         log(`injected @import into ${id.split('/').pop()}`)
         return code.replace(/(@import\s+["']tailwindcss["'];?)/, `$1\n@import '${spec}';`)
       },
     },
 
     buildEnd() {
+      // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
+      // an SSR/nitro pass that never transforms CSS must not report a false failure.
+      if (this.environment && this.environment.config?.consumer !== 'client') return
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {

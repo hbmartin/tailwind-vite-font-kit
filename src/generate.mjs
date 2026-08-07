@@ -11,8 +11,10 @@ import { join, posix } from 'node:path'
 import { createRequire } from 'node:module'
 import { fallbackFaces } from './metrics.mjs'
 import { googleUrl } from './opsz.mjs'
+import { weightsFromSpec } from './detect.mjs'
 
 const require_ = createRequire(import.meta.url)
+const PKG_VERSION = require_('../package.json').version
 
 // Google returns legacy TTF with every subset in one file unless it believes you are a
 // modern desktop browser. With this UA it returns per-subset woff2 with unicode-range.
@@ -26,35 +28,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * fetch with retry+backoff. A bare ETIMEDOUT to fonts.googleapis.com killed a build
  * during testing with no recovery; a cold first contact was measured at 61s.
  */
-async function fetchRetry(url, { tries = 3, baseDelay = 500, log = () => {} } = {}) {
+async function fetchRetry(url, { tries = 3, baseDelay = 500, timeout = 60_000, log = () => {} } = {}) {
   let lastErr
   for (let i = 0; i < tries; i++) {
     try {
-      const res = await fetch(url, { headers: { 'user-agent': UA } })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Generous per-attempt timeout: a cold first contact was measured at 61s total,
+      // but a single hung socket must not stall the build forever.
+      const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(timeout) })
+      if (!res.ok) {
+        const err = new Error(`HTTP ${res.status}`)
+        // Only transient statuses are worth retrying; a 400/404 will never get better.
+        err.permanent = !(res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500)
+        throw err
+      }
       return res
     } catch (err) {
       lastErr = err
-      if (i < tries - 1) {
-        const wait = baseDelay * 2 ** i
-        log(`  fetch failed (${err.message}); retrying in ${wait}ms`)
-        await sleep(wait)
-      }
+      if (err.permanent || i === tries - 1) break
+      const wait = baseDelay * 2 ** i
+      log(`  fetch failed (${err.message}); retrying in ${wait}ms`)
+      await sleep(wait)
     }
   }
   throw new Error(
-    `[tss-fonts] could not fetch ${url} after ${tries} tries: ${lastErr?.message}. ` +
+    `[tss-fonts] could not fetch ${url}: ${lastErr?.message}. ` +
       `If this is CI, set \`output: 'commit'\` so the generated files live in the repo ` +
       `and builds never touch the network.`,
   )
 }
 
-/** Everything that changes the output, hashed — the cache key. */
+/** Everything that changes the output, hashed — the cache key. The package version is
+ *  part of it so upgrading the generator invalidates stale caches automatically. */
 function cacheKey(opts) {
   return createHash('sha256')
     .update(
       JSON.stringify({
-        v: 1,
+        v: PKG_VERSION,
         families: opts.families,
         subsets: opts.subsets,
         publicPath: opts.publicPath,
@@ -75,8 +84,12 @@ export async function generate(opts, outDir, log = () => {}) {
   const cssPath = join(outDir, 'fonts.gen.css')
 
   if (existsSync(metaPath) && existsSync(cssPath)) {
-    const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
-    if (meta.files.every((f) => existsSync(join(filesDir, f)))) {
+    // A truncated or hand-mangled meta file is a cache MISS, not a crash.
+    let meta = null
+    try {
+      meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+    } catch {}
+    if (Array.isArray(meta?.files) && meta.files.every((f) => existsSync(join(filesDir, f)))) {
       log(`cache hit (${meta.files.length} woff2, ${meta.realFaces} faces) — no network`)
       return { ...meta, cssPath, filesDir, fromCache: true }
     }
@@ -96,6 +109,18 @@ export async function generate(opts, outDir, log = () => {}) {
   const seenSrc = new Map()
 
   for (const fam of opts.families) {
+    // Weights may live only in an axes spec ('opsz,wght@9..144,500;9..144,700'); the
+    // fallback faces still need concrete values, so derive them rather than crash.
+    const famWeights = fam.weights?.length
+      ? fam.weights
+      : fam.axes
+        ? weightsFromSpec(fam.axes).weights
+        : []
+    if (!famWeights.length) {
+      throw new Error(
+        `[tss-fonts] family "${fam.name}" declares no weights, and its axes spec has no wght values to derive them from.`,
+      )
+    }
     const url = googleUrl(fam, log)
     log(`${fam.name}: ${url}`)
     const css = await (await fetchRetry(url, { log })).text()
@@ -116,9 +141,18 @@ export async function generate(opts, outDir, log = () => {}) {
     const selfHost = (fam.strategy ?? 'self-host') === 'self-host'
 
     for (const [, , block] of wanted) {
-      const weight = /font-weight:\s*([^;]+)/.exec(block)[1].trim()
-      const style = /font-style:\s*([^;]+)/.exec(block)[1].trim()
-      const src = /src:\s*url\(([^)]+)\)/.exec(block)[1]
+      // If Google reshapes the css2 output, fail with a message naming the family and
+      // URL instead of a bare TypeError on a null match.
+      const grab = (re, what) => {
+        const m = re.exec(block)
+        if (!m) {
+          throw new Error(`[tss-fonts] could not parse ${what} in a ${fam.name} @font-face block from ${url}`)
+        }
+        return m[1]
+      }
+      const weight = grab(/font-weight:\s*([^;]+)/, 'font-weight').trim()
+      const style = grab(/font-style:\s*([^;]+)/, 'font-style').trim()
+      const src = grab(/src:\s*url\(([^)]+)\)/, 'src')
       const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
 
       let href = src
@@ -144,8 +178,10 @@ export async function generate(opts, outDir, log = () => {}) {
           `}`,
       )
 
-      const w = Number(String(weight).split(' ')[0])
-      if (fam.preloadWeights?.includes(w) && !preloads.some((p) => p.href === href)) {
+      // A variable face declares 'font-weight: 100 900' — treat that as an inclusive
+      // range, so preloadWeights: [400] still matches it.
+      const [wLo, wHi = wLo] = String(weight).trim().split(/\s+/).map(Number)
+      if (fam.preloadWeights?.some((pw) => pw >= wLo && pw <= wHi) && !preloads.some((p) => p.href === href)) {
         // crossOrigin is REQUIRED even same-origin. Fonts are always CORS-fetched, and a
         // preload without it is a *different* cache entry, so the font downloads TWICE:
         // measured 4 requests / 185 kB instead of 2 / 93 kB, and fonts applied 104ms
@@ -154,7 +190,7 @@ export async function generate(opts, outDir, log = () => {}) {
       }
     }
 
-    const { css: fbCss, names } = fallbackFaces(METRICS, fam.name, opts.subsets[0], fam.weights, log)
+    const { css: fbCss, names } = fallbackFaces(METRICS, fam.name, opts.subsets[0], famWeights, log)
     if (fbCss) fallbackCss.push(fbCss)
 
     // Plain `@theme`, NEVER `@theme inline`. Under `inline` Tailwind bakes the literal
@@ -163,11 +199,11 @@ export async function generate(opts, outDir, log = () => {}) {
     // the root font-family inherits the fallbacks too.
     const stack = [`'${fam.name}'`, ...names.map((n) => `'${n}'`), ...(fam.stack ?? [])]
     themeLines.push(`  ${fam.themeVar}: ${stack.join(', ')};`)
-    log(`  ${fam.themeVar} -> ${names.length} fallback families x ${fam.weights.length} weights`)
+    log(`  ${fam.themeVar} -> ${names.length} fallback families x ${famWeights.length} weights`)
   }
 
   const out =
-    `/* GENERATED by tailwind-font-kit — do not edit. */\n\n` +
+    `/* GENERATED by tailwind-vite-font-kit — do not edit. */\n\n` +
     `${realFaces.join('\n')}\n\n${fallbackCss.join('\n')}\n\n@theme {\n${themeLines.join('\n')}\n}\n`
   writeFileSync(cssPath, out)
 

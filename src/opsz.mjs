@@ -38,15 +38,21 @@ export function hasOpszAxis(axes) {
  * returned unchanged.
  */
 export function pinOpsz(axes, pin) {
-  return axes.replace(
-    /@(.*)$/,
-    (_, tuples) =>
-      '@' +
-      tuples
-        .split(';')
-        .map((t) => t.replace(/^[\d.]+\.\.[\d.]+/, String(pin)))
-        .join(';'),
-  )
+  const at = axes.indexOf('@')
+  if (at === -1) return axes
+  // Axis tags are alphabetical in css2, so opsz is NOT always first — 'ital,opsz,wght'
+  // puts it second. Pin the value at opsz's own position in each tuple.
+  const oi = axes.slice(0, at).split(',').indexOf('opsz')
+  if (oi === -1) return axes
+  const tuples = axes
+    .slice(at + 1)
+    .split(';')
+    .map((t) => {
+      const parts = t.split(',')
+      if (parts[oi]?.includes('..')) parts[oi] = String(pin)
+      return parts.join(',')
+    })
+  return axes.slice(0, at) + '@' + tuples.join(';')
 }
 
 /**
