@@ -5,3 +5,32 @@ updates:
     directory: /
     schedule:
       interval: monthly
+
+  # Dev tooling only — the package itself has one runtime dependency and a peer range
+  # that is deliberately wide, so those are grouped separately from the noisy ones.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    versioning-strategy: increase
+    groups:
+      dev-tooling:
+        patterns:
+          - "oxlint"
+          - "oxfmt"
+          - "typescript"
+          - "@types/node"
+          - "publint"
+          - "@arethetypeswrong/cli"
+    ignore:
+      # The supported Node floor is a deliberate choice in `engines`, not something to
+      # follow @types/node upstream on.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  # The fixture is a real consumer of the plugin; keeping its Vite and Tailwind current
+  # is how the integration job notices an upstream break.
+  - package-ecosystem: npm
+    directory: /test/fixture
+    schedule:
+      interval: monthly

@@ -14,7 +14,9 @@ test('a spec without a wght axis yields no weights — other axes are not weight
 })
 
 test('familiesFromGoogleUrl defaults to [400] when the spec has no wght axis', () => {
-  const fams = familiesFromGoogleUrl('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital@0;1')
+  const fams = familiesFromGoogleUrl(
+    'https://fonts.googleapis.com/css2?family=Crimson+Pro:ital@0;1',
+  )
   assert.equal(fams.length, 1)
   assert.deepEqual(fams[0].weights, [400])
 })

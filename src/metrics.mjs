@@ -53,6 +53,11 @@ const targetVariant = (m, weight) => m.variants?.[weight >= 600 ? '700' : 'regul
 
 /**
  * Build the fallback faces for one family.
+ * @param {Record<string, any>} METRICS
+ * @param {string} family
+ * @param {string} subset
+ * @param {number[]} weights
+ * @param {(message: string) => void} [log]
  * @returns {{ css: string, names: string[] }} `names` go into the @theme stack, in order.
  */
 export function fallbackFaces(METRICS, family, subset, weights, log = () => {}) {

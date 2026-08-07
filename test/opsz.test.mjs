@@ -29,7 +29,11 @@ test('pinOpsz pins the opsz position when other axes come first', () => {
 })
 
 test('googleUrl pins opsz and defaults to 16', () => {
-  const url = googleUrl({ name: 'Fraunces', axes: 'opsz,wght@9..144,500;9..144,700', weights: [500] })
+  const url = googleUrl({
+    name: 'Fraunces',
+    axes: 'opsz,wght@9..144,500;9..144,700',
+    weights: [500],
+  })
   assert.match(url, /opsz,wght@16,500;16,700/)
 })
 
@@ -50,5 +54,8 @@ test('googleUrl builds a wght spec from weights when no axes are given, sorted',
 })
 
 test('spaces in a family name become +', () => {
-  assert.match(googleUrl({ name: 'Plus Jakarta Sans', weights: [400] }), /family=Plus\+Jakarta\+Sans/)
+  assert.match(
+    googleUrl({ name: 'Plus Jakarta Sans', weights: [400] }),
+    /family=Plus\+Jakarta\+Sans/,
+  )
 })

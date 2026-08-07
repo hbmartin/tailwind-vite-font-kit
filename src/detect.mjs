@@ -3,8 +3,17 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
 const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'build', '.output', '.nitro', '.vinxi',
-  '.tanstack', 'coverage', '.next', '.vercel',
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  '.output',
+  '.nitro',
+  '.vinxi',
+  '.tanstack',
+  'coverage',
+  '.next',
+  '.vercel',
 ])
 
 export function walk(dir, exts, out = [], depth = 0) {
@@ -51,8 +60,12 @@ export function detectTailwindEntry(root) {
 
 export function detectRootRoute(root) {
   for (const p of [
-    'src/routes/__root.tsx', 'src/routes/__root.jsx', 'src/routes/__root.ts', 'src/routes/__root.js',
-    'app/routes/__root.tsx', 'routes/__root.tsx',
+    'src/routes/__root.tsx',
+    'src/routes/__root.jsx',
+    'src/routes/__root.ts',
+    'src/routes/__root.js',
+    'app/routes/__root.tsx',
+    'routes/__root.tsx',
   ]) {
     if (existsSync(join(root, p))) return join(root, p)
   }
@@ -92,7 +105,10 @@ export function weightsFromSpec(spec) {
       if (raw.includes('..')) {
         const [lo, hi] = raw.split('..').map(Number)
         for (const w of [400, 500, 600, 700]) if (w >= lo && w <= hi) out.add(w)
-        if (!out.size) { out.add(lo); out.add(hi) }
+        if (!out.size) {
+          out.add(lo)
+          out.add(hi)
+        }
       } else if (/^\d+$/.test(raw)) {
         out.add(Number(raw))
       }
@@ -124,7 +140,10 @@ const norm = (s) => s.replace(/^['"]|['"]$/g, '').trim()
 
 /** Split a font-family value on top-level commas. */
 function splitStack(value) {
-  return value.split(',').map((s) => s.trim()).filter(Boolean)
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 /** Find `--font-*: <stack>` declarations and `font-family: <stack>` usages. */
@@ -196,10 +215,14 @@ export function buildFontPlan({ cssText, flags }) {
     const tv = themeVars.find((t) => t.first.toLowerCase() === fam.name.toLowerCase())
     let themeVar = forcedVar ?? tv?.varName
     if (!themeVar) {
-      const cand = MONOISH.test(fam.name) ? '--font-mono'
-        : SERIFY.test(fam.name) ? '--font-display'
-        : '--font-sans'
-      themeVar = takenVars.has(cand) ? `--font-${fam.name.toLowerCase().replace(/\W+/g, '-')}` : cand
+      const cand = MONOISH.test(fam.name)
+        ? '--font-mono'
+        : SERIFY.test(fam.name)
+          ? '--font-display'
+          : '--font-sans'
+      themeVar = takenVars.has(cand)
+        ? `--font-${fam.name.toLowerCase().replace(/\W+/g, '-')}`
+        : cand
     }
     while (takenVars.has(themeVar)) themeVar += '-2'
     takenVars.add(themeVar)
@@ -208,9 +231,12 @@ export function buildFontPlan({ cssText, flags }) {
     const usage = tv ?? usages.find((u) => u.first.toLowerCase() === fam.name.toLowerCase())
     let stack = usage ? usage.stack.slice(1).map(norm) : null
     if (!stack || !stack.length) {
-      stack = themeVar === '--font-mono' ? ['ui-monospace', 'monospace']
-        : themeVar === '--font-display' ? ['Georgia', 'serif']
-        : ['ui-sans-serif', 'system-ui', 'sans-serif']
+      stack =
+        themeVar === '--font-mono'
+          ? ['ui-monospace', 'monospace']
+          : themeVar === '--font-display'
+            ? ['Georgia', 'serif']
+            : ['ui-sans-serif', 'system-ui', 'sans-serif']
     }
     assigned.push({
       name: fam.name,
@@ -226,8 +252,13 @@ export function buildFontPlan({ cssText, flags }) {
 
   if (flags.sans || flags.display || flags.mono) {
     // Explicit flags win. A flagged family reuses detected weights/axes when the name matches.
-    const pick = (name) => detected.find((d) => d.name.toLowerCase() === name.toLowerCase())
-      ?? { name, weights: [400, 500, 600, 700], axes: null, hasOpsz: false }
+    const pick = (name) =>
+      detected.find((d) => d.name.toLowerCase() === name.toLowerCase()) ?? {
+        name,
+        weights: [400, 500, 600, 700],
+        axes: null,
+        hasOpsz: false,
+      }
     if (flags.sans) attach(pick(flags.sans), '--font-sans')
     if (flags.display) attach(pick(flags.display), '--font-display')
     if (flags.mono) attach(pick(flags.mono), '--font-mono')
@@ -242,7 +273,8 @@ export function buildFontPlan({ cssText, flags }) {
   const primary = assigned.find((a) => a.themeVar === '--font-sans') ?? assigned[0]
   if (primary) primary.preloadWeights = [primary.weights.includes(400) ? 400 : primary.weights[0]]
   if (flags.preload === 'none') for (const a of assigned) a.preloadWeights = []
-  if (flags.preload === 'all') for (const a of assigned) a.preloadWeights = [a.weights.includes(400) ? 400 : a.weights[0]]
+  if (flags.preload === 'all')
+    for (const a of assigned) a.preloadWeights = [a.weights.includes(400) ? 400 : a.weights[0]]
 
   return { detected, assigned, googleUrls, themeVars }
 }

@@ -145,7 +145,11 @@ export function detectAxes(buf) {
   const font = fontkit.create(asBuf(buf))
   const axes = font.variationAxes || {}
   const opsz = axes.opsz ?? null
-  return { axes, hasOpsz: !!opsz, opsz: opsz && { min: opsz.min, default: opsz.default, max: opsz.max } }
+  return {
+    axes,
+    hasOpsz: !!opsz,
+    opsz: opsz && { min: opsz.min, default: opsz.default, max: opsz.max },
+  }
 }
 
 /** Zero-I/O variant: the axis list is already in the Google css2 URL you asked
@@ -201,7 +205,13 @@ export function readFvar(buf) {
  * @param opts.tolerancePct          max acceptable advance-width error (default 1.5)
  */
 export function planOpsz(buf, opts = {}) {
-  const { sizes = [16], weights = [400], opticalSizingPinned = false, fluidTypeScale = false, tolerancePct = 1.5 } = opts
+  const {
+    sizes = [16],
+    weights = [400],
+    opticalSizingPinned = false,
+    fluidTypeScale = false,
+    tolerancePct = 1.5,
+  } = opts
   const font = fontkit.create(asBuf(buf))
   const ax = font.variationAxes?.opsz
   const perWeight = weights.length > 1
@@ -248,7 +258,8 @@ export function planOpsz(buf, opts = {}) {
     return {
       ...base,
       strategy: 'pin-fvar-default',
-      reason: 'app pins font-optical-sizing:none — the browser renders the fvar default instance at every size',
+      reason:
+        'app pins font-optical-sizing:none — the browser renders the fvar default instance at every size',
       instances: weights.map((w) => ({ weight: w, variations: vary(ax.default, w) })),
     }
   }
@@ -304,7 +315,12 @@ export function planOpsz(buf, opts = {}) {
     reason: `width swing ${swingPct.toFixed(2)}% over the used sizes exceeds ${tolerancePct}%`,
     instances: buckets.flatMap((g) => {
       const centre = g[Math.floor(g.length / 2)]
-      return weights.map((w) => ({ weight: w, sizes: g, suffix: ` Fallback ${centre}`, variations: vary(centre, w) }))
+      return weights.map((w) => ({
+        weight: w,
+        sizes: g,
+        suffix: ` Fallback ${centre}`,
+        variations: vary(centre, w),
+      }))
     }),
     warning:
       'each bucket needs its own family name AND a media/container query switching families exactly where ' +

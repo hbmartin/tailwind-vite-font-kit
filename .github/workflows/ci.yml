@@ -15,7 +15,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
+  # Cheap, hermetic gates, across the whole supported Node range. `engines` says >=22,
+  # so 22 is the floor that must keep working and 26 is the newest that must not break.
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      # V8's coverage numbers shift slightly between Node releases, so the thresholds
+      # are enforced against the floor version only — the matrix still runs the tests.
+      - name: Coverage thresholds
+        if: matrix.node-version == 22
+        run: pnpm run test:coverage
+
+      # The package ships raw .mjs behind a hand-written index.d.ts, so the exports map
+      # and the type resolution are the parts most likely to break silently.
+      - name: Package and type resolution
+        if: matrix.node-version == 22
+        run: |
+          pnpm run publint
+          pnpm run types:lint
+
+      - name: Audit
+        if: matrix.node-version == 22
+        run: pnpm audit --audit-level moderate
+
+  # Everything that needs the network, a real Vite build, or the shadcn CLI.
+  integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,9 +83,6 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
-
-      - name: Unit tests
-        run: pnpm test
 
       - name: Registry builds and is valid JSON
         run: |
@@ -109,7 +156,7 @@ jobs:
   # A separate job so `contents: write` is granted to nothing but the note push.
   notes:
     if: github.event_name == 'push'
-    needs: test
+    needs: [checks, integration]
     runs-on: ubuntu-latest
     permissions:
       contents: write

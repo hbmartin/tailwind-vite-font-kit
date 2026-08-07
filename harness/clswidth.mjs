@@ -22,7 +22,10 @@ const SNAP = `(()=>{const h=document.querySelector('h1');const r=document.create
  return {lines:r.getClientRects().length,h:Math.round(h.getBoundingClientRect().height),
  by:pb?Math.round(pb.getBoundingClientRect().top+window.scrollY):null,doc:document.documentElement.scrollHeight}})()`
 
-const b = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+const b = await puppeteer.launch({
+  headless: 'new',
+  args: ['--no-sandbox', '--disable-dev-shm-usage'],
+})
 const rows = []
 for (const w of WIDTHS) {
   const p = await b.newPage()
@@ -31,7 +34,8 @@ for (const w of WIDTHS) {
   await p.evaluateOnNewDocument(INIT)
   await p.setRequestInterception(true)
   p.on('request', (r) => {
-    if (r.resourceType() === 'font' || /\.woff2?($|\?)/.test(r.url())) setTimeout(() => r.continue().catch(() => {}), DELAY)
+    if (r.resourceType() === 'font' || /\.woff2?($|\?)/.test(r.url()))
+      setTimeout(() => r.continue().catch(() => {}), DELAY)
     else r.continue().catch(() => {})
   })
   p.goto(BASE + PATHNAME, { waitUntil: 'domcontentloaded' }).catch(() => {})
@@ -40,7 +44,12 @@ for (const w of WIDTHS) {
   await new Promise((r) => setTimeout(r, DELAY + 1600))
   const after = await p.evaluate(SNAP).catch(() => null)
   const cls = (await p.evaluate('window.__s')).reduce((a, x) => a + x, 0)
-  rows.push({ w, cls: +cls.toFixed(4), dLines: after && before ? after.lines - before.lines : null, dY: after && before && after.by != null ? after.by - before.by : null })
+  rows.push({
+    w,
+    cls: +cls.toFixed(4),
+    dLines: after && before ? after.lines - before.lines : null,
+    dY: after && before && after.by != null ? after.by - before.by : null,
+  })
   await p.close()
 }
 await b.close()
@@ -57,5 +66,11 @@ const summarise = (rs, name) => {
 console.log(`\n=== ${LABEL} ${PATHNAME} ===`)
 summarise(desk, '700-1060')
 summarise(mob, '360-680')
-console.log('per-width: ' + rows.map((r) => `${r.w}:${r.cls}${r.dLines ? '(' + r.dLines + 'L)' : ''}`).join(' '))
-writeFileSync(process.env.OUT || `/tmp/clswidth-${LABEL}.json`, JSON.stringify({ label: LABEL, rows }, null, 1))
+console.log(
+  'per-width: ' +
+    rows.map((r) => `${r.w}:${r.cls}${r.dLines ? '(' + r.dLines + 'L)' : ''}`).join(' '),
+)
+writeFileSync(
+  process.env.OUT || `/tmp/clswidth-${LABEL}.json`,
+  JSON.stringify({ label: LABEL, rows }, null, 1),
+)

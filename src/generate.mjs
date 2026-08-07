@@ -27,18 +27,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 /**
  * fetch with retry+backoff. A bare ETIMEDOUT to fonts.googleapis.com killed a build
  * during testing with no recovery; a cold first contact was measured at 61s.
+ * @param {string} url
+ * @param {{tries?: number, baseDelay?: number, timeout?: number,
+ *          log?: (message: string) => void}} [o]
  */
-async function fetchRetry(url, { tries = 3, baseDelay = 500, timeout = 60_000, log = () => {} } = {}) {
+async function fetchRetry(
+  url,
+  { tries = 3, baseDelay = 500, timeout = 60_000, log = () => {} } = {},
+) {
   let lastErr
   for (let i = 0; i < tries; i++) {
     try {
       // Generous per-attempt timeout: a cold first contact was measured at 61s total,
       // but a single hung socket must not stall the build forever.
-      const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(timeout) })
+      const res = await fetch(url, {
+        headers: { 'user-agent': UA },
+        signal: AbortSignal.timeout(timeout),
+      })
       if (!res.ok) {
-        const err = new Error(`HTTP ${res.status}`)
+        const err = /** @type {Error & {permanent?: boolean}} */ (new Error(`HTTP ${res.status}`))
         // Only transient statuses are worth retrying; a 400/404 will never get better.
-        err.permanent = !(res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500)
+        err.permanent = !(
+          res.status === 408 ||
+          res.status === 425 ||
+          res.status === 429 ||
+          res.status >= 500
+        )
         throw err
       }
       return res
@@ -74,8 +88,29 @@ function cacheKey(opts) {
 }
 
 /**
- * @returns {Promise<{cssPath: string, filesDir: string, files: string[], preloads: object[],
- *                    realFaces: number, fallbackFaces: number, fromCache: boolean}>}
+ * Options once the plugin has applied its defaults and resolved `families` (from the
+ * call site or from `fonts.config.mjs`). Everything below can assume all of it is set.
+ * @typedef {Required<Pick<import('../index.d.ts').FontsOptions,
+ *     'subsets' | 'publicPath' | 'assets' | 'output' | 'preloadHeader' | 'silent'>>
+ *   & { families: import('../index.d.ts').FontFamily[] }} ResolvedOptions
+ */
+
+/**
+ * @typedef {object} Generated
+ * @property {string} cssPath
+ * @property {string} filesDir
+ * @property {string[]} files
+ * @property {import('../index.d.ts').FontPreload[]} preloads
+ * @property {number} realFaces
+ * @property {number} fallbackFaces
+ * @property {boolean} fromCache
+ */
+
+/**
+ * @param {ResolvedOptions} opts
+ * @param {string} outDir
+ * @param {(message: string) => void} [log]
+ * @returns {Promise<Generated>}
  */
 export async function generate(opts, outDir, log = () => {}) {
   const key = cacheKey(opts)
@@ -85,6 +120,7 @@ export async function generate(opts, outDir, log = () => {}) {
 
   if (existsSync(metaPath) && existsSync(cssPath)) {
     // A truncated or hand-mangled meta file is a cache MISS, not a crash.
+    /** @type {Omit<Generated, 'cssPath' | 'filesDir' | 'fromCache'> | null} */
     let meta = null
     try {
       meta = JSON.parse(readFileSync(metaPath, 'utf8'))
@@ -95,15 +131,17 @@ export async function generate(opts, outDir, log = () => {}) {
     }
   }
 
-  const { entireMetricsCollection: METRICS } = await import(
-    '@capsizecss/metrics/entireMetricsCollection'
-  ).catch(() => require_('@capsizecss/metrics/entireMetricsCollection'))
+  const { entireMetricsCollection: METRICS } =
+    await import('@capsizecss/metrics/entireMetricsCollection').catch(() =>
+      require_('@capsizecss/metrics/entireMetricsCollection'),
+    )
 
   mkdirSync(filesDir, { recursive: true })
 
   const realFaces = []
   const fallbackCss = []
   const themeLines = []
+  /** @type {import('../index.d.ts').FontPreload[]} */
   const preloads = []
   const files = []
   const seenSrc = new Map()
@@ -146,7 +184,9 @@ export async function generate(opts, outDir, log = () => {}) {
       const grab = (re, what) => {
         const m = re.exec(block)
         if (!m) {
-          throw new Error(`[tss-fonts] could not parse ${what} in a ${fam.name} @font-face block from ${url}`)
+          throw new Error(
+            `[tss-fonts] could not parse ${what} in a ${fam.name} @font-face block from ${url}`,
+          )
         }
         return m[1]
       }
@@ -181,12 +221,21 @@ export async function generate(opts, outDir, log = () => {}) {
       // A variable face declares 'font-weight: 100 900' — treat that as an inclusive
       // range, so preloadWeights: [400] still matches it.
       const [wLo, wHi = wLo] = String(weight).trim().split(/\s+/).map(Number)
-      if (fam.preloadWeights?.some((pw) => pw >= wLo && pw <= wHi) && !preloads.some((p) => p.href === href)) {
+      if (
+        fam.preloadWeights?.some((pw) => pw >= wLo && pw <= wHi) &&
+        !preloads.some((p) => p.href === href)
+      ) {
         // crossOrigin is REQUIRED even same-origin. Fonts are always CORS-fetched, and a
         // preload without it is a *different* cache entry, so the font downloads TWICE:
         // measured 4 requests / 185 kB instead of 2 / 93 kB, and fonts applied 104ms
         // LATER than shipping no preload at all. No error, no console warning.
-        preloads.push({ rel: 'preload', as: 'font', type: 'font/woff2', href, crossOrigin: 'anonymous' })
+        preloads.push({
+          rel: 'preload',
+          as: 'font',
+          type: 'font/woff2',
+          href,
+          crossOrigin: 'anonymous',
+        })
       }
     }
 

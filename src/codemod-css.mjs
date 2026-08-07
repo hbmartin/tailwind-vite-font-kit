@@ -6,13 +6,22 @@ const GOOGLE_IMPORT_LINE =
   /^[ \t]*@import\s+(?:url\(\s*)?["']?https:\/\/fonts\.googleapis\.com\/[^"')\n]+["']?\s*\)?\s*;?[ \t]*\r?\n?/gm
 
 /**
- * @param {object} o
- * @param {string[]} o.ownedVars     --font-* vars the generated @theme now owns
- * @param {{family:string,themeVar:string}[]} o.rewriteUsages
- * @param {string} [o.genCssBasename] only used when addImport is true
- * @param {boolean} [o.addImport]     default false — the Vite plugin injects the @import
- *                                    in-memory, so a physical one would point at
- *                                    node_modules/.cache and is not wanted.
+ * @typedef {object} CodemodCssOptions
+ * @property {string[]} ownedVars     --font-* vars the generated theme block now owns
+ * @property {{family:string,themeVar:string}[]} rewriteUsages
+ * @property {string} [genCssBasename] only used when addImport is true
+ * @property {boolean} [addImport]     default false — the Vite plugin injects the CSS
+ *                                     import in-memory, so a physical one would point
+ *                                     at node_modules/.cache and is not wanted.
+ *                                     (Do not write a bare at-import here: TypeScript
+ *                                     parses it as the JSDoc `@import` tag.)
+ */
+
+/**
+ * @param {string} css
+ * @param {CodemodCssOptions} o
+ * @returns {{ok: true, css: string, changes: string[]}
+ *   | {ok: false, reason: string, css: string, changes: string[]}}
  */
 export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addImport = false }) {
   const changes = []
@@ -24,11 +33,13 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
   const removed = out.match(GOOGLE_IMPORT_LINE)
   if (removed) {
     out = out.replace(GOOGLE_IMPORT_LINE, '')
-    changes.push(`removed ${removed.length} Google Fonts @import (render-blocking, now self-hosted)`)
+    changes.push(
+      `removed ${removed.length} Google Fonts @import (render-blocking, now self-hosted)`,
+    )
   }
 
   // 2. Optional physical @import. Off by default — see the param doc above.
-  if (addImport) {
+  if (addImport && genCssBasename) {
     if (!new RegExp(`@import\\s+["'][^"']*${escapeRe(genCssBasename)}["']`).test(out)) {
       const tw = /@import\s+["']tailwindcss["'][^;\n]*;?/.exec(out)
       if (!tw) return { ok: false, reason: "no `@import 'tailwindcss'` in the entry", css, changes }
@@ -48,7 +59,9 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
       const re = new RegExp(`^[ \\t]*${escapeRe(v)}\\s*:[^;]*;[ \\t]*\\r?\\n?`, 'gm')
       if (re.test(newBody)) {
         newBody = newBody.replace(re, '')
-        changes.push(`removed ${v} from @theme${blk.inline ? ' inline' : ''} (fonts.gen.css owns it)`)
+        changes.push(
+          `removed ${v} from @theme${blk.inline ? ' inline' : ''} (fonts.gen.css owns it)`,
+        )
       }
     }
     if (newBody !== body) out = out.slice(0, blk.bodyStart) + newBody + out.slice(blk.end - 1)
@@ -60,7 +73,10 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
     const blocks = themeBlocks(out)
     const inTheme = (i) => blocks.some((b) => i >= b.start && i < b.end)
     for (const { family, themeVar } of rewriteUsages) {
-      const re = new RegExp(`(font-family\\s*:\\s*)(['"]?)${escapeRe(family)}\\2\\s*(,[^;}]*)?(?=[;}])`, 'gi')
+      const re = new RegExp(
+        `(font-family\\s*:\\s*)(['"]?)${escapeRe(family)}\\2\\s*(,[^;}]*)?(?=[;}])`,
+        'gi',
+      )
       let m
       const edits = []
       while ((m = re.exec(out))) {
@@ -69,7 +85,10 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
         edits.push([m.index, m.index + m[0].length, `${m[1]}var(${themeVar})`])
       }
       for (const [s, e, text] of edits.reverse()) out = out.slice(0, s) + text + out.slice(e)
-      if (edits.length) changes.push(`rewrote ${edits.length} \`font-family: ${family}, …\` rule(s) to var(${themeVar})`)
+      if (edits.length)
+        changes.push(
+          `rewrote ${edits.length} \`font-family: ${family}, …\` rule(s) to var(${themeVar})`,
+        )
     }
   }
 

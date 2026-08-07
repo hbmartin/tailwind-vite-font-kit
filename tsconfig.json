@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // Strict, minus the two rules that only make sense in a TypeScript source tree:
+    // every parameter would need a JSDoc tag, and every `catch (err)` an inline cast.
+    "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["src", "bin", "index.d.ts", "test/types.test.mjs"]
+}

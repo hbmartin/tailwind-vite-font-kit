@@ -59,6 +59,8 @@ export function pinOpsz(axes, pin) {
  * Build the css2 URL for a family, pinning `opsz` if present.
  * Default pin is 16 — near the median size body text renders at. Pass `opszPin: 48`
  * (or whatever your display size is) for a display face.
+ * @param {import('../index.d.ts').FontFamily} fam
+ * @param {(message: string) => void} [log]
  */
 export function googleUrl(fam, log = () => {}) {
   let axes = fam.axes ?? `wght@${[...fam.weights].sort((a, b) => a - b).join(';')}`

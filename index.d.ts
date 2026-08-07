@@ -31,6 +31,15 @@ export interface FontFamily {
   opszPin?: number
 }
 
+/** One entry of the preload set, as an HTTP `Link:` header or a JSX `<link>`. */
+export interface FontPreload {
+  rel: 'preload'
+  as: 'font'
+  type: 'font/woff2'
+  href: string
+  crossOrigin: 'anonymous'
+}
+
 export interface FontsOptions {
   /**
    * May be omitted when `fonts.config.mjs` in the project root provides the families
@@ -72,12 +81,6 @@ export declare function fonts(options?: FontsOptions): Plugin
 export default fonts
 
 declare module 'virtual:fonts' {
-  export const fontPreloads: Array<{
-    rel: 'preload'
-    as: 'font'
-    type: 'font/woff2'
-    href: string
-    crossOrigin: 'anonymous'
-  }>
+  export const fontPreloads: FontPreload[]
   export const fontFamilies: Record<string, string>
 }
