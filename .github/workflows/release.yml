@@ -1,0 +1,68 @@
+name: Release
+
+# Publishing is triggered by *publishing a GitHub release*, not by pushing a tag — a
+# tag is cheap to create by accident, a release is a deliberate act.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  # npm trusted publishing (OIDC). There is no NPM_TOKEN anywhere in this workflow;
+  # the trust relationship lives in the package settings on npmjs.com.
+  id-token: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10, which predates trusted publishing.
+      - name: Upgrade npm
+        run: |
+          npm config set prefix ~/.local
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          PATH="$HOME/.local/bin:$PATH" npm install -g npm@latest
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag matches package.json version
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::release tag $tag does not match package.json ($pkg)"
+            exit 1
+          fi
+
+      - name: Release checks
+        run: pnpm run release:check
+
+      - name: Report packed size
+        run: pnpm run size:report
+
+      # `release:check` just ran `prepublishOnly` in full, so re-running it here would
+      # only double the wall clock. There is no build step and no prepack hook: `files`
+      # ships the sources as-is, so nothing is skipped by --ignore-scripts.
+      - name: Publish
+        run: |
+          tag=latest
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then tag=next; fi
+          npm publish --tag "$tag" --access public --provenance --ignore-scripts

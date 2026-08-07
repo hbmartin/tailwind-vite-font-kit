@@ -7,7 +7,9 @@ const C = {
   bold: (s) => `\x1b[1m${s}\x1b[0m`,
   yellow: (s) => `\x1b[33m${s}\x1b[0m`,
 }
-export const color = process.env.NO_COLOR ? new Proxy({}, { get: () => (s) => s }) : C
+export const color = /** @type {typeof C} */ (
+  process.env.NO_COLOR ? new Proxy({}, { get: () => (s) => s }) : C
+)
 
 export function unifiedDiff(before, after, label, context = 2) {
   if (before === after) return ''
@@ -25,16 +27,31 @@ export function unifiedDiff(before, after, label, context = 2) {
   let i = 0
   let j = 0
   while (i < n && j < m) {
-    if (a[i] === b[j]) { ops.push([' ', a[i], i + 1, j + 1]); i++; j++ }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push(['-', a[i], i + 1, null]); i++ }
-    else { ops.push(['+', b[j], null, j + 1]); j++ }
+    if (a[i] === b[j]) {
+      ops.push([' ', a[i], i + 1, j + 1])
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push(['-', a[i], i + 1, null])
+      i++
+    } else {
+      ops.push(['+', b[j], null, j + 1])
+      j++
+    }
   }
-  while (i < n) { ops.push(['-', a[i], i + 1, null]); i++ }
-  while (j < m) { ops.push(['+', b[j], null, j + 1]); j++ }
+  while (i < n) {
+    ops.push(['-', a[i], i + 1, null])
+    i++
+  }
+  while (j < m) {
+    ops.push(['+', b[j], null, j + 1])
+    j++
+  }
 
   const keep = new Set()
   ops.forEach((op, k) => {
-    if (op[0] !== ' ') for (let x = k - context; x <= k + context; x++) if (x >= 0 && x < ops.length) keep.add(x)
+    if (op[0] !== ' ')
+      for (let x = k - context; x <= k + context; x++) if (x >= 0 && x < ops.length) keep.add(x)
   })
   const lines = [color.bold(color.cyan(`--- ${label}`))]
   let last = -2
@@ -44,9 +61,11 @@ export function unifiedDiff(before, after, label, context = 2) {
     const [kind, text, an, bn] = ops[k]
     const num = String(kind === '+' ? bn : an).padStart(4)
     lines.push(
-      kind === '+' ? color.green(`${num} + ${text}`)
-      : kind === '-' ? color.red(`${num} - ${text}`)
-      : color.dim(`${num}   ${text}`),
+      kind === '+'
+        ? color.green(`${num} + ${text}`)
+        : kind === '-'
+          ? color.red(`${num} - ${text}`)
+          : color.dim(`${num}   ${text}`),
     )
     last = k
   }

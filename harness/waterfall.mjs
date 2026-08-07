@@ -23,7 +23,12 @@ const PATH = args.path || '/probe/hero'
 const RUNS = Number(args.runs || 3)
 
 // Roughly "good 4G": 150ms RTT, 4 Mbps down. Latency is what the @import chain pays.
-const CONDITIONS = { offline: false, latency: 150, downloadThroughput: (4 * 1024 * 1024) / 8, uploadThroughput: (1024 * 1024) / 8 }
+const CONDITIONS = {
+  offline: false,
+  latency: 150,
+  downloadThroughput: (4 * 1024 * 1024) / 8,
+  uploadThroughput: (1024 * 1024) / 8,
+}
 
 const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] })
 
@@ -62,22 +67,41 @@ for (let i = 0; i < RUNS; i++) runs.push(await once())
 await browser.close()
 
 const med = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]
-const fontRes = runs[0].res.filter((r) => /\.woff2?(\?|$)/.test(r.name) || /fonts\.googleapis|fonts\.gstatic/.test(r.name))
-const cssRes = runs[0].res.filter((r) => /\.css(\?|$)/.test(r.name) || /googleapis\.com\/css/.test(r.name))
+const fontRes = runs[0].res.filter(
+  (r) => /\.woff2?(\?|$)/.test(r.name) || /fonts\.googleapis|fonts\.gstatic/.test(r.name),
+)
+const cssRes = runs[0].res.filter(
+  (r) => /\.css(\?|$)/.test(r.name) || /googleapis\.com\/css/.test(r.name),
+)
 
 const out = {
   label: LABEL,
   path: PATH,
   conditions: '150ms RTT / 4Mbps',
   fcpMs: Math.round(med(runs.map((r) => r.paint['first-contentful-paint'] || 0))),
-  fcpAll: runs.map((r) => Math.round(r.paint['first-contentful-paint'] || 0)).sort((a,b)=>a-b),
+  fcpAll: runs.map((r) => Math.round(r.paint['first-contentful-paint'] || 0)).sort((a, b) => a - b),
   fontsReadyMs: Math.round(med(runs.map((r) => r.fontsReady || 0))),
-  fontsAll: runs.map((r) => Math.round(r.fontsReady || 0)).sort((a,b)=>a-b),
+  fontsAll: runs.map((r) => Math.round(r.fontsReady || 0)).sort((a, b) => a - b),
   htmlDoneMs: Math.round(med(runs.map((r) => r.nav || 0))),
   chain: [...cssRes, ...fontRes]
     .sort((a, b) => a.start - b.start)
-    .map((r) => ({ url: r.name.replace(BASE, '').slice(0, 90), start: r.start, end: r.end, dur: r.dur })),
-  distinctOrigins: [...new Set(runs[0].res.map((r) => { try { return new URL(r.name).origin } catch { return '?' } }))],
+    .map((r) => ({
+      url: r.name.replace(BASE, '').slice(0, 90),
+      start: r.start,
+      end: r.end,
+      dur: r.dur,
+    })),
+  distinctOrigins: [
+    ...new Set(
+      runs[0].res.map((r) => {
+        try {
+          return new URL(r.name).origin
+        } catch {
+          return '?'
+        }
+      }),
+    ),
+  ],
 }
 
 console.log(JSON.stringify(out, null, 2))
@@ -87,5 +111,6 @@ console.log(`  FCP              ${out.fcpMs} ms`)
 console.log(`  fonts applied    ${out.fontsReadyMs} ms   <-- text is un-swapped until here`)
 console.log(`  origins touched  ${out.distinctOrigins.join(', ')}`)
 console.log('  chain:')
-for (const c of out.chain) console.log(`    ${String(c.start).padStart(5)} -> ${String(c.end).padStart(5)} ms  ${c.url}`)
+for (const c of out.chain)
+  console.log(`    ${String(c.start).padStart(5)} -> ${String(c.end).padStart(5)} ms  ${c.url}`)
 writeFileSync(args.out || `waterfall-${LABEL}.json`, JSON.stringify(out, null, 2))

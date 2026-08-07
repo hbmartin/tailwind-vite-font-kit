@@ -77,7 +77,9 @@ const RUNTIME_AUDIT = `(() => {
 // cross-origin CSS the page itself cannot introspect.
 async function staticAudit(url) {
   const html = await fetch(url).then((r) => r.text())
-  const hrefs = [...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/g)].map((m) => m[1])
+  const hrefs = [
+    ...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/g),
+  ].map((m) => m[1])
   const inlineStyles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1])
   const seen = new Set()
   const cssTexts = [...inlineStyles]
@@ -88,10 +90,18 @@ async function staticAudit(url) {
     if (seen.has(abs)) return
     seen.add(abs)
     try {
-      const t = await fetch(abs, { headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36' } }).then((r) => r.text())
+      const t = await fetch(abs, {
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        },
+      }).then((r) => r.text())
       cssTexts.push(t)
-      for (const m of t.matchAll(/@import\s+(?:url\()?["']?([^"')]+)["']?\)?/g)) await pull(m[1], depth + 1)
-    } catch { /* ignore */ }
+      for (const m of t.matchAll(/@import\s+(?:url\()?["']?([^"')]+)["']?\)?/g))
+        await pull(m[1], depth + 1)
+    } catch {
+      /* ignore */
+    }
   }
   for (const h of hrefs) await pull(h)
   const all = cssTexts.join('\n')
@@ -104,9 +114,21 @@ async function staticAudit(url) {
     facesWithAscentOverride: faceBlocks.filter((b) => /ascent-override/.test(b)).length,
     facesWithLocalSrc: faceBlocks.filter((b) => /local\(/.test(b)).length,
     supportsGuards: (all.match(/@supports\s*\([^)]*ascent-override/g) || []).length,
-    fontFamiliesDeclared: [...new Set(faceBlocks.map((b) => (b.match(/font-family:\s*([^;]+)/) || [])[1]?.replace(/["']/g, '').trim()).filter(Boolean))],
-    sampleFallbackFace: faceBlocks.find((b) => /size-adjust/.test(b))?.replace(/\s+/g, ' ').slice(0, 400) || null,
-    headPreloadFontLinks: [...html.matchAll(/<link[^>]+rel=["']preload["'][^>]*>/g)].filter((m) => /as=["']font/.test(m[0])).map((m) => m[0].slice(0, 200)),
+    fontFamiliesDeclared: [
+      ...new Set(
+        faceBlocks
+          .map((b) => (b.match(/font-family:\s*([^;]+)/) || [])[1]?.replace(/["']/g, '').trim())
+          .filter(Boolean),
+      ),
+    ],
+    sampleFallbackFace:
+      faceBlocks
+        .find((b) => /size-adjust/.test(b))
+        ?.replace(/\s+/g, ' ')
+        .slice(0, 400) || null,
+    headPreloadFontLinks: [...html.matchAll(/<link[^>]+rel=["']preload["'][^>]*>/g)]
+      .filter((m) => /as=["']font/.test(m[0]))
+      .map((m) => m[0].slice(0, 200)),
   }
 }
 
@@ -161,18 +183,32 @@ async function runProbe(browser, probe, vp) {
   }
 }
 
-const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+const browser = await puppeteer.launch({
+  headless: 'new',
+  args: ['--no-sandbox', '--disable-dev-shm-usage'],
+})
 const results = []
 for (const vp of VIEWPORTS) for (const p of PROBES) results.push(await runProbe(browser, p, vp))
 await browser.close()
 
 const stat = await staticAudit(`${BASE}/probe/hero`)
-const out = { label: LABEL, base: BASE, fontDelayMs: FONT_DELAY_MS, runs: RUNS, staticAudit: stat, results }
+const out = {
+  label: LABEL,
+  base: BASE,
+  fontDelayMs: FONT_DELAY_MS,
+  runs: RUNS,
+  staticAudit: stat,
+  results,
+}
 console.log(JSON.stringify(out, null, 2))
 writeFileSync(args.out || `result-${LABEL}.json`, JSON.stringify(out, null, 2))
 
 console.log('\n=== SUMMARY: ' + LABEL + ' ===')
 for (const r of results) {
-  console.log(`${r.viewport.padEnd(8)} ${r.probe.padEnd(9)} CLS=${r.clsMedian.toFixed(4).padStart(8)}  shiftPx a=${String(r.shiftPx.a).padStart(5)} b=${String(r.shiftPx.b).padStart(5)}  Δheight=${String(r.scrollHeightDelta).padStart(5)}  fcp=${r.fcp}`)
+  console.log(
+    `${r.viewport.padEnd(8)} ${r.probe.padEnd(9)} CLS=${r.clsMedian.toFixed(4).padStart(8)}  shiftPx a=${String(r.shiftPx.a).padStart(5)} b=${String(r.shiftPx.b).padStart(5)}  Δheight=${String(r.scrollHeightDelta).padStart(5)}  fcp=${r.fcp}`,
+  )
 }
-console.log(`fallback @font-face w/ size-adjust: ${stat.facesWithSizeAdjust}/${stat.totalFontFaceBlocks}, local() srcs: ${stat.facesWithLocalSrc}, @supports guards: ${stat.supportsGuards}, font preloads: ${stat.headPreloadFontLinks.length}`)
+console.log(
+  `fallback @font-face w/ size-adjust: ${stat.facesWithSizeAdjust}/${stat.totalFontFaceBlocks}, local() srcs: ${stat.facesWithLocalSrc}, @supports guards: ${stat.supportsGuards}, font preloads: ${stat.headPreloadFontLinks.length}`,
+)

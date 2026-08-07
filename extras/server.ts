@@ -29,10 +29,7 @@
 //
 // Keep head().links preloads as well: they are the only thing that works when
 // neither of the above applies (static export, Safari, no CDN).
-import {
-  createStartHandler,
-  defaultStreamHandler,
-} from '@tanstack/react-start/server'
+import { createStartHandler, defaultStreamHandler } from '@tanstack/react-start/server'
 import type { Register } from '@tanstack/react-router'
 import type { RequestHandler } from '@tanstack/react-start/server'
 import { fontPreloads } from 'virtual:fonts'
@@ -50,7 +47,11 @@ const FONT_LINKS = fontPreloads.map(
 export type ServerEntry = { fetch: RequestHandler<Register> }
 
 export function createServerEntry(entry: ServerEntry): ServerEntry {
-  return { async fetch(...args) { return await entry.fetch(...args) } }
+  return {
+    async fetch(...args) {
+      return await entry.fetch(...args)
+    },
+  }
 }
 
 export default createServerEntry({
@@ -59,7 +60,7 @@ export default createServerEntry({
     let sentEarlyHints = false
 
     const response = await (handler as any)(request, {
-      ...((rest[0] as any) || {}),
+      ...(rest[0] as any),
       onEarlyHints: ({ phase, links }: { phase: string; links: Array<string> }) => {
         if (!isDoc || sentEarlyHints || phase !== 'static') return
         sentEarlyHints = true

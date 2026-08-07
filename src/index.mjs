@@ -28,9 +28,14 @@ import { generate } from './generate.mjs'
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
 
-/** @param {import('../index.d.ts').FontsOptions} userOptions */
+/**
+ * @param {import('../index.d.ts').FontsOptions} userOptions
+ * @returns {import('vite').Plugin}
+ */
 export function fonts(userOptions = {}) {
-  const opts = {
+  // `families` is filled in by resolveFamilies() below, which throws if neither the
+  // call site nor fonts.config.mjs supplied any — so every hook can assume it is set.
+  const opts = /** @type {import('./generate.mjs').ResolvedOptions} */ ({
     subsets: ['latin'],
     publicPath: '/fonts',
     // 'emit' (default) — Rollup emits the woff2 into the client bundle; nothing lands
@@ -43,13 +48,15 @@ export function fonts(userOptions = {}) {
     preloadHeader: true,
     silent: false,
     ...userOptions,
-  }
+  })
+  /** @param {string} m */
   const log = (m) => !opts.silent && console.log(`[tss-fonts] ${m}`)
 
   // Families may come from the call site OR from `fonts.config.mjs` in the project root.
   // The config file is what `npx shadcn add` drops, since shadcn can place files but
   // cannot edit vite.config.ts — so `fonts()` with no arguments is the shadcn path.
   // Explicit options always win.
+  /** @param {string} r */
   async function resolveFamilies(r) {
     if (opts.families?.length) return
     // Root first, then src/ — shadcn resolves a bare `target` against the project's
@@ -81,13 +88,18 @@ export function fonts(userOptions = {}) {
 
   let root = process.cwd()
   let isServe = false
-  let gen = null
+  // Assigned in config(), which is the earliest async hook; every other hook runs after.
+  /** @type {Awaited<ReturnType<typeof generate>>} */
+  let gen
   let entrySeen = 0
   let warnedConflict = false
+  /** @type {string | null} */
   let configFile = null
 
   const outDirFor = (r) =>
-    opts.output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
+    opts.output === 'commit'
+      ? resolve(r, '.tss-fonts')
+      : join(r, 'node_modules', '.cache', 'tss-fonts')
 
   return {
     name: 'tailwind-vite-font-kit',
@@ -133,6 +145,7 @@ export function fonts(userOptions = {}) {
 
       // Nitro's vite plugin defu's `userConfig.nitro` into its own config
       // (nitro/dist/vite.mjs:413), so the plugin can configure itself.
+      /** @type {Record<string, {headers: Record<string, string>}>} */
       const routeRules = {
         // Nitro serves public/ and any non-/assets path with NO cache-control at all,
         // while giving hashed /assets/* immutable. Safe here because the filenames
@@ -152,7 +165,11 @@ export function fonts(userOptions = {}) {
         routeRules['/**'] = { headers: { link } }
       }
 
-      return { nitro: { routeRules } }
+      // `nitro` is not a Vite config key — nitro's own plugin augments UserConfig, and
+      // this package deliberately does not depend on its types to read one field back.
+      return /** @type {import('vite').UserConfig} */ (
+        /** @type {unknown} */ ({ nitro: { routeRules } })
+      )
     },
 
     // Emit the woff2 into the CLIENT bundle. Nitro points the client environment's
@@ -243,7 +260,9 @@ export function fonts(userOptions = {}) {
         if (!warnedConflict) {
           const conflicts = []
           if (/@import\s+(?:url\()?["']?https?:\/\/fonts\.googleapis\.com/.test(code)) {
-            conflicts.push('a render-blocking Google @import (a second CSS request, and it declares the same families with no metric fallbacks)')
+            conflicts.push(
+              'a render-blocking Google @import (a second CSS request, and it declares the same families with no metric fallbacks)',
+            )
           }
           const inlineTheme = /@theme\s+inline\s*\{([\s\S]*?)\n\}/.exec(code)
           if (inlineTheme) {
@@ -269,7 +288,9 @@ export function fonts(userOptions = {}) {
 
         // Tailwind resolves @imports with enhanced-resolve from the IMPORTING FILE's
         // directory, so the specifier must be relative to the entry, not the root.
-        let spec = relative(dirname(id.split('?')[0]), gen.cssPath).split(/[\\/]/).join('/')
+        let spec = relative(dirname(id.split('?')[0]), gen.cssPath)
+          .split(/[\\/]/)
+          .join('/')
         if (!spec.startsWith('.')) spec = './' + spec
         log(`injected @import into ${id.split('/').pop()}`)
         return code.replace(/(@import\s+["']tailwindcss["'];?)/, `$1\n@import '${spec}';`)

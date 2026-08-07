@@ -15,6 +15,10 @@
     "type": "git",
     "url": "git+https://github.com/hbmartin/tailwind-vite-font-kit.git"
   },
+  "homepage": "https://github.com/hbmartin/tailwind-vite-font-kit#readme",
+  "bugs": {
+    "url": "https://github.com/hbmartin/tailwind-vite-font-kit/issues"
+  },
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.18.0",
@@ -37,8 +41,19 @@
     "README.md"
   ],
   "scripts": {
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test:coverage",
+    "format": "oxfmt --write .",
+    "lint": "oxlint --deny-warnings . && oxfmt --check .",
+    "prepublishOnly": "pnpm run check && pnpm run publint && pnpm run types:lint",
+    "publint": "publint --pack pnpm",
     "registry:build": "npx --yes shadcn@4 build registry/registry.json --output registry/r",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "release:check": "pnpm run prepublishOnly && pnpm run verify:package",
+    "size:report": "npm pack --dry-run --json",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"harness/**\" --test-coverage-exclude=\"extras/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=66 --test-coverage-branches=71 --test-coverage-functions=59 \"test/**/*.test.mjs\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "types:lint": "attw --pack . --profile esm-only",
+    "verify:package": "npm publish --dry-run --ignore-scripts"
   },
   "peerDependencies": {
     "vite": "^6 || ^7 || ^8"
@@ -47,6 +62,14 @@
     "@capsizecss/metrics": "^4"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@types/node": "^22.20.1",
+    "oxfmt": "^0.62.0",
+    "oxlint": "^1.77.0",
+    "publint": "^0.3.23",
+    "typescript": "^7.0.2"
   }
 }

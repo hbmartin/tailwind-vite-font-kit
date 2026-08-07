@@ -3,3 +3,6 @@ node_modules
 test/fixture/dist
 metrics.json
 cls-metrics.json
+coverage
+*.tgz
+*.tsbuildinfo

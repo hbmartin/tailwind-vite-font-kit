@@ -13,7 +13,13 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { detectTailwindEntry, detectViteConfig, scanCssFonts, buildFontPlan, GENERIC_STACK_RE } from '../src/detect.mjs'
+import {
+  detectTailwindEntry,
+  detectViteConfig,
+  scanCssFonts,
+  buildFontPlan,
+  GENERIC_STACK_RE,
+} from '../src/detect.mjs'
 import { insertFontsPlugin } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
 import { unifiedDiff } from '../src/diff.mjs'
@@ -28,8 +34,20 @@ const opt = (n, d) => {
 const DRY = flag('dry-run')
 const root = resolve(opt('cwd', process.cwd()))
 
-const c = { dim: (s) => `\x1b[2m${s}\x1b[0m`, b: (s) => `\x1b[1m${s}\x1b[0m`, g: (s) => `\x1b[32m${s}\x1b[0m`, y: (s) => `\x1b[33m${s}\x1b[0m`, r: (s) => `\x1b[31m${s}\x1b[0m` }
-const die = (m) => { console.error(`${c.r('error')} ${m}`); process.exit(1) }
+const c = {
+  dim: (s) => `\x1b[2m${s}\x1b[0m`,
+  b: (s) => `\x1b[1m${s}\x1b[0m`,
+  g: (s) => `\x1b[32m${s}\x1b[0m`,
+  y: (s) => `\x1b[33m${s}\x1b[0m`,
+  r: (s) => `\x1b[31m${s}\x1b[0m`,
+}
+// Annotated on the binding, not the arrow: TS only narrows control flow past a
+// never-returning call when the *variable* carries the type.
+/** @type {(m: string) => never} */
+const die = (m) => {
+  console.error(`${c.r('error')} ${m}`)
+  process.exit(1)
+}
 
 if (!cmd || flag('help') || cmd === 'help') {
   console.log(`
@@ -64,7 +82,10 @@ console.log(`${c.dim('tailwind entry')}  ${relative(root, entry)}`)
 if (found.all.length > 1) {
   console.log(
     `${c.y('!')} ${found.all.length} stylesheets import tailwindcss; using the shallowest. ` +
-      `Others: ${found.all.slice(1).map((f) => relative(root, f)).join(', ')}`,
+      `Others: ${found.all
+        .slice(1)
+        .map((f) => relative(root, f))
+        .join(', ')}`,
   )
 }
 
@@ -73,23 +94,27 @@ if (found.all.length > 1) {
 // ---------------------------------------------------------------------------
 
 const configPath = join(root, 'fonts.config.mjs')
-let families = null
+// Assigned in both branches below; the else branch exits when it finds nothing.
+/** @type {import('../index.d.ts').FontFamily[]} */
+let families
 let detectedFromConfig = false
 
 if (existsSync(configPath) && !flag('from-css')) {
   const mod = await import(pathToFileURL(configPath).href + `?t=${Date.now()}`)
   families = (mod.default ?? mod).families
   detectedFromConfig = true
-  console.log(`${c.dim('config')}          fonts.config.mjs (${families.map((f) => f.name).join(', ')})`)
+  console.log(
+    `${c.dim('config')}          fonts.config.mjs (${families.map((f) => f.name).join(', ')})`,
+  )
 
   // `shadcn add` always drops the template config, so on a project that already uses
   // different fonts the config and the CSS disagree. Say so rather than silently
   // migrating the CSS to a family the project never used.
   const inCss = scanCssFonts(entryText)
   const cssFamilies = new Set(
-    [...inCss.googleUrls.flatMap((u) => u.match(/family=([^:&]+)/g) ?? [])].map((m) =>
-      decodeURIComponent(m.slice('family='.length)).replace(/\+/g, ' '),
-    ),
+    inCss.googleUrls
+      .flatMap((u) => u.match(/family=([^:&]+)/g) ?? [])
+      .map((m) => decodeURIComponent(m.slice('family='.length)).replace(/\+/g, ' ')),
   )
   // The --font-* declarations the codemod deletes (the ones the config owns) also name
   // families; one naming a real family the config doesn't know is the same hazard.
@@ -110,7 +135,9 @@ if (existsSync(configPath) && !flag('from-css')) {
         `  Adopting would delete the CSS that names ${missing.length > 1 ? 'them' : 'it'}, so this is almost certainly not what you want.\n\n` +
         `  ${c.b('--from-css')}  adopt what the project actually uses (overwrites fonts.config.mjs)\n` +
         `  ${c.b('--force')}     proceed with fonts.config.mjs as written\n\n` +
-        c.dim(`  If fonts.config.mjs is still the template \`shadcn add\` installed, you want --from-css.`),
+        c.dim(
+          `  If fonts.config.mjs is still the template \`shadcn add\` installed, you want --from-css.`,
+        ),
     )
     process.exit(1)
   }
@@ -121,7 +148,12 @@ if (existsSync(configPath) && !flag('from-css')) {
   // Zero-config: adopt whatever the project already uses.
   const plan = buildFontPlan({
     cssText: entryText,
-    flags: { sans: opt('sans'), display: opt('display'), mono: opt('mono'), preload: opt('preload') },
+    flags: {
+      sans: opt('sans'),
+      display: opt('display'),
+      mono: opt('mono'),
+      preload: opt('preload'),
+    },
   })
   families = plan.assigned
   if (!families?.length) {
@@ -135,7 +167,9 @@ if (existsSync(configPath) && !flag('from-css')) {
     )
     process.exit(0)
   }
-  console.log(`${c.dim('detected')}        ${families.map((f) => f.name).join(', ')} ${c.dim('(from your CSS)')}`)
+  console.log(
+    `${c.dim('detected')}        ${families.map((f) => f.name).join(', ')} ${c.dim('(from your CSS)')}`,
+  )
 }
 
 const ownedVars = families.map((f) => f.themeVar)
@@ -155,7 +189,9 @@ if (res.css !== entryText) {
   for (const ch of res.changes) console.log(`  ${c.g('•')} ${ch}`)
   console.log(unifiedDiff(entryText, res.css, relative(root, entry)))
 } else {
-  console.log(`\n${c.dim('nothing to change in')} ${relative(root, entry)} ${c.dim('(already adopted)')}`)
+  console.log(
+    `\n${c.dim('nothing to change in')} ${relative(root, entry)} ${c.dim('(already adopted)')}`,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +257,8 @@ for (const [file, before, after] of edits) {
   writeFileSync(file, after)
 }
 console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak`)
-if (cmd === 'adopt') console.log(c.dim('  If you have not added fonts() to vite.config.ts yet, see `tss-fonts init`.'))
+if (cmd === 'adopt')
+  console.log(c.dim('  If you have not added fonts() to vite.config.ts yet, see `tss-fonts init`.'))
 
 // ---------------------------------------------------------------------------
 

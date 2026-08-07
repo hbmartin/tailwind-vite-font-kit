@@ -31,7 +31,9 @@ test('pct trims trailing zeros so the output is stable', () => {
 })
 
 test('never emits local("BlinkMacSystemFont") — it is a CSS keyword, not a face', () => {
-  const all = Object.values(FALLBACK_TARGETS).flat().map(([name]) => name)
+  const all = Object.values(FALLBACK_TARGETS)
+    .flat()
+    .map(([name]) => name)
   assert.ok(!all.includes('BlinkMacSystemFont'))
   // and it must not be reachable via the metrics key either
   assert.ok(!all.some((n) => /blink/i.test(n)))

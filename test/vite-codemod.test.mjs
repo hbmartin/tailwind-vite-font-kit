@@ -7,14 +7,18 @@ const IMPORT = `import { fonts } from 'tailwind-vite-font-kit'`
 const count = (s, sub) => s.split(sub).length - 1
 
 test('inserts before tailwindcss() with a trailing comma', () => {
-  const src = HEADER + `export default defineConfig({\n  plugins: [\n    tailwindcss(),\n    react(),\n  ],\n})\n`
+  const src =
+    HEADER +
+    `export default defineConfig({\n  plugins: [\n    tailwindcss(),\n    react(),\n  ],\n})\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /import \{ fonts \} from 'tailwind-vite-font-kit'/)
   assert.match(out, /\n    fonts\(\),\n    tailwindcss\(\),/)
 })
 
 test('inserts before a final tailwindcss() with no trailing comma', () => {
-  const src = HEADER + `export default defineConfig({\n  plugins: [\n    react(),\n    tailwindcss()\n  ],\n})\n`
+  const src =
+    HEADER +
+    `export default defineConfig({\n  plugins: [\n    react(),\n    tailwindcss()\n  ],\n})\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /\n    fonts\(\),\n    tailwindcss\(\)\n/)
 })
@@ -54,13 +58,15 @@ test('leaves a multiline final import intact', () => {
     `export default defineConfig({ plugins: [tailwindcss()] })\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /import \{\n  tailwindcss,\n\} from '@tailwindcss\/vite'\n/)
-  assert.match(out, /'@tailwindcss\/vite'\nimport \{ fonts \} from 'tailwind-vite-font-kit'\n\nexport default/)
+  assert.match(
+    out,
+    /'@tailwindcss\/vite'\nimport \{ fonts \} from 'tailwind-vite-font-kit'\n\nexport default/,
+  )
   assert.equal(count(out, IMPORT), 1)
 })
 
 test('handles a semicolon-terminated final import', () => {
-  const src =
-    `import tailwindcss from '@tailwindcss/vite';\n\nexport default { plugins: [tailwindcss()] };\n`
+  const src = `import tailwindcss from '@tailwindcss/vite';\n\nexport default { plugins: [tailwindcss()] };\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /'@tailwindcss\/vite';\nimport \{ fonts \} from 'tailwind-vite-font-kit'\n\n/)
 })
@@ -71,12 +77,15 @@ test('returns null when there is no import declaration to hang fonts() off', () 
 })
 
 test('ignores a tailwindcss() inside a comment', () => {
-  const src = HEADER + `// plugins: [tailwindcss()],\nexport default defineConfig({ plugins: [] })\n`
+  const src =
+    HEADER + `// plugins: [tailwindcss()],\nexport default defineConfig({ plugins: [] })\n`
   assert.equal(insertFontsPlugin(src), null)
 })
 
 test('anchors on the real entry when a comment also mentions tailwindcss()', () => {
-  const src = HEADER + `// was: plugins: [tailwindcss()],\nexport default defineConfig({ plugins: [tailwindcss()] })\n`
+  const src =
+    HEADER +
+    `// was: plugins: [tailwindcss()],\nexport default defineConfig({ plugins: [tailwindcss()] })\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /\/\/ was: plugins: \[tailwindcss\(\)\],\n/) // comment untouched
   assert.match(out, /defineConfig\(\{ plugins: \[fonts\(\), tailwindcss\(\)\] \}\)/)
@@ -84,17 +93,22 @@ test('anchors on the real entry when a comment also mentions tailwindcss()', () 
 })
 
 test('returns null for a tailwindcss() outside the plugins array', () => {
-  const src = HEADER + `export default defineConfig({ css: { postcss: { plugins: [] } }, build: { rollupOptions: [tailwindcss()] } })\n`
+  const src =
+    HEADER +
+    `export default defineConfig({ css: { postcss: { plugins: [] } }, build: { rollupOptions: [tailwindcss()] } })\n`
   assert.equal(insertFontsPlugin(src), null)
 })
 
 test('returns null when two tailwindcss() entries make the anchor ambiguous', () => {
-  const src = HEADER + `const a = [tailwindcss()]\nexport default defineConfig({ plugins: [tailwindcss()] })\n`
+  const src =
+    HEADER +
+    `const a = [tailwindcss()]\nexport default defineConfig({ plugins: [tailwindcss()] })\n`
   assert.equal(insertFontsPlugin(src), null)
 })
 
 test('accepts a helper plugins array', () => {
-  const src = HEADER + `const plugins = [\n  tailwindcss(),\n]\nexport default defineConfig({ plugins })\n`
+  const src =
+    HEADER + `const plugins = [\n  tailwindcss(),\n]\nexport default defineConfig({ plugins })\n`
   const out = insertFontsPlugin(src)
   assert.match(out, /const plugins = \[\n  fonts\(\),\n  tailwindcss\(\),\n\]/)
 })

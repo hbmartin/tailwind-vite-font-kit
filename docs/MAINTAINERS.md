@@ -16,6 +16,7 @@ src/diff.mjs         unified diff printer
 bin/tss-fonts.mjs    the `adopt` / `init` CLI
 registry/            shadcn registry source + built output (registry/r is committed)
 test/                node:test unit tests + a minimal Vite fixture for CI
+test/types.test.mjs  guards index.d.ts against drifting from the .mjs sources
 scripts/             CI helpers: collect-metrics.mjs, write-note.sh
 extras/              opt-in files that are shipped but never installed automatically
 harness/             measurement tools — NOT in package.json `files`, dev only
@@ -27,6 +28,7 @@ docs/                this file + FRAMEWORK-COUPLING.md (what Vite/Tailwind/TanSt
 ```bash
 pnpm install
 pnpm test                 # unit tests, no network, ~150 ms
+pnpm run check            # everything CI runs on every Node version, in CI's order
 pnpm registry:build       # regenerate registry/r from registry/registry.json
 ```
 
@@ -37,6 +39,51 @@ so your edits will not be picked up and you will chase a ghost for ten minutes:
 cd ../some-tanstack-app
 pnpm add -D link:../font-kit
 ```
+
+## Checks
+
+Every command is in `package.json`; this is the part that is not obvious from reading it.
+
+| Command | Runs |
+|---|---|
+| `pnpm run lint` | `oxlint --deny-warnings` + `oxfmt --check`. No ESLint, no Prettier. |
+| `pnpm run format` | `oxfmt --write .` — rewrites in place |
+| `pnpm run typecheck` | `tsc --noEmit` over `src`, `bin`, `index.d.ts` and `test/types.test.mjs` |
+| `pnpm run test:coverage` | the unit tests plus Node's own coverage thresholds |
+| `pnpm run publint` | packs the tarball and lints its `exports` / `files` / `bin` |
+| `pnpm run types:lint` | `attw --profile esm-only` — proves the types resolve from a real install |
+| `pnpm run verify:package` | `npm publish --dry-run`; also fails if the version is already published |
+| `pnpm run check` | lint → typecheck → coverage, in CI's order |
+| `pnpm run release:check` | `check` + publint + attw + `verify:package` — the whole pre-publish gate |
+
+### Typechecking .mjs
+
+There is no build step and no TypeScript source: `index.d.ts` is hand-written against the
+`.mjs` files, and the exports map points consumers straight at `src/index.mjs`. Three things
+keep the two from drifting:
+
+- **`tsconfig.json` runs `checkJs` in strict mode over the sources.** `fonts()` is annotated
+  `@param {FontsOptions}` / `@returns {Plugin}`, so an option the implementation reads but
+  `index.d.ts` does not declare is a typecheck failure, not a runtime surprise. `noImplicitAny`
+  and `useUnknownInCatchVariables` are off — the rest of strict is on.
+- **`test/types.test.mjs`** imports the package *by its own name*, which goes through the
+  exports map, and diffs the runtime export names against the ones declared in `index.d.ts`.
+- **`attw`** checks the published shape resolves for ESM consumers.
+
+Two JSDoc traps, both of which fail in a way that points somewhere else:
+
+- A bare `@import` or `@theme` in a JSDoc *description* is parsed as a tag and silently
+  truncates the surrounding `@typedef`'s property list. Write "the CSS import" instead.
+- A never-returning helper only narrows control flow when the *binding* is annotated
+  (`/** @type {(m: string) => never} */ const die = ...`), not the arrow function.
+
+### Coverage
+
+Thresholds are set as a ratchet just under the current numbers (66% lines, 71% branches,
+59% functions), not at an aspirational figure — they exist to stop regressions. `index.mjs`
+(~43% lines) and `detect.mjs` (~48%) are the gaps; the Vite hooks are exercised by the fixture
+build in CI rather than by unit tests. Raise the numbers when you add tests, never lower them.
+They are enforced on Node 22 only, because V8's coverage output shifts between Node releases.
 
 ## Testing
 
@@ -71,11 +118,18 @@ was shifting 51 px at 2 of 36 container widths.
 
 ## CI and the metrics notes
 
-Two workflows:
+Three workflows:
 
-- **`ci.yml`** — every push and PR. Unit tests, registry build + staleness check, builds
-  `test/fixture` (a plain Vite + Tailwind app, so it is fast and needs no browser), collects static
-  metrics, and asserts invariants. On pushes to `main` it writes the metrics to a git note.
+- **`ci.yml`** — every push and PR, in two jobs. `checks` is hermetic and runs the lint,
+  typecheck and unit tests on Node 22, 24 and 26 (the `engines` floor through the newest
+  release), with coverage, publint, attw and `pnpm audit` pinned to 22. `integration` needs the
+  network: registry build + staleness check, builds `test/fixture` (a plain Vite + Tailwind app,
+  so it is fast and needs no browser), collects static metrics, and asserts invariants. On
+  pushes to `main` a third job writes the metrics to a git note.
+- **`release.yml`** — on a **published GitHub release**, not on a tag push. Checks the tag
+  matches `package.json`, runs `release:check`, and publishes with npm trusted publishing
+  (OIDC) and `--provenance`. There is no `NPM_TOKEN`: the trust relationship is configured in
+  the package settings on npmjs.com, and the workflow will fail until that is done.
 - **`cls-weekly.yml`** — Mondays. Clones the reference app, points it at this commit, builds, runs
   the puppeteer sweep, appends CLS to the same note, and opens (or comments on) an issue labelled
   `cls-regression` if the worst median CLS exceeds the threshold (default `0.02`) or the job fails.
@@ -99,14 +153,24 @@ update the expected `themeVarsWithFallback`.
 
 ## Releasing
 
-1. `pnpm test` and a manual pass over the table above.
-2. Bump `version` in `package.json`.
+Publishing is automated; a human bumps the version and writes the release notes.
+
+1. A manual pass over the table above (nothing else covers those paths).
+2. `pnpm version <patch|minor|major>` — this also creates the `vX.Y.Z` tag.
 3. `pnpm registry:build` and commit `registry/r` — **CI fails if it is stale**, and the raw
    GitHub URL users install from serves straight out of `registry/r` on `main`.
-4. Tag and push, including tags.
-5. `npm publish --access public`.
-6. Verify the real path from a throwaway project:
+4. `pnpm run release:check` locally. It runs the whole gate including a publish dry-run, so it
+   also catches a version that is already on npm.
+5. Push, including tags, and let CI go green.
+6. **Publish a GitHub release** on that tag. Pushing the tag alone does nothing — `release.yml`
+   fires on `release: published`, re-runs `release:check`, and publishes with provenance. Mark
+   it a prerelease to publish under the `next` dist-tag instead of `latest`.
+7. Verify the real path from a throwaway project:
    `npx shadcn@latest add https://raw.githubusercontent.com/hbmartin/tailwind-vite-font-kit/main/registry/r/fonts.json`
+
+The first release through this path needs npm trusted publishing configured for the package on
+npmjs.com (publisher: this repo, workflow `release.yml`). Until then the publish step fails on
+authentication, which is the intended failure mode — there is no token to fall back to.
 
 The registry needs **no hosting**: `raw.githubusercontent.com` is a static file host and shadcn
 accepts it. If you later want a nicer URL, any static host works — the only requirement is that it

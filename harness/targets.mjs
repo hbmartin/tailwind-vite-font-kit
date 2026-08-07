@@ -15,8 +15,12 @@ const r = await p.evaluate(() => {
   const w = (fam, size, weight) => {
     const d = document.createElement('div')
     d.style.cssText =
-      'position:absolute;left:-9999px;white-space:nowrap;font-size:' + size +
-      'px;font-weight:' + weight + ';font-family:' + fam
+      'position:absolute;left:-9999px;white-space:nowrap;font-size:' +
+      size +
+      'px;font-weight:' +
+      weight +
+      ';font-family:' +
+      fam
     d.textContent = 'Typography is the craft of endowing human language with a durable visual form'
     document.body.appendChild(d)
     const x = d.getBoundingClientRect().width
@@ -27,7 +31,8 @@ const r = await p.evaluate(() => {
   const uniq = [...new Set([...document.fonts].map((f) => strip(f.family)))]
   const out = { notLoaded: [], sansTargets: {}, serifTargets: {}, rawLocals: {} }
   for (const f of document.fonts) {
-    if (f.status !== 'loaded') out.notLoaded.push(strip(f.family) + '/' + f.weight + ' = ' + f.status)
+    if (f.status !== 'loaded')
+      out.notLoaded.push(strip(f.family) + '/' + f.weight + ' = ' + f.status)
   }
   out.manropeReal = w('Manrope', 17, 400)
   out.frauncesReal = w('Fraunces', 56, 700)
@@ -51,12 +56,28 @@ if (r.notLoaded.length) {
 console.log('\nManrope @17px/400 = ' + r.manropeReal + 'px  -- fallback faces, error vs real:')
 for (const [n, v] of Object.entries(r.sansTargets)) {
   const err = (v / r.manropeReal - 1) * 100
-  console.log('  ' + n.padEnd(38) + String(v).padStart(8) + 'px   ' + (err >= 0 ? '+' : '') + err.toFixed(2) + '%')
+  console.log(
+    '  ' +
+      n.padEnd(38) +
+      String(v).padStart(8) +
+      'px   ' +
+      (err >= 0 ? '+' : '') +
+      err.toFixed(2) +
+      '%',
+  )
 }
 console.log('\nFraunces @56px/700 = ' + r.frauncesReal + 'px  -- fallback faces, error vs real:')
 for (const [n, v] of Object.entries(r.serifTargets)) {
   const err = (v / r.frauncesReal - 1) * 100
-  console.log('  ' + n.padEnd(38) + String(v).padStart(8) + 'px   ' + (err >= 0 ? '+' : '') + err.toFixed(2) + '%')
+  console.log(
+    '  ' +
+      n.padEnd(38) +
+      String(v).padStart(8) +
+      'px   ' +
+      (err >= 0 ? '+' : '') +
+      err.toFixed(2) +
+      '%',
+  )
 }
 console.log('\nraw locals on this machine @17px (equal widths = same underlying face):')
 for (const [n, v] of Object.entries(r.rawLocals)) console.log('  ' + n.padEnd(20) + v + 'px')
