@@ -35,7 +35,7 @@ import {
 } from '@tanstack/react-start/server'
 import type { Register } from '@tanstack/react-router'
 import type { RequestHandler } from '@tanstack/react-start/server'
-import { fontPreloads } from './generated-fonts'
+import { fontPreloads } from 'virtual:fonts'
 
 const handler = createStartHandler(defaultStreamHandler)
 
@@ -65,8 +65,13 @@ export default createServerEntry({
         sentEarlyHints = true
         const res = (request as any).runtime?.node?.res
         if (typeof res?.writeEarlyHints !== 'function') return
-        // fonts first: they are the long pole and the browser honours order
-        res.writeEarlyHints({ link: [...FONT_LINKS, ...links] })
+        try {
+          // fonts first: they are the long pole and the browser honours order
+          res.writeEarlyHints({ link: [...FONT_LINKS, ...links] })
+        } catch {
+          // A destroyed socket, aborted client, or already-started response must never
+          // take the document response down with it — hints are best-effort.
+        }
       },
     })
 

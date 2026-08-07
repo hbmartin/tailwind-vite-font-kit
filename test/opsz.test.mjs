@@ -19,6 +19,15 @@ test('pinOpsz leaves an already-pinned spec alone', () => {
   assert.equal(pinOpsz('opsz,wght@48,500;48,700', 16), 'opsz,wght@48,500;48,700')
 })
 
+test('pinOpsz pins the opsz position when other axes come first', () => {
+  // css2 axis tags are alphabetical, so ital precedes opsz — the pin must land on the
+  // opsz slot of every tuple, not on whatever value happens to be first.
+  assert.equal(
+    pinOpsz('ital,opsz,wght@0,9..144,500;1,9..144,700', 48),
+    'ital,opsz,wght@0,48,500;1,48,700',
+  )
+})
+
 test('googleUrl pins opsz and defaults to 16', () => {
   const url = googleUrl({ name: 'Fraunces', axes: 'opsz,wght@9..144,500;9..144,700', weights: [500] })
   assert.match(url, /opsz,wght@16,500;16,700/)

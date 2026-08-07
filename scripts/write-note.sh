@@ -9,8 +9,8 @@
 #   git notes --ref=metrics show <sha>
 #
 # Concurrent runs race on the same ref, so this fetches and retries. Notes are merged
-# with `cat_sort_uniq` so the weekly CLS job can append to a note the CI job already
-# wrote for that commit instead of clobbering it.
+# by concatenating the existing note with the new blob, so the weekly CLS job can
+# append to a note the CI job already wrote for that commit instead of clobbering it.
 set -euo pipefail
 
 REF=refs/notes/metrics
@@ -19,7 +19,6 @@ TRIES=5
 
 git config user.name  "${GIT_AUTHOR_NAME:-github-actions[bot]}"
 git config user.email "${GIT_AUTHOR_EMAIL:-github-actions[bot]@users.noreply.github.com}"
-git config notes.rewriteMode cat_sort_uniq
 
 body="$(cat "$@")"
 

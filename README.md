@@ -136,7 +136,7 @@ pinning `opsz` often shrinks it enough to change that answer, so re-measure.
 If a family has an optical-size axis, its advance widths depend on the size it renders at, so no
 static `size-adjust` can be right. Measured on Fraunces vs Times New Roman:
 
-```
+```text
 optical sizing auto @100px  ->  96.30%   (what renders)
 forced opsz 14              -> 118.49%
 what every other tool emits -> 115.45%

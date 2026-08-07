@@ -13,7 +13,8 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { detectTailwindEntry, detectViteConfig, scanCssFonts, buildFontPlan } from '../src/detect.mjs'
+import { detectTailwindEntry, detectViteConfig, scanCssFonts, buildFontPlan, GENERIC_STACK_RE } from '../src/detect.mjs'
+import { insertFontsPlugin } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
 import { unifiedDiff } from '../src/diff.mjs'
 
@@ -90,6 +91,13 @@ if (existsSync(configPath) && !flag('from-css')) {
       decodeURIComponent(m.slice('family='.length)).replace(/\+/g, ' '),
     ),
   )
+  // The --font-* declarations the codemod deletes (the ones the config owns) also name
+  // families; one naming a real family the config doesn't know is the same hazard.
+  const ownedByConfig = new Set(families.map((f) => f.themeVar))
+  for (const tv of inCss.themeVars) {
+    if (!ownedByConfig.has(tv.varName)) continue
+    if (tv.first && !GENERIC_STACK_RE.test(tv.first)) cssFamilies.add(tv.first)
+  }
   const missing = [...cssFamilies].filter(
     (n) => !families.some((f) => f.name.toLowerCase() === n.toLowerCase()),
   )
@@ -179,21 +187,19 @@ if (cmd === 'init') {
     const vText = readFileSync(vite, 'utf8')
     if (vText.includes('tailwind-vite-font-kit')) {
       console.log(`\n${c.dim('vite.config already has the plugin (skipped)')}`)
-    } else if (!/tailwindcss\(\s*\)\s*,/.test(vText)) {
-      console.log(
-        `\n${c.y('!')} could not find \`tailwindcss(),\` in ${relative(root, vite)} — ` +
-          `add the plugin by hand, BEFORE tailwindcss():\n${snippet()}`,
-      )
     } else {
-      let out = vText.replace(
-        /(^import .*\n)(?![\s\S]*^import )/m,
-        `$1import { fonts } from 'tailwind-vite-font-kit'\n`,
-      )
-      out = out.replace(/(\n(\s*)tailwindcss\(\s*\)\s*,)/, `\n$2fonts(),$1`)
-      edits.push([vite, vText, out])
-      console.log(`\n${c.b(relative(root, vite))}`)
-      console.log(`  ${c.g('•')} added fonts() before tailwindcss()`)
-      console.log(unifiedDiff(vText, out, relative(root, vite)))
+      const out = insertFontsPlugin(vText)
+      if (out == null) {
+        console.log(
+          `\n${c.y('!')} could not find \`tailwindcss()\` in ${relative(root, vite)} — ` +
+            `add the plugin by hand, BEFORE tailwindcss():\n${snippet()}`,
+        )
+      } else {
+        edits.push([vite, vText, out])
+        console.log(`\n${c.b(relative(root, vite))}`)
+        console.log(`  ${c.g('•')} added fonts() before tailwindcss()`)
+        console.log(unifiedDiff(vText, out, relative(root, vite)))
+      }
     }
   }
 }
