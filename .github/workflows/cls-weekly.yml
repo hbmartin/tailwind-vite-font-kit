@@ -26,9 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       THRESHOLD: ${{ inputs.threshold || '0.02' }}
-      # NOT renamed alongside the plugin — the example app still lives under the
-      # old `tailwind-font-kit-example` name. Do not "fix" this to match the package.
-      REFERENCE_APP: https://github.com/hbmartin/tailwind-font-kit-example
+      REFERENCE_APP: https://github.com/hbmartin/tailwind-vite-font-kit-example
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
