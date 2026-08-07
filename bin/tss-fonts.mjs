@@ -227,7 +227,10 @@ if (cmd === 'init') {
       const out = insertFontsPlugin(vText)
       if (out == null) {
         console.log(
-          `\n${c.y('!')} could not find \`tailwindcss()\` in ${relative(root, vite)} — ` +
+          // insertFontsPlugin() bails for several reasons — no tailwindcss() call, more
+          // than one, one that is not a plugins-array entry, no import to hang fonts()
+          // off — so the message stays neutral rather than naming the wrong cause.
+          `\n${c.y('!')} could not safely insert \`fonts()\` into ${relative(root, vite)} — ` +
             `add the plugin by hand, BEFORE tailwindcss():\n${snippet()}`,
         )
       } else {

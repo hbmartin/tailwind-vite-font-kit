@@ -17,6 +17,19 @@ REF=refs/notes/metrics
 SHA="${GITHUB_SHA:-$(git rev-parse HEAD)}"
 TRIES=5
 
+# CI checks out with `persist-credentials: false`, so the token is not in .git/config and
+# the two remote commands below have to carry it themselves. It goes through `-c
+# http.<host>.extraheader` rather than a credential in the remote URL, which would be
+# visible in `ps` to everything else on the runner and would land back in .git/config.
+# Unset locally, where ambient credentials already work — hence the wrapper, not a flag.
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  _host="${GITHUB_SERVER_URL:-https://github.com}"
+  _hdr="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+  git_remote() { git -c "http.${_host}/.extraheader=${_hdr}" "$@"; }
+else
+  git_remote() { git "$@"; }
+fi
+
 git config user.name  "${GIT_AUTHOR_NAME:-github-actions[bot]}"
 git config user.email "${GIT_AUTHOR_EMAIL:-github-actions[bot]@users.noreply.github.com}"
 
@@ -24,7 +37,7 @@ body="$(cat "$@")"
 
 for i in $(seq 1 "$TRIES"); do
   # Always start from the remote state; another job may have written since checkout.
-  git fetch -q origin "+$REF:$REF" 2>/dev/null || true
+  git_remote fetch -q origin "+$REF:$REF" 2>/dev/null || true
 
   if git notes --ref=metrics show "$SHA" >/dev/null 2>&1; then
     existing="$(git notes --ref=metrics show "$SHA")"
@@ -33,7 +46,7 @@ for i in $(seq 1 "$TRIES"); do
     printf '%s\n' "$body" | git notes --ref=metrics add -F - "$SHA"
   fi
 
-  if git push -q origin "$REF"; then
+  if git_remote push -q origin "$REF"; then
     echo "wrote note on $SHA (attempt $i)"
     exit 0
   fi

@@ -101,13 +101,12 @@ jobs:
       - name: Append CLS to the git note
         if: always() && hashFiles('cls-metrics.json') != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Credentials land here rather than at checkout, so the untrusted build and
-          # sweep steps above never run alongside a write-scoped token on disk.
-          git config --local "http.https://github.com/.extraheader" \
-            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          ./scripts/write-note.sh cls-metrics.json
+          # Credentials reach the script here rather than at checkout, so the untrusted
+          # build and sweep steps above never run alongside a write-scoped token. The
+          # script passes it per-command, so it never lands in .git/config either — the
+          # issue-opening step below runs without it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/write-note.sh cls-metrics.json
 
       - name: Open an issue on failure
         if: failure()

@@ -112,3 +112,41 @@ test('accepts a helper plugins array', () => {
   const out = insertFontsPlugin(src)
   assert.match(out, /const plugins = \[\n  fonts\(\),\n  tailwindcss\(\),\n\]/)
 })
+
+test('accepts a type-annotated helper plugins array', () => {
+  const src =
+    HEADER +
+    `const plugins: PluginOption[] = [tailwindcss()]\nexport default defineConfig({ plugins })\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /const plugins: PluginOption\[\] = \[fonts\(\), tailwindcss\(\)\]/)
+})
+
+test('accepts a plugins factory that takes an argument', () => {
+  const src = HEADER + `export default defineConfig({ plugins: (env) => [tailwindcss()] })\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /plugins: \(env\) => \[fonts\(\), tailwindcss\(\)\]/)
+})
+
+// The anchor used to accept ANY assigned array, because its `=>?` matched a bare `=`.
+test('returns null for an assigned array that is not named plugins', () => {
+  const src = HEADER + `const shared = [tailwindcss()]\nexport default defineConfig({})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+test('returns null for an arrow-returned array that is not the plugins entry', () => {
+  const src = HEADER + `const build = () => [tailwindcss()]\nexport default defineConfig({})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+test('returns null for an array whose name merely ends in Plugins', () => {
+  const src = HEADER + `const postcssPlugins = [tailwindcss()]\nexport default defineConfig({})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+// A `plugins` key earlier on the same line must not anchor an unrelated later array.
+test('returns null when an unrelated key on the plugins line holds the call', () => {
+  const src =
+    HEADER +
+    `export default defineConfig({ plugins: [], build: { rollupOptions: [tailwindcss()] } })\n`
+  assert.equal(insertFontsPlugin(src), null)
+})

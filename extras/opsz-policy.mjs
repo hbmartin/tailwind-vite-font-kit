@@ -300,7 +300,15 @@ export function planOpsz(buf, opts = {}) {
   for (const s of sorted.slice(1)) {
     const trial = [...group, s]
     const centre = trial[Math.floor(trial.length / 2)]
-    const worst = Math.max(...trial.map((x) => Math.abs(em(centre) / em(x) - 1) * 100))
+    // Every bucket is emitted for every weight below, so it has to hold at every weight:
+    // measuring w0 alone can accept a bucket that breaks tolerance at 700. Re-measuring
+    // is cheap because em() is memoised — the pairs are bounded by sizes × weights.
+    const worst = Math.max(
+      ...weights.flatMap((w) => {
+        const c = em(centre, w)
+        return trial.map((x) => Math.abs(c / em(x, w) - 1) * 100)
+      }),
+    )
     if (worst <= tolerancePct) group.push(s)
     else {
       buckets.push(group)

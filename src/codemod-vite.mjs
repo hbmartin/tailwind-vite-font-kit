@@ -67,10 +67,19 @@ function enclosingArray(masked, at) {
   return open != null && masked[open] === '[' ? open : -1
 }
 
-// `plugins: [...]`, a helper array (`const plugins = [...]`), or `plugins: () => [...]`.
-// Any other array — postcss, an argument list, an unrelated config key — is not a place
-// fonts() belongs, so an anchor found there is rejected rather than written.
-const PLUGINS_ANCHOR_RE = /(?:\bplugins\s*:|=>?)\s*$/
+// The array has to be Vite's plugins array. Three shapes count, and the identifier
+// `plugins` sits immediately before the bracket in every one of them:
+//
+//   plugins: [...]                    the config key
+//   const plugins = [...]             a helper array (`: PluginOption[]` optional)
+//   plugins: (env) => [...]           a factory returning one
+//
+// Any other array — an argument list, `const shared = [...]`, an unrelated config key —
+// is not a place fonts() belongs, so an anchor found there is rejected rather than
+// written. Known limitation: an inline `css: { postcss: { plugins: [...] } }` is spelled
+// exactly like the config key, so it is accepted; separating the two needs a real parse.
+// It can only matter if that array holds the file's ONLY tailwindcss() call.
+const PLUGINS_ANCHOR_RE = /(?:\bplugins\s*:|\bplugins\s*(?::[^=\n]*)?=>?)\s*$/
 
 /**
  * @param {string} source  vite.config.* text
