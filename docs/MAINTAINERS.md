@@ -5,7 +5,7 @@ whoever has to touch the internals.
 
 ## Layout
 
-```
+```text
 src/index.mjs        the Vite plugin — hooks, ordering, the Link: header, the @import injection
 src/generate.mjs     build-time generation: css2 fetch, woff2 download, caching, retry
 src/metrics.mjs      FALLBACK_TARGETS + the size-adjust / override math

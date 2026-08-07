@@ -32,7 +32,11 @@ export interface FontFamily {
 }
 
 export interface FontsOptions {
-  families: FontFamily[]
+  /**
+   * May be omitted when `fonts.config.mjs` in the project root provides the families
+   * (the shadcn path). The plugin throws at build time if neither supplies them.
+   */
+  families?: FontFamily[]
   /** Subsets to keep from Google's per-subset blocks. Default `['latin']`. */
   subsets?: string[]
   /** URL prefix the fonts are served from. Default `'/fonts'`. */
@@ -64,7 +68,7 @@ export interface FontsOptions {
   silent?: boolean
 }
 
-export declare function fonts(options: FontsOptions): Plugin
+export declare function fonts(options?: FontsOptions): Plugin
 export default fonts
 
 declare module 'virtual:fonts' {

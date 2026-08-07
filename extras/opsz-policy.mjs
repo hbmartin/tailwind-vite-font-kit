@@ -3,11 +3,12 @@
 // Everything here is offline — fontkit + @capsizecss/metrics, no network, no
 // browser. Reads the axes out of the woff2 you are ACTUALLY going to serve.
 //
-//   import { detectAxes, planOpsz, buildFallbackCss } from './opsz-policy.mjs'
+//   import { detectAxes, toSfnt, planOpsz, buildFallbackCss } from './opsz-policy.mjs'
 //
-//   const axes = detectAxes(woff2Buffer)
-//   const plan = planOpsz(woff2Buffer, { sizes: [16, 32, 56, 96], weights: [500, 700] })
-//   const css  = buildFallbackCss(woff2Buffer, plan, { family: 'Fraunces', targets, metrics })
+//   const axes = detectAxes(woff2Buffer)          // fvar parses fine from a woff2
+//   const sfnt = await toSfnt(woff2Buffer)        // but measurement needs decompressed tables
+//   const plan = planOpsz(sfnt, { sizes: [16, 32, 56, 96], weights: [500, 700] })
+//   const css  = buildFallbackCss(sfnt, plan, { family: 'Fraunces', targets, metrics })
 //
 // DECISION RULE (thresholds are the measured ones — see the report):
 //
@@ -44,29 +45,58 @@
 
 import * as fontkit from 'fontkit'
 import { createRequire } from 'node:module'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 // ── capsize's exact xWidthAvg algorithm, applied to a VARIATION INSTANCE ──────
-// @capsizecss/unpack only exposes family-level numbers, so the weighting table
-// is lifted out of its dist bundle and re-applied to a fontkit instance.
+// @capsizecss/unpack only exposes family-level numbers, so the weighting table is
+// lifted out of its dist bundle and re-applied to a fontkit instance. The chunk that
+// carries it has a content hash in its name, so scan the dist dir for the source
+// markers instead of hardcoding a filename that breaks on every unpack release.
 const require = createRequire(import.meta.url)
-const unpackDist = require.resolve('@capsizecss/unpack').replace(/index\.mjs$/, '')
-const src = readFileSync(unpackDist + 'shared-DtMtfMHK.mjs', 'utf8')
-export const WEIGHTINGS = (
-  await import(
-    'data:text/javascript,' +
-      encodeURIComponent(
-        src
-          .slice(src.indexOf('var weightings_default'), src.indexOf('//#endregion', src.indexOf('var weightings_default')))
-          .replace('var weightings_default', 'export const weightings'),
+export const WEIGHTINGS = await (async () => {
+  let dist
+  try {
+    dist = dirname(require.resolve('@capsizecss/unpack'))
+  } catch {
+    throw new Error(
+      "opsz-policy: install '@capsizecss/unpack' — its per-subset weighting table drives xWidthAvg",
+    )
+  }
+  const START = 'var weightings_default'
+  const END = '//#endregion'
+  for (const f of readdirSync(dist)) {
+    if (!f.endsWith('.mjs')) continue
+    const src = readFileSync(join(dist, f), 'utf8')
+    const s = src.indexOf(START)
+    if (s === -1) continue
+    const e = src.indexOf(END, s)
+    if (e === -1) continue
+    return (
+      await import(
+        'data:text/javascript,' +
+          encodeURIComponent(src.slice(s, e).replace(START, 'export const weightings'))
       )
+    ).weightings
+  }
+  throw new Error(
+    'opsz-policy: could not find the weightings table in @capsizecss/unpack dist — ' +
+      'its bundle layout changed; pin the version this file was written against or vendor the table',
   )
-).weightings
+})()
 
 export function xWidthAvg(font, subset = 'latin') {
   const w = WEIGHTINGS[subset]
   const sample = Object.keys(w).join('')
   const glyphs = font.glyphsForString(sample)
+  // The weighting is applied by index, so a glyph count that differs from the sample
+  // length (shaping merged or dropped glyphs) would silently weight the wrong chars.
+  if (glyphs.length !== sample.length) {
+    throw new Error(
+      `opsz-policy: glyphsForString returned ${glyphs.length} glyphs for a ${sample.length}-char sample — ` +
+        `index-based weighting would be wrong for this font/subset`,
+    )
+  }
   let sum = 0
   glyphs.forEach((g, i) => {
     if (g.isMark) return
@@ -92,6 +122,18 @@ export async function toSfnt(buf) {
 }
 const pct = (n) => `${(n * 100).toFixed(4)}%`
 const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
+
+// Anything that MEASURES needs decompressed glyf/cmap; a woff2 gets as far as
+// glyphsForString and dies on "Cannot read properties of undefined". Fail up front
+// with the actual fix instead.
+function requireSfnt(buf, fn) {
+  if (asBuf(buf).toString('ascii', 0, 4) === 'wOF2') {
+    throw new Error(
+      `opsz-policy: ${fn} measures glyph advances, which fontkit cannot read from a woff2 — ` +
+        `decompress first: const sfnt = await toSfnt(buf)`,
+    )
+  }
+}
 
 // ── (a) DETECTION ────────────────────────────────────────────────────────────
 /** Read the fvar axes straight out of the woff2/ttf you downloaded. */
@@ -170,16 +212,32 @@ export function planOpsz(buf, opts = {}) {
     }
   }
 
+  // Everything past here measures advances, which a woff2 cannot provide.
+  requireSfnt(buf, 'planOpsz')
+
   const clamp = (o) => Math.min(Math.max(o, ax.min), ax.max)
   const w0 = weights[0]
   const vary = (o, w = w0) => ({ ...varyW(w), opsz: clamp(o) })
+  // Memoised: the bucketing loop re-measures the same (size, weight) pairs repeatedly,
+  // and each miss costs a full getVariation + glyph walk.
+  const emCache = new Map()
   const em = (o, w = w0) => {
-    const v = font.getVariation(vary(o, w))
-    return xWidthAvg(v) / v.unitsPerEm
+    const k = `${o}|${w}`
+    if (!emCache.has(k)) {
+      const v = font.getVariation(vary(o, w))
+      emCache.set(k, xWidthAvg(v) / v.unitsPerEm)
+    }
+    return emCache.get(k)
   }
 
-  const used = sizes.map((s) => em(s))
-  const swingPct = (Math.max(...used) / Math.min(...used) - 1) * 100
+  // The swing that matters is the worst across the DECLARED weights, not just the
+  // first one — opsz width response differs by weight (see the per-weight note above).
+  const swingPct = Math.max(
+    ...weights.map((w) => {
+      const used = sizes.map((s) => em(s, w))
+      return (Math.max(...used) / Math.min(...used) - 1) * 100
+    }),
+  )
   const base = { axis: { ...ax }, swingPct: +swingPct.toFixed(2), perWeight }
 
   if (opticalSizingPinned) {
@@ -199,7 +257,8 @@ export function planOpsz(buf, opts = {}) {
     }
   }
   // Big swing. If you own the download, delete the axis instead of modelling it.
-  const pin = Math.round(median(sizes))
+  // Clamped: the median used size can sit outside the axis (e.g. 200px on a 9..144 opsz).
+  const pin = Math.round(clamp(median(sizes)))
   const recommendPinnedDownload = {
     recommendPinnedDownload: true,
     pinnedDownloadHint:
@@ -258,6 +317,7 @@ export function planOpsz(buf, opts = {}) {
  */
 export function buildFallbackCss(buf, plan, opts) {
   const { family, targets, metrics } = opts
+  requireSfnt(buf, 'buildFallbackCss')
   const font = fontkit.create(asBuf(buf))
   const out = []
   for (const inst of plan.instances) {
@@ -265,6 +325,12 @@ export function buildFallbackCss(buf, plan, opts) {
     const x = xWidthAvg(v)
     for (const [local, mk] of targets) {
       const fb = metrics[mk]
+      if (!fb) {
+        throw new Error(
+          `opsz-policy: no metrics entry for target key "${mk}" (local "${local}") — ` +
+            `keys must exist in the passed entireMetricsCollection`,
+        )
+      }
       const fbEm = (fb.subsets?.latin?.xWidthAvg ?? fb.xWidthAvg) / fb.unitsPerEm
       const sa = x / v.unitsPerEm / fbEm
       // The vertical descriptors are divided by size-adjust because the browser

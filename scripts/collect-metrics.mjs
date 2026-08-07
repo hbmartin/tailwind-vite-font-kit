@@ -31,8 +31,11 @@ if (!layout) {
 }
 const assetsDir = layout.assets
 const fontsDir = layout.fonts
-const cssFile = readdirSync(assetsDir).find((f) => f.endsWith('.css'))
-const css = readFileSync(join(assetsDir, cssFile), 'utf8')
+// A build can emit more than one CSS chunk; the faces may not be in the first one.
+const css = readdirSync(assetsDir)
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => readFileSync(join(assetsDir, f), 'utf8'))
+  .join('\n')
 const faces = [...css.matchAll(/@font-face\{[^}]*\}/g)].map((m) => m[0])
 
 const fontFiles = existsSync(fontsDir) ? readdirSync(fontsDir) : []
