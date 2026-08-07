@@ -55,16 +55,15 @@ function lastImportEnd(masked) {
   return masked[close + 1] === ';' ? close + 2 : close + 1
 }
 
-/** Index of the innermost unclosed `[` before `at`, or -1 if that bracket is `(`/`{`. */
-function enclosingArray(masked, at) {
+/** Indices of the brackets still open at `at`, outermost first. */
+function bracketStack(masked, at) {
   const stack = []
   for (let i = 0; i < at; i++) {
     const c = masked[i]
     if (c === '(' || c === '[' || c === '{') stack.push(i)
     else if (c === ')' || c === ']' || c === '}') stack.pop()
   }
-  const open = stack[stack.length - 1]
-  return open != null && masked[open] === '[' ? open : -1
+  return stack
 }
 
 // The array has to be Vite's plugins array. Three shapes count, and the identifier
@@ -76,10 +75,17 @@ function enclosingArray(masked, at) {
 //
 // Any other array — an argument list, `const shared = [...]`, an unrelated config key —
 // is not a place fonts() belongs, so an anchor found there is rejected rather than
-// written. Known limitation: an inline `css: { postcss: { plugins: [...] } }` is spelled
-// exactly like the config key, so it is accepted; separating the two needs a real parse.
-// It can only matter if that array holds the file's ONLY tailwindcss() call.
+// written.
 const PLUGINS_ANCHOR_RE = /(?:\bplugins\s*:|\bplugins\s*(?::[^=\n]*)?=>?)\s*$/
+
+// `css: { postcss: { plugins: [...] } }` and `build: { rollupOptions: { plugins: [...] } }`
+// spell the key exactly like the Vite one, and fonts() is a Vite plugin — writing it into
+// either produces a config that loads and then fails. What separates them is depth, not
+// spelling: Vite's `plugins` lives directly in the config object, and a config object is
+// never itself the value of a named property. It is the argument to defineConfig, the
+// `export default`, or a `const config = {…}`. So every object literal enclosing the
+// anchor must be anonymous; one keyed ancestor means the array belongs to something else.
+const OBJECT_KEY_RE = /(?:[\w$]+|['"][^'"]*['"])\s*:\s*$/
 
 /**
  * @param {string} source  vite.config.* text
@@ -97,8 +103,11 @@ export function insertFontsPlugin(source) {
   // the callee of a member expression or an argument.
   if (!/^\s*[,\]]/.test(masked.slice(at + calls[0][0].length))) return null
 
-  const open = enclosingArray(masked, at)
-  if (open === -1 || !PLUGINS_ANCHOR_RE.test(masked.slice(0, open))) return null
+  const stack = bracketStack(masked, at)
+  const open = stack[stack.length - 1]
+  if (open == null || masked[open] !== '[') return null
+  if (!PLUGINS_ANCHOR_RE.test(masked.slice(0, open))) return null
+  if (stack.some((i) => masked[i] === '{' && OBJECT_KEY_RE.test(masked.slice(0, i)))) return null
 
   // fonts() without its import is a ReferenceError, so a config whose imports cannot be
   // located falls back to the manual instructions instead of getting a half-edit.
