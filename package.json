@@ -1,5 +1,5 @@
 {
-  "name": "tailwind-font-kit",
+  "name": "tailwind-vite-font-kit",
   "version": "0.1.0",
   "description": "Self-hosted Google fonts with metric-matched fallbacks for TanStack Start + Tailwind v4, as one Vite plugin",
   "keywords": [
@@ -13,7 +13,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hbmartin/tailwind-font-kit.git"
+    "url": "git+https://github.com/hbmartin/tailwind-vite-font-kit.git"
   },
   "license": "MIT",
   "type": "module",

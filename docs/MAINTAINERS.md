@@ -19,6 +19,7 @@ test/                node:test unit tests + a minimal Vite fixture for CI
 scripts/             CI helpers: collect-metrics.mjs, write-note.sh
 extras/              opt-in files that are shipped but never installed automatically
 harness/             measurement tools — NOT in package.json `files`, dev only
+docs/                this file + FRAMEWORK-COUPLING.md (what Vite/Tailwind/TanStack each own)
 ```
 
 ## Setup
