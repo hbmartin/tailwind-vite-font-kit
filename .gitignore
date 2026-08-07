@@ -1,6 +1,5 @@
 node_modules
 .DS_Store
-.tss-fonts
 test/fixture/dist
 metrics.json
 cls-metrics.json

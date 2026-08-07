@@ -74,12 +74,20 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}) 
     for (const weight of weights) {
       const v = variantOf(m, weight)
       const fb = targetVariant(fbFamily, weight)
-      // Subset data lives on the family entry, not on a variant; fall back to it.
-      const xAvg = v.xWidthAvg ?? m.subsets?.[subset]?.xWidthAvg ?? m.xWidthAvg
-      const fbAvg = fb.xWidthAvg ?? fbFamily.subsets?.[subset]?.xWidthAvg ?? fbFamily.xWidthAvg
+      // Variants carry their own per-subset data — prefer it, since a variant's average
+      // width differs from the family's (Poppins 700 latin: 515 vs 500).
+      const xAvg = v.subsets?.[subset]?.xWidthAvg ?? v.xWidthAvg
+      const fbAvg = fb.subsets?.[subset]?.xWidthAvg ?? fb.xWidthAvg
       const upem = v.unitsPerEm ?? m.unitsPerEm
       const fbUpem = fb.unitsPerEm ?? fbFamily.unitsPerEm
       const sizeAdjust = xAvg / upem / (fbAvg / fbUpem)
+      if (!Number.isFinite(sizeAdjust) || sizeAdjust <= 0) {
+        log(`  ! non-finite size-adjust for "${name}" weight ${weight} — face skipped`)
+        continue
+      }
+      const ascent = v.ascent ?? m.ascent
+      const descent = v.descent ?? m.descent
+      const lineGap = v.lineGap ?? m.lineGap
 
       // ascent/descent/line-gap are divided by size-adjust because the browser applies
       // size-adjust to them too; pre-compensating makes the final values equal the web
@@ -89,9 +97,9 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}) 
       out.push(
         `@font-face{font-family:"${name}";font-weight:${weight};src:local("${localName}");` +
           `size-adjust:${pct(sizeAdjust)};` +
-          `ascent-override:${pct(v.ascent / (upem * sizeAdjust))};` +
-          `descent-override:${pct(Math.abs(v.descent) / (upem * sizeAdjust))};` +
-          `line-gap-override:${pct(v.lineGap / (upem * sizeAdjust))}}`,
+          `ascent-override:${pct(ascent / (upem * sizeAdjust))};` +
+          `descent-override:${pct(Math.abs(descent) / (upem * sizeAdjust))};` +
+          `line-gap-override:${pct(lineGap / (upem * sizeAdjust))}}`,
       )
     }
   }

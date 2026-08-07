@@ -75,7 +75,7 @@ const GOOGLE_IMPORT_RE =
   /@import\s+(?:url\(\s*)?["']?(https:\/\/fonts\.googleapis\.com\/css2?\?[^"')]+)["']?\s*\)?\s*;?/g
 
 /** Expand a css2 axis spec into declared weights. */
-function weightsFromSpec(spec) {
+export function weightsFromSpec(spec) {
   // 'wght@400;500;700'  |  'opsz,wght@9..144,500;9..144,700'  |  'ital,wght@0,400;1,700'
   const at = spec.indexOf('@')
   if (at === -1) return { weights: [400], axes: null, hasOpsz: false }
@@ -83,16 +83,19 @@ function weightsFromSpec(spec) {
   const tuples = spec.slice(at + 1).split(';')
   const wi = axisNames.indexOf('wght')
   const out = new Set()
-  for (const t of tuples) {
-    const parts = t.split(',')
-    const raw = wi === -1 ? parts[parts.length - 1] : parts[wi]
-    if (!raw) continue
-    if (raw.includes('..')) {
-      const [lo, hi] = raw.split('..').map(Number)
-      for (const w of [400, 500, 600, 700]) if (w >= lo && w <= hi) out.add(w)
-      if (!out.size) { out.add(lo); out.add(hi) }
-    } else if (/^\d+$/.test(raw)) {
-      out.add(Number(raw))
+  // No wght axis (e.g. 'ital@0;1'): the other axes' values are NOT weights. Return
+  // none and let familiesFromGoogleUrl apply its [400] default.
+  if (wi !== -1) {
+    for (const t of tuples) {
+      const raw = t.split(',')[wi]
+      if (!raw) continue
+      if (raw.includes('..')) {
+        const [lo, hi] = raw.split('..').map(Number)
+        for (const w of [400, 500, 600, 700]) if (w >= lo && w <= hi) out.add(w)
+        if (!out.size) { out.add(lo); out.add(hi) }
+      } else if (/^\d+$/.test(raw)) {
+        out.add(Number(raw))
+      }
     }
   }
   return {
@@ -160,6 +163,9 @@ export function themeBlocks(css) {
 const SERIFY = /serif|slab|display|playfair|fraunces|lora|merriweather|georgia/i
 const MONOISH = /mono|code|courier/i
 
+/** Stack entries that are generic keywords or system stacks, not downloadable families. */
+export const GENERIC_STACK_RE = /^(ui-|system-ui|sans-serif|serif|monospace|var\(|inherit)/i
+
 /**
  * Merge everything into a font plan.
  * Priority: explicit flags > fonts already in the project.
@@ -176,7 +182,7 @@ export function buildFontPlan({ cssText, flags }) {
   // Any --font-* whose first entry is a real family name (not a generic keyword) also counts.
   for (const tv of themeVars) {
     const n = tv.first
-    if (!n || /^(ui-|system-ui|sans-serif|serif|monospace|var\(|inherit)/i.test(n)) continue
+    if (!n || GENERIC_STACK_RE.test(n)) continue
     if (!detected.some((d) => d.name.toLowerCase() === n.toLowerCase())) {
       detected.push({ name: n, weights: [400, 500, 600, 700], axes: null, hasOpsz: false })
     }

@@ -5,9 +5,9 @@ on:
     branches: [main]
   pull_request:
 
-# Needed to push the metrics note back to the repo.
+# Only the notes job writes to the repo; everything else is read-only.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   # Notes pushes serialise badly; one run per ref at a time.
@@ -18,12 +18,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -40,7 +40,7 @@ jobs:
           node -e "
             const d = require('./registry/r/fonts.json');
             if (d.type !== 'registry:base') throw new Error('unexpected type: ' + d.type);
-            if (!d.devDependencies?.includes('tailwind-font-kit')) throw new Error('missing devDependency');
+            if (!d.devDependencies?.includes('tailwind-vite-font-kit')) throw new Error('missing devDependency');
             if (d.files[0].target !== '~/fonts.config.mjs') throw new Error('target must be project-root');
             console.log('registry ok');
           "
@@ -53,7 +53,7 @@ jobs:
       - name: Build fixture
         working-directory: test/fixture
         run: |
-          pnpm install --no-frozen-lockfile
+          pnpm install --frozen-lockfile
           pnpm build
 
       - name: Collect metrics
@@ -95,7 +95,27 @@ jobs:
             "
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Notes are per-commit, so PR runs would attach to a commit that may never land.
-      - name: Write metrics to git notes
+      - name: Upload metrics for the notes job
         if: github.event_name == 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: metrics
+          path: metrics.json
+
+  # Notes are per-commit, so PR runs would attach to a commit that may never land.
+  # A separate job so `contents: write` is granted to nothing but the note push.
+  notes:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: metrics
+
+      - name: Write metrics to git notes
         run: ./scripts/write-note.sh metrics.json

@@ -1,4 +1,4 @@
-# tailwind-font-kit
+# tailwind-vite-font-kit
 
 Self-hosted Google fonts with metric-matched fallbacks for **TanStack Start + Tailwind v4**, as one
 Vite plugin. Your `styles.css` and `__root.tsx` are never touched.
@@ -18,13 +18,13 @@ Measured on a real app, swapping Poppins in cold with the font response delayed 
 **With shadcn** (the project already has `components.json`):
 
 ```bash
-npx shadcn@latest add https://raw.githubusercontent.com/hbmartin/tailwind-font-kit/main/registry/r/fonts.json
+npx shadcn@latest add https://raw.githubusercontent.com/hbmartin/tailwind-vite-font-kit/main/registry/r/fonts.json
 ```
 
 or register the namespace once in `components.json`:
 
 ```json
-{ "registries": { "@hm": "https://raw.githubusercontent.com/hbmartin/tailwind-font-kit/main/registry/r/{name}.json" } }
+{ "registries": { "@hm": "https://raw.githubusercontent.com/hbmartin/tailwind-vite-font-kit/main/registry/r/{name}.json" } }
 ```
 
 ```bash
@@ -34,14 +34,14 @@ npx shadcn@latest add @hm/fonts
 **Without shadcn:**
 
 ```bash
-pnpm add -D tailwind-font-kit && npx tss-fonts init
+pnpm add -D tailwind-vite-font-kit && npx tss-fonts init
 ```
 
 Either way you end up adding one line to `vite.config.ts` — shadcn deliberately cannot run codemods,
 and `tss-fonts init` does it for you:
 
 ```ts
-import { fonts } from 'tailwind-font-kit'
+import { fonts } from 'tailwind-vite-font-kit'
 
 plugins: [
   nitro(),

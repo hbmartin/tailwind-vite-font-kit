@@ -32,7 +32,7 @@ const die = (m) => { console.error(`${c.r('error')} ${m}`); process.exit(1) }
 
 if (!cmd || flag('help') || cmd === 'help') {
   console.log(`
-${c.b('tss-fonts')} — wiring for tailwind-font-kit
+${c.b('tss-fonts')} — wiring for tailwind-vite-font-kit
 
   ${c.b('adopt')}   migrate a project that already has fonts: remove the Google @import,
           remove --font-* from your @theme (the generated one owns them now), and
@@ -177,7 +177,7 @@ if (cmd === 'init') {
     console.log(`\n${c.y('!')} no vite.config.ts found — add the plugin yourself:\n${snippet()}`)
   } else {
     const vText = readFileSync(vite, 'utf8')
-    if (vText.includes('tailwind-font-kit')) {
+    if (vText.includes('tailwind-vite-font-kit')) {
       console.log(`\n${c.dim('vite.config already has the plugin (skipped)')}`)
     } else if (!/tailwindcss\(\s*\)\s*,/.test(vText)) {
       console.log(
@@ -187,7 +187,7 @@ if (cmd === 'init') {
     } else {
       let out = vText.replace(
         /(^import .*\n)(?![\s\S]*^import )/m,
-        `$1import { fonts } from 'tailwind-font-kit'\n`,
+        `$1import { fonts } from 'tailwind-vite-font-kit'\n`,
       )
       out = out.replace(/(\n(\s*)tailwindcss\(\s*\)\s*,)/, `\n$2fonts(),$1`)
       edits.push([vite, vText, out])
@@ -221,7 +221,7 @@ if (cmd === 'adopt') console.log(c.dim('  If you have not added fonts() to vite.
 
 function renderConfig(fams) {
   return (
-    `// tailwind-font-kit. Edit this, then rebuild — the plugin regenerates on change.\n` +
+    `// tailwind-vite-font-kit. Edit this, then rebuild — the plugin regenerates on change.\n` +
     `export default {\n  families: [\n` +
     fams
       .map(
@@ -242,7 +242,7 @@ function renderConfig(fams) {
 
 function snippet() {
   return `
-  import { fonts } from 'tailwind-font-kit'
+  import { fonts } from 'tailwind-vite-font-kit'
   // ...
   plugins: [
     nitro(),

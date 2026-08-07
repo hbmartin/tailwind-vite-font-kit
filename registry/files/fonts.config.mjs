@@ -1,4 +1,4 @@
-// tailwind-font-kit. Edit this, then rebuild — the plugin regenerates on change.
+// tailwind-vite-font-kit. Edit this, then rebuild — the plugin regenerates on change.
 //
 // Already have fonts in your CSS? Run `npx tss-fonts adopt` and it will fill this in
 // from your existing Google @import and --font-* vars, then clean them out of your CSS.

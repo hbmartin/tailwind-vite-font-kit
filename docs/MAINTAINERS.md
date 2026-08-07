@@ -1,4 +1,4 @@
-# Maintaining tailwind-font-kit
+# Maintaining tailwind-vite-font-kit
 
 Everything a future you needs to change this safely. The README is for users; this is for
 whoever has to touch the internals.
@@ -19,6 +19,7 @@ test/                node:test unit tests + a minimal Vite fixture for CI
 scripts/             CI helpers: collect-metrics.mjs, write-note.sh
 extras/              opt-in files that are shipped but never installed automatically
 harness/             measurement tools — NOT in package.json `files`, dev only
+docs/                this file + FRAMEWORK-COUPLING.md (what Vite/Tailwind/TanStack each own)
 ```
 
 ## Setup
@@ -105,7 +106,7 @@ update the expected `themeVarsWithFallback`.
 4. Tag and push, including tags.
 5. `npm publish --access public`.
 6. Verify the real path from a throwaway project:
-   `npx shadcn@latest add https://raw.githubusercontent.com/hbmartin/tailwind-font-kit/main/registry/r/fonts.json`
+   `npx shadcn@latest add https://raw.githubusercontent.com/hbmartin/tailwind-vite-font-kit/main/registry/r/fonts.json`
 
 The registry needs **no hosting**: `raw.githubusercontent.com` is a static file host and shadcn
 accepts it. If you later want a nicer URL, any static host works — the only requirement is that it
