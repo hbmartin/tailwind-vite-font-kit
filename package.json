@@ -55,7 +55,7 @@
     "release:check": "pnpm run prepublishOnly && pnpm run verify:package",
     "size:report": "npm pack --dry-run --json",
     "test": "node --test \"test/**/*.test.mjs\"",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"harness/**\" --test-coverage-exclude=\"extras/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=66 --test-coverage-branches=71 --test-coverage-functions=59 \"test/**/*.test.mjs\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"harness/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=77 --test-coverage-branches=77 --test-coverage-functions=75 \"test/**/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "types:lint": "attw --pack . --profile esm-only",
     "verify:package": "npm publish --dry-run --ignore-scripts"

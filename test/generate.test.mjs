@@ -238,6 +238,90 @@ test('no temp files survive a successful generate', async (t) => {
   assert.deepEqual(strays, [])
 })
 
+test('a missing woff2 forces a regenerate even when the meta is intact', async (t) => {
+  const { outDir } = sandbox(t, (url) =>
+    url.endsWith('.woff2')
+      ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 })
+      : new Response(CSS2, { status: 200 }),
+  )
+  const opts = {
+    ...optsFor('Manrope'),
+    families: [{ ...optsFor('Manrope').families[0], strategy: 'self-host' }],
+  }
+  const first = await generate(opts, outDir)
+  rmSync(join(outDir, 'files', first.files[0]))
+  assert.equal((await generate(opts, outDir)).fromCache, false)
+})
+
+test('a truncated meta file is a cache miss, not a crash', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
+  const opts = optsFor('Manrope')
+  await generate(opts, outDir)
+  const meta = readdirSync(outDir).find((f) => f.startsWith('meta-'))
+  writeFileSync(join(outDir, meta), '{"files": [')
+  assert.equal((await generate(opts, outDir)).fromCache, false)
+})
+
+// The retry ladder is the difference between a flaky network and a failed build: a bare
+// ETIMEDOUT to fonts.googleapis.com killed a build during testing with no recovery.
+// Exactly one retry, not two: the backoff is real (500ms, then 1s), and a second retry
+// would triple this test's cost to prove nothing the first one does not.
+test('a transient status is retried rather than failing the build', async (t) => {
+  let attempts = 0
+  const { outDir } = sandbox(t, () => {
+    attempts++
+    return attempts < 2 ? new Response('', { status: 503 }) : new Response(CSS2, { status: 200 })
+  })
+  await generate(optsFor('Manrope'), outDir)
+  assert.equal(attempts, 2, '503 should have been retried until it succeeded')
+})
+
+test('a 404 is not retried, and the error names the offline escape hatch', async (t) => {
+  let attempts = 0
+  const { outDir } = sandbox(t, () => {
+    attempts++
+    return new Response('', { status: 404 })
+  })
+  await assert.rejects(() => generate(optsFor('Manrope'), outDir), /could not fetch/)
+  assert.equal(attempts, 1, 'a 404 will never get better; retrying it just wastes the build')
+  await assert.rejects(() => generate(optsFor('Manrope'), outDir), /output: 'commit'/)
+})
+
+// If Google reshapes css2, the failure should name the family and the URL rather than
+// surfacing as a TypeError on a null match somewhere in the parser.
+test('an unparseable @font-face block fails with the family and the URL', async (t) => {
+  const noWeight = CSS2.replace(/\s*font-weight:[^;]+;/, '')
+  const { outDir } = sandbox(t, () => new Response(noWeight, { status: 200 }))
+  await assert.rejects(
+    () => generate(optsFor('Manrope'), outDir),
+    /could not parse font-weight in a Manrope @font-face block from https:/,
+  )
+})
+
+test('a subset with no blocks says which subsets were available', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
+  await assert.rejects(
+    () => generate({ ...optsFor('Manrope'), subsets: ['cyrillic'] }, outDir),
+    /no cyrillic blocks for Manrope\. Available: latin/,
+  )
+})
+
+test('a family with neither weights nor axes is rejected before any request', async (t) => {
+  const { outDir, calls } = sandbox(t, () => new Response(CSS2, { status: 200 }))
+  await assert.rejects(
+    () =>
+      generate(
+        {
+          ...optsFor('Manrope'),
+          families: [{ name: 'Manrope', themeVar: '--font-sans', preloadWeights: [] }],
+        },
+        outDir,
+      ),
+    /declares no weights/,
+  )
+  assert.equal(calls.length, 0, 'it should fail before touching the network')
+})
+
 test("output:'commit' prunes other configs, so the committed dir describes one config", async (t) => {
   let family = 'Alpha'
   const { outDir } = sandbox(t, () => new Response(css2For(family), { status: 200 }))

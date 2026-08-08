@@ -135,6 +135,164 @@ test('preloadHeader: false is a deliberate choice, not a missing Nitro', async (
 })
 
 // ---------------------------------------------------------------------------
+// buildStart — emitting the fonts into the client bundle
+// ---------------------------------------------------------------------------
+
+/** A plugin whose config() has already run, so `gen` is populated. */
+async function built(t, options) {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [selfHosted], silent: true, ...options })
+  await plugin.config({ root }, { command: options?.serve ? 'serve' : 'build' })
+  return plugin
+}
+
+test('buildStart emits one asset per woff2, at the public path', async (t) => {
+  const plugin = await built(t)
+  const emitted = []
+  plugin.buildStart.call({
+    environment: { config: { consumer: 'client' } },
+    emitFile: (a) => emitted.push(a),
+  })
+  assert.equal(emitted.length, 1)
+  assert.equal(emitted[0].type, 'asset')
+  // Nitro points the client outDir at .output/public, so this lands at /fonts/x.woff2.
+  assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/)
+  assert.ok(Buffer.isBuffer(emitted[0].source) || emitted[0].source instanceof Uint8Array)
+})
+
+test('buildStart emits nothing outside the client environment', async (t) => {
+  const plugin = await built(t)
+  const emitFile = () => assert.fail('the SSR and nitro passes must not emit the fonts again')
+  plugin.buildStart.call({ environment: { config: { consumer: 'server' } }, emitFile })
+})
+
+test('buildStart emits nothing in serve mode', async (t) => {
+  // emitFile throws "not supported in serve mode"; buildStart still runs for the dev
+  // module graph, so the guard is what keeps `vite dev` from crashing on startup.
+  const plugin = await built(t, { serve: true })
+  const emitFile = () => assert.fail('emitFile is not available in serve mode')
+  plugin.buildStart.call({ environment: { config: { consumer: 'client' } }, emitFile })
+})
+
+// ---------------------------------------------------------------------------
+// configureServer — dev has no bundle, so the same bytes are served from cache
+// ---------------------------------------------------------------------------
+
+/** A dev server whose middleware is captured, plus the name of a font it really has. */
+async function devServer(t, options) {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [selfHosted], silent: true, ...options })
+  await plugin.config({ root }, { command: 'serve' })
+
+  let middleware
+  plugin.configureServer({
+    middlewares: { use: (fn) => (middleware = fn) },
+    watcher: { add() {}, on() {} },
+  })
+
+  // The virtual module is the plugin's own record of what it emitted, so it is the honest
+  // source for "a filename this server should recognise".
+  const [, fontFile] = /\/fonts\/([^"]+\.woff2)/.exec(plugin.load('\0virtual:fonts'))
+
+  /** @param {string} url */
+  const request = (url) => {
+    const headers = {}
+    let body = null
+    let nexted = false
+    middleware(
+      { url },
+      { setHeader: (k, v) => (headers[k] = v), end: (b) => (body = b) },
+      () => (nexted = true),
+    )
+    return { headers, body, nexted }
+  }
+  return { request, fontFile }
+}
+
+test('the dev middleware serves a known font with caching and CORS headers', async (t) => {
+  const { request, fontFile } = await devServer(t)
+  const { headers, body, nexted } = request(`/fonts/${fontFile}`)
+  assert.equal(nexted, false, 'a font the generator produced must not fall through')
+  assert.ok(body, 'nothing was served')
+  assert.equal(headers['content-type'], 'font/woff2')
+  assert.equal(headers['access-control-allow-origin'], '*')
+  assert.match(headers['cache-control'], /immutable/)
+})
+
+test('the dev middleware ignores a query string on a known font', async (t) => {
+  const { request, fontFile } = await devServer(t)
+  assert.equal(request(`/fonts/${fontFile}?v=1`).nexted, false)
+})
+
+test('the dev middleware passes through anything it does not own', async (t) => {
+  const { request } = await devServer(t)
+  assert.equal(request('/fonts/not-a-real-file.woff2').nexted, true)
+  assert.equal(request('/fonts/not-a-real-file.woff2').body, null)
+  assert.equal(request('/assets/index.js').nexted, true, 'paths outside publicPath')
+})
+
+// ---------------------------------------------------------------------------
+// transform — the @import injection
+// ---------------------------------------------------------------------------
+
+test('the transform injects an import relative to the entry, not the root', async (t) => {
+  // Tailwind resolves its own at-imports from the IMPORTING FILE's directory, so a
+  // root-relative specifier would simply not resolve.
+  const plugin = await built(t)
+  const ctx = {
+    warn() {},
+    error(m) {
+      throw new Error(m)
+    },
+  }
+  const out = plugin.transform.handler.call(ctx, `@import 'tailwindcss';\n`, '/proj/src/styles.css')
+  assert.match(out, /@import '[^']*fonts-[0-9a-f]{16}\.gen\.css'/)
+  assert.ok(/@import '\.\.?\//.test(out), `specifier is not relative: ${out}`)
+})
+
+test('the transform is idempotent and leaves non-entry stylesheets alone', async (t) => {
+  const plugin = await built(t)
+  const ctx = { warn() {}, error() {} }
+  const once = plugin.transform.handler.call(ctx, `@import 'tailwindcss';\n`, '/p/a.css')
+  assert.equal(plugin.transform.handler.call(ctx, once, '/p/a.css'), undefined)
+  assert.equal(plugin.transform.handler.call(ctx, '.x { color: red }', '/p/b.css'), undefined)
+})
+
+test('the transform warns once about a Google import and an inline theme', async (t) => {
+  const plugin = await built(t)
+  const warnings = []
+  const ctx = { warn: (m) => warnings.push(m), error() {} }
+  const code = `@import 'tailwindcss';
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400');
+@theme inline {
+  --font-sans: 'Poppins', sans-serif;
+}
+`
+  plugin.transform.handler.call(ctx, code, '/p/a.css')
+  assert.equal(warnings.length, 1, 'one warning, listing everything found')
+  assert.match(warnings[0], /render-blocking Google/)
+  assert.match(warnings[0], /--font-sans inside `@theme inline`/)
+  assert.match(warnings[0], /tss-fonts adopt/, 'it should say how to fix it')
+
+  // Warned once per process, not once per stylesheet per build.
+  plugin.transform.handler.call(ctx, code, '/p/b.css')
+  assert.equal(warnings.length, 1)
+})
+
+test('virtual:fonts exposes the preloads and the family map', async (t) => {
+  const plugin = await built(t)
+  assert.equal(plugin.resolveId('virtual:fonts'), '\0virtual:fonts')
+  assert.equal(plugin.resolveId('something-else'), undefined)
+
+  const mod = plugin.load('\0virtual:fonts')
+  const preloads = JSON.parse(/fontPreloads = (\[.*?\])\n/s.exec(mod)[1])
+  assert.equal(preloads.length, 1)
+  assert.deepEqual(Object.keys(preloads[0]).sort(), ['as', 'crossOrigin', 'href', 'rel', 'type'])
+  assert.equal(preloads[0].crossOrigin, 'anonymous', 'a preload without this downloads twice')
+  assert.match(mod, /fontFamilies = \{"--font-sans":"Manrope"\}/)
+})
+
+// ---------------------------------------------------------------------------
 // assets: '<dir>' — the plugin writes into a directory the USER owns
 // ---------------------------------------------------------------------------
 
