@@ -166,11 +166,89 @@ jobs:
           name: metrics
           path: metrics.json
 
+  # `peerDependencies` claims a Vite range; this is what makes that claim true rather
+  # than asserted. The `integration` job above builds the fixture at whatever the fixture
+  # lockfile pins (currently Vite 8), so the only leg that needs adding is the FLOOR of
+  # each supported major — the version a user on `^7` can actually resolve.
+  #
+  # Vite 6 is deliberately absent: the transform hook uses the `{filter, handler}` object
+  # form, which needs Rollup >=4.38 / Vite >=6.3. On 6.0-6.2 the filter is silently
+  # ignored and the hook runs on every module.
+  peer-range:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vite: ['7.0.0', '8.0.0']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          # No `cache: pnpm`. Each leg installs a DIFFERENT Vite into the fixture, so the
+          # lockfile hash the cache key is built from no longer describes what is
+          # installed — the legs would share one key and clobber each other's store.
+          # These installs are small; a wrong cache is worse than no cache.
+
+      - name: Install the kit
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the fixture against Vite ${{ matrix.vite }}
+        working-directory: test/fixture
+        env:
+          VITE_VERSION: ${{ matrix.vite }}
+        run: |
+          # Vite 7 bundles with esbuild, whose postinstall pnpm 11 blocks by default, and
+          # an unapproved build script makes pnpm exit non-zero. Without esbuild's
+          # platform binary the build fails outright, so approve and reinstall. Vite 8
+          # uses rolldown and needs none of this; there the approval is a no-op.
+          pnpm add -D "vite@$VITE_VERSION" || true
+          pnpm approve-builds --all || true
+          pnpm install
+          # The `|| true` above must not let a leg quietly test whatever Vite was already
+          # there — that would make this job worse than useless.
+          node -e "
+            const want = process.env.VITE_VERSION;
+            const got = require('vite/package.json').version;
+            if (got !== want) {
+              console.error(\`::error::expected vite \${want}, got \${got}\`);
+              process.exit(1);
+            }
+            console.log('building against vite ' + got);
+          "
+          pnpm build
+
+      - name: Assert the same invariants as the Vite 8 build
+        run: |
+          node scripts/collect-metrics.mjs test/fixture > metrics.json
+          cat metrics.json
+          node -e "
+            const m = require('./metrics.json');
+            const must = {
+              googleapisRefs: 0, gstaticRefs: 0, blinkMacSystemFontLocals: 0,
+              leakedThemeAtRule: 0, defaultFontFamilyIsVar: 1, themeVarsWithFallback: 2,
+            };
+            const bad = Object.entries(must).filter(([k, v]) => m[k] !== v);
+            if (bad.length) {
+              for (const [k, v] of bad) console.error(\`::error::\${k} = \${m[k]}, expected \${v}\`);
+              process.exit(1);
+            }
+            if (m.fontFaceWithSizeAdjust < 8) {
+              console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
+              process.exit(1);
+            }
+            console.log('invariants ok on vite ${{ matrix.vite }}');
+          "
+
   # Notes are per-commit, so PR runs would attach to a commit that may never land.
   # A separate job so `contents: write` is granted to nothing but the note push.
   notes:
     if: github.event_name == 'push'
-    needs: [checks, integration]
+    needs: [checks, integration, peer-range]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -91,12 +91,23 @@ test('serif families select the serif fallback targets', () => {
   assert.ok(!names.some((n) => n.includes('Arial')))
 })
 
-test('an unknown family degrades to no faces rather than throwing', () => {
+// Degrading to no faces is correct — a missing family must not fail the build — but it
+// removes every bit of CLS protection for that family while the page still renders fine.
+// Nothing downstream can notice, so this has to reach the WARN channel, which `silent`
+// does not suppress. It sat on the log channel for a while, where `silent: true` hid it.
+test('an unknown family degrades to no faces, and says so on the warn channel', () => {
   const logged = []
-  const { css, names } = fallbackFaces(METRICS, 'Definitely Not A Real Font', 'latin', [400], (m) =>
-    logged.push(m),
+  const warned = []
+  const { css, names } = fallbackFaces(
+    METRICS,
+    'Definitely Not A Real Font',
+    'latin',
+    [400],
+    (m) => logged.push(m),
+    (m) => warned.push(m),
   )
   assert.equal(css, '')
   assert.deepEqual(names, [])
-  assert.match(logged.join(' '), /no capsize metrics/)
+  assert.match(warned.join(' '), /no capsize metrics/)
+  assert.equal(logged.join(' '), '', 'this must not be a suppressible log line')
 })

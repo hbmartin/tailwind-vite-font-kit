@@ -10,15 +10,21 @@ src/index.mjs        the Vite plugin — hooks, ordering, the Link: header, the 
 src/generate.mjs     build-time generation: css2 fetch, woff2 download, caching, retry
 src/metrics.mjs      FALLBACK_TARGETS + the size-adjust / override math
 src/opsz.mjs         optical-size axis detection and URL pinning
+src/opsz-policy.mjs  offline fvar reading and the bucket/pin decision (optional peers)
+src/opsz-auto.mjs    `opszPin: 'auto'` and `tss-fonts opsz` — axis discovery + measurement
+src/weightings.mjs   VENDORED capsize character-frequency table; see src/weightings.mjs
+src/leading.mjs      the `leadingUtilities` @utility escape hatches
+src/start-server.mjs the TanStack Start 103 Early Hints entry (optional peer)
+src/config.mjs       loading and VALIDATING fonts.config.mjs, shared by plugin and CLI
 src/detect.mjs       project detection: Tailwind entry, vite config, fonts already in the CSS
 src/codemod-css.mjs  the one-time CSS migration
-src/diff.mjs         unified diff printer
-bin/tss-fonts.mjs    the `adopt` / `init` CLI
+src/diff.mjs         unified diff printer + the NO_COLOR-aware palette the CLI uses
+bin/tss-fonts.mjs    the `adopt` / `init` / `opsz` / `early-hints` CLI
 registry/            shadcn registry source + built output (registry/r is committed)
 test/                node:test unit tests + a minimal Vite fixture for CI
 test/types.test.mjs  guards index.d.ts against drifting from the .mjs sources
-scripts/             CI helpers: collect-metrics.mjs, write-note.sh
-extras/              opt-in files that are shipped but never installed automatically
+types/ambient.d.ts   optional-peer stubs for OUR typecheck only — deliberately not shipped
+scripts/             CI helpers: collect-metrics.mjs, write-note.sh, extract-weightings.mjs
 harness/             measurement tools — NOT in package.json `files`, dev only
 docs/                this file + FRAMEWORK-COUPLING.md (what Vite/Tailwind/TanStack each own)
 ```
@@ -79,11 +85,15 @@ Two JSDoc traps, both of which fail in a way that points somewhere else:
 
 ### Coverage
 
-Thresholds are set as a ratchet just under the current numbers (66% lines, 71% branches,
-59% functions), not at an aspirational figure — they exist to stop regressions. `index.mjs`
-(~43% lines) and `detect.mjs` (~48%) are the gaps; the Vite hooks are exercised by the fixture
-build in CI rather than by unit tests. Raise the numbers when you add tests, never lower them.
-They are enforced on Node 22 only, because V8's coverage output shifts between Node releases.
+Thresholds are set as a ratchet just under the current numbers (77% lines, 77% branches,
+75% functions), not at an aspirational figure — they exist to stop regressions. Raise them
+when you add tests, never lower them. They are enforced on Node 22 only, because V8's
+coverage output shifts between Node releases.
+
+The remaining gaps are `src/opsz-policy.mjs` and `src/opsz-auto.mjs`, both of which need a
+real variable font and the optional peers. They are covered by running `tss-fonts opsz`
+against a live family, not by the offline unit suite — deliberately, since making the unit
+tests depend on fontkit and a network would cost more than it catches.
 
 ## Testing
 
@@ -99,6 +109,10 @@ What unit tests **cannot** cover, and therefore must be checked by hand before a
 | Dev parity | `pnpm dev`, fetch the entry CSS with `accept: text/css`, expect the same `--font-sans` |
 | Nitro route rules | `curl -I /fonts/x.woff2` → `immutable` + CORS; `curl -I /` → `link:` header |
 | `assets` as a directory | must appear in the output on the **first** build (see the trap below) |
+| Preload header scope | `curl -I /assets/<chunk>.js` and `/fonts/x.woff2` → **empty** `link:`; only the document gets a real one |
+| Static-host presets | build with the Cloudflare preset and read `_headers`: the exclusions render as a value-less `link:` line. If that host rejects it the exclusion is simply ignored — a lost saving, not a regression — but check before claiming otherwise |
+| `opsz` command | `npx tss-fonts opsz Fraunces` in a project with the optional peers; `--write` should edit only that family's entry |
+| Early Hints | `tss-fonts early-hints`, serve over HTTP/2, confirm exactly ONE 103 in the waterfall |
 | `output: 'commit'` | clear the cache, rebuild, expect `cache hit … no network` |
 | shadcn install | serve `registry/r` statically, install by URL and by `@ns/fonts` |
 

@@ -20,10 +20,10 @@
 // <link> you write, so a JSX preload lands after them. Measured equivalent:
 // 608ms FCP / 586ms fonts (header) vs 604 / 579 (JSX), 9 runs at 150ms RTT.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, posix } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { generate } from './generate.mjs'
+import { CSS_NAME_RE, generate } from './generate.mjs'
+import { loadFontsConfig, validateFamilies } from './config.mjs'
 
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
@@ -51,6 +51,12 @@ export function fonts(userOptions = {}) {
   })
   /** @param {string} m */
   const log = (m) => !opts.silent && console.log(`[tss-fonts] ${m}`)
+  // Deliberately NOT gated on `silent`. `silent` means "stop narrating a build that is
+  // going fine", not "hide it when the metric fallbacks — the entire reason this package
+  // exists — were silently not emitted". Everything routed here is a case where the build
+  // succeeds and the result is wrong.
+  /** @param {string} m */
+  const warn = (m) => console.warn(`[tss-fonts] ${m}`)
 
   // Families may come from the call site OR from `fonts.config.mjs` in the project root.
   // The config file is what `npx shadcn add` drops, since shadcn can place files but
@@ -58,7 +64,12 @@ export function fonts(userOptions = {}) {
   // Explicit options always win.
   /** @param {string} r */
   async function resolveFamilies(r) {
-    if (opts.families?.length) return
+    // Inline options are validated too. They are the path a human hand-writes, so they
+    // are at least as likely to carry a typo as the generated config file.
+    if (opts.families?.length) {
+      validateFamilies(opts.families, 'fonts() options')
+      return
+    }
     // Root first, then src/ — shadcn resolves a bare `target` against the project's
     // component root, so an item authored without `~/` lands in src/.
     const candidates = [
@@ -71,11 +82,16 @@ export function fonts(userOptions = {}) {
       const p = join(r, name)
       if (!existsSync(p)) continue
       // Cache-busted so a dev-server restart in the same process sees edits.
-      const mod = await import(pathToFileURL(p).href + `?t=${Date.now()}`)
-      Object.assign(opts, { ...(mod.default ?? mod), ...userOptions })
+      const cfg = await loadFontsConfig(p)
+      Object.assign(opts, { ...cfg, ...userOptions })
       configFile = p
       log(`loaded ${name}`)
-      if (opts.families?.length) return
+      // Validate only once families are known to be present — a config file with no
+      // families at all falls through to the friendlier "nothing configured" error below.
+      if (opts.families?.length) {
+        validateFamilies(opts.families, name)
+        return
+      }
       break // config found but no families in it — fall through to the error
     }
     throw new Error(
@@ -112,6 +128,13 @@ export function fonts(userOptions = {}) {
       isServe = env.command === 'serve'
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
+      // Paths that must NOT carry the preload header. Defaults cover the two that
+      // dominate an SSR page's response count: the hashed build output and the fonts
+      // themselves (which would otherwise preload themselves).
+      const preloadExcludes =
+        typeof opts.preloadHeader === 'object' && opts.preloadHeader?.exclude
+          ? opts.preloadHeader.exclude
+          : [`${opts.publicPath}/**`, '/assets/**']
       if (opts.output !== 'cache' && opts.output !== 'commit') {
         throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
       }
@@ -119,7 +142,7 @@ export function fonts(userOptions = {}) {
       mkdirSync(outDir, { recursive: true })
 
       const t0 = Date.now()
-      gen = await generate(opts, outDir, log)
+      gen = await generate(opts, outDir, log, warn)
       if (!gen.fromCache) log(`generation took ${Date.now() - t0}ms`)
 
       // If the user asked for real files on disk, write them HERE, not in buildStart.
@@ -129,22 +152,58 @@ export function fonts(userOptions = {}) {
         const dir = resolve(root, opts.assets)
         mkdirSync(dir, { recursive: true })
         let written = 0
+        let repaired = 0
         for (const f of gen.files) {
           const dest = join(dir, f)
-          // Additive only: never delete from a directory the user also owns.
+          const source = readFileSync(join(gen.filesDir, f))
           if (!existsSync(dest)) {
-            writeFileSync(dest, readFileSync(join(gen.filesDir, f)))
+            writeFileSync(dest, source)
             written++
+            continue
+          }
+          // Same name, different bytes. Google's filenames carry a content hash, so this
+          // is not a different font — it is a damaged copy of this one (an interrupted
+          // write, a bad checkout, a truncating editor). Left alone it serves as a valid
+          // font forever, because nothing downstream ever reads it again.
+          const current = readFileSync(dest)
+          if (current.length !== source.length || !current.equals(source)) {
+            writeFileSync(dest, source)
+            repaired++
           }
         }
+
+        // Files this plugin plausibly wrote on an earlier run that are no longer needed.
+        // Reported, never deleted: the directory belongs to the user, and a name collision
+        // with something of theirs is possible. Matching on the family slug keeps the
+        // report to fonts, not to everything in the directory.
+        const slugs = opts.families.map((fa) => fa.name.toLowerCase().replace(/\s+/g, '-'))
+        const orphans = readdirSync(dir).filter(
+          (f) =>
+            f.endsWith('.woff2') &&
+            !gen.files.includes(f) &&
+            slugs.some((s) => f.startsWith(`${s}-`)),
+        )
+
         log(
-          `wrote ${written} new woff2 to ${opts.assets}/ (${gen.files.length} total). ` +
+          `${opts.assets}/: ${written} new, ${repaired} repaired, ${gen.files.length} total. ` +
             `Committing them is optional and does NOT make builds offline — use output:'commit'.`,
         )
+        if (orphans.length) {
+          warn(
+            `${orphans.length} font file(s) in ${opts.assets}/ are no longer used by your config ` +
+              `and were left in place:\n` +
+              orphans.map((f) => `  ${f}`).join('\n') +
+              `\nDelete them by hand once you are sure nothing else serves them.`,
+          )
+        }
       }
 
       // Nitro's vite plugin defu's `userConfig.nitro` into its own config
-      // (nitro/dist/vite.mjs:413), so the plugin can configure itself.
+      // (nitro/dist/vite.mjs:413), which is how the plugin configures itself without
+      // asking anyone to edit anything. Note the call is
+      // `defu(ctx.pluginConfig, ctx.pluginConfig.config, userConfig.nitro)` — what this
+      // returns is the LAST argument, i.e. the LOWEST priority. These rules are
+      // defaults: a same-key rule in the user's own `nitro({ routeRules })` wins.
       /** @type {Record<string, {headers: Record<string, string>}>} */
       const routeRules = {
         // Nitro serves public/ and any non-/assets path with NO cache-control at all,
@@ -163,6 +222,29 @@ export function fonts(userOptions = {}) {
           .map((p) => `<${p.href}>; rel=preload; as=font; type=${p.type}; crossorigin`)
           .join(', ')
         routeRules['/**'] = { headers: { link } }
+
+        // `/**` is the only pattern that covers every document route, but it covers
+        // every OTHER response too. Nitro merges the `headers` of all matching rules
+        // key-by-key, most-specific last (rou3 matchAll returns least-specific first),
+        // so `/fonts/**` ADDS to `/**` rather than replacing it — without this, every
+        // JS chunk and the woff2 itself ship a font preload header that only the
+        // navigation response can act on.
+        //
+        // An empty value on a more specific rule is the only lever available: there is
+        // no per-header delete, `headers: false` would drop the cache-control above
+        // with it, and defu skips null/undefined instead of deleting.
+        //
+        // On static-host presets Nitro flattens route rules into a platform file rather
+        // than running this logic (`writeCFHeaders` in nitro/dist/_presets.mjs emits
+        // `  link: ` for an empty value, most-specific block first). Whether that host
+        // honours a value-less line is its business — but the failure mode is benign:
+        // the line is ignored and the `/**` header applies, which is where this started.
+        // Nothing regresses, the saving is just not realised there.
+        for (const pattern of preloadExcludes) {
+          routeRules[pattern] = {
+            headers: { ...routeRules[pattern]?.headers, link: '' },
+          }
+        }
       }
 
       // `nitro` is not a Vite config key — nitro's own plugin augments UserConfig, and
@@ -195,6 +277,23 @@ export function fonts(userOptions = {}) {
     },
 
     // Dev has no bundle, so serve the same bytes off the generated dir.
+    // The `Link:` preload header and the immutable caching above are both delivered as
+    // Nitro route rules. On plain Vite there is no Nitro, the `nitro` config key is
+    // ignored, and nothing errors — fonts still generate, emit and serve, you just
+    // quietly lose preloading and long-lived caching. That is worth one line of output,
+    // because the symptom is "it works, but slower than the README says".
+    configResolved(resolved) {
+      if (!opts.preloadHeader || !gen?.preloads.length) return
+      if (resolved.plugins?.some((p) => p.name?.includes('nitro'))) return
+      warn(
+        `no Nitro plugin found, so the preload \`Link:\` header and \`immutable\` caching ` +
+          `on ${opts.publicPath}/ were not applied — those ship as Nitro route rules.\n` +
+          `  The fonts and the metric fallbacks still work. To preload without Nitro, set ` +
+          `\`preloadHeader: false\` and render the links yourself:\n` +
+          `    import { fontPreloads } from 'virtual:fonts'`,
+      )
+    },
+
     configureServer(server) {
       // Generation happens once, in config() — a config-file edit needs a restart, and
       // configFileDependencies does not cover files loaded by a plugin, so watch it here.
@@ -252,7 +351,10 @@ export function fonts(userOptions = {}) {
         // Counted BEFORE the already-injected check: an entry that carries the import
         // (hand-added, or a re-transform) is still a seen entry, not a buildEnd failure.
         entrySeen++
-        if (code.includes('fonts.gen.css')) return
+        // Matches any generated name, not just the current key's: an entry carrying a
+        // stale `fonts-<oldkey>.gen.css` (hand-added, or left by an earlier transform)
+        // must not receive a second import beside it.
+        if (CSS_NAME_RE.test(code)) return
 
         // We do NOT rewrite the user's CSS. `npx tss-fonts adopt` does that once, with a
         // printed diff you can review. Silently mutating source on every build hides a

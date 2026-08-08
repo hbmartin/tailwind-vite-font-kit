@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { loadFontsConfig, validateFamilies } from '../src/config.mjs'
 import {
   detectTailwindEntry,
   detectViteConfig,
@@ -22,7 +22,7 @@ import {
 } from '../src/detect.mjs'
 import { insertFontsPlugin } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
-import { unifiedDiff } from '../src/diff.mjs'
+import { color, unifiedDiff } from '../src/diff.mjs'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -34,12 +34,15 @@ const opt = (n, d) => {
 const DRY = flag('dry-run')
 const root = resolve(opt('cwd', process.cwd()))
 
+// Built from src/diff.mjs's palette rather than a second set of escape codes, so NO_COLOR
+// is honoured everywhere the CLI prints — it was respected in the diffs and ignored in the
+// surrounding prose, which is worse than not supporting it at all.
 const c = {
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  b: (s) => `\x1b[1m${s}\x1b[0m`,
-  g: (s) => `\x1b[32m${s}\x1b[0m`,
-  y: (s) => `\x1b[33m${s}\x1b[0m`,
-  r: (s) => `\x1b[31m${s}\x1b[0m`,
+  dim: color.dim,
+  b: color.bold,
+  g: color.green,
+  y: color.yellow,
+  r: color.red,
 }
 // Annotated on the binding, not the arrow: TS only narrows control flow past a
 // never-returning call when the *variable* carries the type.
@@ -57,13 +60,184 @@ ${c.b('tss-fonts')} — wiring for tailwind-vite-font-kit
           remove --font-* from your @theme (the generated one owns them now), and
           point hand-written font-family rules at the theme var.
   ${c.b('init')}    adopt, plus write fonts.config.mjs and add fonts() to vite.config.ts.
+  ${c.b('opsz')}    measure a family's optical-size axis and recommend an opszPin.
+  ${c.b('early-hints')}
+          write src/server.ts, a TanStack Start entry that ships the preloads as
+          103 Early Hints — the only mechanism that beats a slow route loader.
 
   --dry-run   print the diff, write nothing
   --cwd DIR   run against DIR instead of the current directory
+
+${c.b('tss-fonts opsz')} <Family> [--sizes 16,24,48,96] [--weights 400,700] [--write]
+
+  Downloads the variable font once and measures how much its advance widths move
+  across those sizes, then tells you what to pin \`opszPin\` at. Without it the
+  default is 16, which is a guess — and on some families (Nunito Sans: 6..12) it
+  is outside the axis entirely. --write puts the answer in fonts.config.mjs.
+
+  Needs the optional peers: ${c.dim('pnpm add -D fontkit wawoff2')}
 `)
   process.exit(0)
 }
-if (cmd !== 'adopt' && cmd !== 'init') die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz' && cmd !== 'early-hints') {
+  die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+}
+
+// ---------------------------------------------------------------------------
+// early-hints — write the Start server entry. One file, two lines; everything
+// interesting lives in the package so a fix reaches you through npm.
+// ---------------------------------------------------------------------------
+
+if (cmd === 'early-hints') {
+  // Start resolves `src/server.{ts,tsx}` as the server entry. Match the extension the
+  // project already uses for its routes rather than assuming TypeScript.
+  const isTs = existsSync(join(root, 'tsconfig.json'))
+  const dest = join(root, 'src', isTs ? 'server.ts' : 'server.js')
+  const body =
+    `// TanStack Start server entry. Ships the font preloads as 103 Early Hints, which is\n` +
+    `// the only preload mechanism that can beat a slow route loader — Start's first byte\n` +
+    `// waits on the loader, a 103 does not. Worth nothing on fast routes.\n` +
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n\n` +
+    `export default createFontsServerEntry()\n`
+
+  if (!existsSync(join(root, 'src'))) {
+    die(`no src/ directory under ${root} — is this a TanStack Start app? Pass --cwd.`)
+  }
+  const before = existsSync(dest) ? readFileSync(dest, 'utf8') : ''
+  if (before === body) {
+    console.log(`${c.g('✓')} ${relative(root, dest)} is already this entry — nothing to do.`)
+    process.exit(0)
+  }
+  if (before) {
+    // A hand-written server entry is not ours to overwrite: it may wrap the handler,
+    // add middleware, or do anything else. Show what to add instead.
+    console.log(
+      `${c.y('!')} ${relative(root, dest)} already exists. Add the wrapper by hand:\n\n${body}`,
+    )
+    process.exit(0)
+  }
+  console.log(`\n${c.b(relative(root, dest))} ${c.g('(new)')}`)
+  console.log(unifiedDiff('', body, relative(root, dest)))
+  if (DRY) {
+    console.log(`\n${c.y('--dry-run')} — nothing written.`)
+    process.exit(0)
+  }
+  writeFileSync(dest, body)
+  console.log(`\n${c.g('✓')} wrote ${relative(root, dest)}`)
+  console.log(
+    c.dim(
+      '  Early Hints need HTTP/2+ for Chrome to act on them, and a Node runtime for\n' +
+        '  writeEarlyHints. Elsewhere this degrades to the Link: header, which the plugin\n' +
+        '  already sets — so it is safe everywhere, just not always a win.',
+    ),
+  )
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// opsz — read-only unless --write, and it never touches CSS, so it runs before
+// any of the project detection the other two commands need.
+// ---------------------------------------------------------------------------
+
+if (cmd === 'opsz') {
+  const nums = (s) => s?.split(',').map(Number).filter(Number.isFinite)
+  const family = args[1] && !args[1].startsWith('--') ? args[1] : null
+  const sizes = nums(opt('sizes'))
+  const weights = nums(opt('weights'))
+
+  const cfgPath = join(root, 'fonts.config.mjs')
+  /** @type {import('../index.d.ts').FontFamily[]} */
+  let configured = []
+  if (existsSync(cfgPath)) {
+    const cfg = await loadFontsConfig(cfgPath).catch(
+      () => /** @type {Record<string, unknown>} */ ({}),
+    )
+    if (Array.isArray(cfg.families)) configured = cfg.families
+  }
+
+  // With no family named, measure every family the project already declares — that is
+  // the question someone actually has after `init`.
+  /** @type {import('../index.d.ts').FontFamily[]} */
+  const targets = family
+    ? [
+        configured.find(
+          (f) => f.name.toLowerCase() === family.toLowerCase(),
+        ) ?? /** @type {import('../index.d.ts').FontFamily} */ ({ name: family }),
+      ]
+    : configured
+  if (!targets.length) {
+    die(
+      `name a family, e.g. \`tss-fonts opsz Fraunces\`, or run this in a project with a fonts.config.mjs.`,
+    )
+  }
+
+  const { recommendOpszPin } = await import('../src/opsz-auto.mjs')
+  /** @type {{name: string, pin: number}[]} */
+  const found = []
+
+  for (const fam of targets) {
+    const want = { ...fam, weights: weights ?? fam.weights }
+    process.stdout.write(`${c.b(fam.name)} `)
+    let rec
+    try {
+      rec = await recommendOpszPin(want, { sizes })
+    } catch (err) {
+      console.log(c.r('failed'))
+      console.log(`  ${err.message}`)
+      continue
+    }
+    if (!rec.hasOpsz) {
+      console.log(c.dim('— no opsz axis'))
+      console.log(c.dim(`  ${rec.reason}`))
+      continue
+    }
+    console.log('')
+    console.log(
+      `  axis          opsz ${rec.axis.min}..${rec.axis.max} (fvar default ${rec.axis.default})`,
+    )
+    console.log(
+      `  width swing   ${rec.swingPct}% across ${(sizes ?? [16, 24, 48, 96]).join(', ')}px`,
+    )
+    console.log(`  ${c.g('recommended')}   ${c.b(`opszPin: ${rec.pin}`)}`)
+    if (fam.opszPin != null && fam.opszPin !== 'auto' && fam.opszPin !== rec.pin) {
+      console.log(`  ${c.y('note')}          your config says opszPin: ${fam.opszPin}`)
+    }
+    found.push({ name: fam.name, pin: rec.pin })
+  }
+
+  if (flag('write')) {
+    if (!found.length) die('nothing to write — no family had an opsz axis.')
+    if (!existsSync(cfgPath)) die(`no fonts.config.mjs in ${root} to write to.`)
+    let text = readFileSync(cfgPath, 'utf8')
+    const before = text
+    // Rewrite descending, so an earlier edit never shifts a later entry's offsets.
+    for (const { name, pin } of [...found].reverse()) {
+      const edited = setOpszPin(text, name, pin)
+      if (edited == null) {
+        console.log(
+          `  ${c.y('!')} could not locate ${name} in fonts.config.mjs — set opszPin: ${pin} by hand`,
+        )
+      } else {
+        text = edited
+      }
+    }
+    if (text === before) {
+      console.log(`\n${c.dim('fonts.config.mjs already matches — nothing to write.')}`)
+    } else if (DRY) {
+      console.log(`\n${c.y('--dry-run')} — fonts.config.mjs would change:`)
+      console.log(unifiedDiff(before, text, 'fonts.config.mjs'))
+    } else {
+      copyFileSync(cfgPath, cfgPath + '.bak')
+      writeFileSync(cfgPath, text)
+      console.log(`\n${c.g('✓')} wrote fonts.config.mjs (backup: fonts.config.mjs.bak)`)
+    }
+  } else if (found.length) {
+    console.log(
+      `\n${c.dim("Pass --write to put this in fonts.config.mjs, or set opszPin: 'auto'.")}`,
+    )
+  }
+  process.exit(0)
+}
 
 // ---------------------------------------------------------------------------
 // locate the project
@@ -100,8 +274,17 @@ let families
 let detectedFromConfig = false
 
 if (existsSync(configPath) && !flag('from-css')) {
-  const mod = await import(pathToFileURL(configPath).href + `?t=${Date.now()}`)
-  families = (mod.default ?? mod).families
+  // Validated before anything else reads it: the next section DELETES the CSS that
+  // names these families, so a config this tool cannot understand has to stop the run
+  // rather than fail partway through with a TypeError.
+  const cfg = await loadFontsConfig(configPath).catch((err) =>
+    die(`could not load fonts.config.mjs — ${err.message}`),
+  )
+  try {
+    families = validateFamilies(cfg.families, 'fonts.config.mjs')
+  } catch (err) {
+    die(`${err.message}\n\n  ${c.b('--from-css')}  ignore it and adopt what your CSS uses instead`)
+  }
   detectedFromConfig = true
   console.log(
     `${c.dim('config')}          fonts.config.mjs (${families.map((f) => f.name).join(', ')})`,
@@ -259,11 +442,79 @@ for (const [file, before, after] of edits) {
   if (before && before !== after) copyFileSync(file, file + '.bak')
   writeFileSync(file, after)
 }
-console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak`)
-if (cmd === 'adopt')
-  console.log(c.dim('  If you have not added fonts() to vite.config.ts yet, see `tss-fonts init`.'))
+console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak ${c.dim('(gitignored)')}`)
+
+// `adopt` has just deleted the CSS that was applying these fonts, and unlike `init` it
+// does not wire the plugin. Until fonts() is in the plugins array the app has NO fonts —
+// so this is a warning when the config actually lacks it, not a dim footnote either way.
+if (cmd === 'adopt') {
+  const vite = detectViteConfig(root)
+  const wired = vite && readFileSync(vite, 'utf8').includes('tailwind-vite-font-kit')
+  if (wired) {
+    console.log(c.dim(`  ${relative(root, vite)} already has the plugin — you are done.`))
+  } else {
+    console.log(
+      `\n${c.y('!')} ${c.b('Your app has no fonts until you add the plugin.')} The declarations that\n` +
+        `  were applying them have just been removed, and the generated ones only exist\n` +
+        `  once fonts() runs.\n\n` +
+        `  ${c.b('npx tss-fonts init')}   does it for you\n` +
+        (vite
+          ? `  or add it by hand to ${relative(root, vite)}, BEFORE tailwindcss():${snippet()}`
+          : `  or add it by hand:${snippet()}`),
+    )
+  }
+}
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Set `opszPin` on one family's entry in a fonts.config.mjs, by text surgery.
+ *
+ * Scoped by braces rather than by regex distance: a config with several families has
+ * several `opszPin:` lines, and matching the nearest one to a family name is how you end
+ * up writing a display face's pin onto the body face. Finds the object literal that
+ * CONTAINS this family's `name:`, and edits only inside it.
+ *
+ * @param {string} text
+ * @param {string} family
+ * @param {number} pin
+ * @returns {string | null} the edited text, or null when the entry could not be located
+ */
+function setOpszPin(text, family, pin) {
+  const nameRe = new RegExp(`name:\\s*['"\`]${family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`)
+  const at = text.search(nameRe)
+  if (at === -1) return null
+
+  // Walk out to the enclosing `{`, then match forward to its `}`.
+  let open = text.lastIndexOf('{', at)
+  if (open === -1) return null
+  let depth = 1
+  let i = open + 1
+  while (i < text.length && depth > 0) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}') depth--
+    i++
+  }
+  const entry = text.slice(open, i)
+
+  const existing = /(\n?[ \t]*opszPin:\s*)(?:[\d.]+|['"]auto['"])(,?)/.exec(entry)
+  const edited = existing
+    ? entry.replace(existing[0], `${existing[1]}${pin}${existing[2] || ','}`)
+    : // No pin yet — insert after the name, matching the entry's own layout. A one-line
+      // entry (`{ name: 'Inter', weights: [400] }`) stays on one line; a multi-line one
+      // gets a new line at the name line's indent. Splitting a one-line entry produced
+      // valid but unindented output, which is a diff nobody wants to review.
+      entry.replace(nameRe, (m) => {
+        const at = entry.search(nameRe)
+        const lineStart = entry.lastIndexOf('\n', at) + 1
+        const multiline = entry.slice(0, at).includes('\n') || entry.slice(at).includes('\n')
+        if (!multiline) return `${m}, opszPin: ${pin}`
+        const indent = /^[ \t]*/.exec(entry.slice(lineStart))?.[0] ?? '      '
+        return `${m},\n${indent}opszPin: ${pin}`
+      })
+
+  return text.slice(0, open) + edited + text.slice(i)
+}
 
 function renderConfig(fams) {
   return (

@@ -187,3 +187,50 @@ test('accepts a config object returned from a defineConfig callback', () => {
   const out = insertFontsPlugin(src)
   assert.match(out, /\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n/)
 })
+
+test('accepts a config object returned from a callback body', () => {
+  const src =
+    HEADER +
+    `export default defineConfig(({ mode }) => {\n  const env = loadEnv(mode)\n  return { plugins: [tailwindcss()] }\n})\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /return \{ plugins: \[fonts\(\), tailwindcss\(\)\] \}/)
+})
+
+test('accepts a config merged onto a base', () => {
+  const src =
+    HEADER + `export default defineConfig(mergeConfig(base, {\n  plugins: [tailwindcss()],\n}))\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n/)
+})
+
+test('accepts a hoisted config object handed to defineConfig', () => {
+  const src =
+    HEADER +
+    `const config = {\n  plugins: [tailwindcss()],\n}\nexport default defineConfig(config)\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /const config = \{\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n\}/)
+})
+
+test('accepts a type-annotated hoisted config object exported directly', () => {
+  const src =
+    HEADER + `const config: UserConfig = {\n  plugins: [tailwindcss()],\n}\nexport default config\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /const config: UserConfig = \{\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n\}/)
+})
+
+// Nesting is not always spelled as nesting. A call between the key and its object leaves
+// every enclosing brace anonymous, so a keyed-ancestor check waves the postcss array through.
+test('returns null for a plugins array wrapped in an unknown call', () => {
+  const src =
+    HEADER +
+    `export default defineConfig({\n  css: createPostcss({ plugins: [tailwindcss()] }),\n})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+// Same hole without the wrapper: a const binding never had a key to be found on.
+test('returns null for a hoisted postcss config object', () => {
+  const src =
+    HEADER +
+    `const postcssConfig = {\n  plugins: [tailwindcss()],\n}\nexport default defineConfig({ css: { postcss: postcssConfig } })\n`
+  assert.equal(insertFontsPlugin(src), null)
+})

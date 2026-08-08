@@ -1,3 +1,9 @@
+// The one case the rule does not cover: `virtual-fonts.d.ts` is a global SCRIPT declaring
+// an ambient module, and there is no ECMAScript import that pulls one of those in. An
+// `import` here would make it a module and the ambient declaration would stop resolving —
+// which is the bug that put it in its own file to begin with. See that file's header.
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="./virtual-fonts.d.ts" />
 import type { Plugin } from 'vite'
 
 export interface FontFamily {
@@ -8,8 +14,14 @@ export interface FontFamily {
    * `@theme { --font-sans: 'Manrope', '<fallbacks>', <stack> }`.
    */
   themeVar: `--font-${string}`
-  /** Weights to request. One fallback face is generated per weight. */
-  weights: number[]
+  /**
+   * Weights to request. One fallback face is generated per weight.
+   *
+   * Optional only when `axes` carries a `wght` axis, in which case the weights are
+   * derived from it — `'opsz,wght@9..144,500;9..144,700'` yields `[500, 700]`. A family
+   * with neither is an error: the fallback faces need concrete values.
+   */
+  weights?: number[]
   /** Tail of the font stack, after the generated fallback families. */
   stack?: string[]
   /**
@@ -27,8 +39,24 @@ export interface FontFamily {
    * Where to pin an `opsz` axis, if the family has one. Defaults to 16.
    * Pinning removes the axis from the served file, which makes static metrics valid
    * again and shrinks the file ~45%. Use ~16 for body text, ~48 for a display face.
+   *
+   * `'auto'` measures the font instead of guessing: it downloads the variable font once,
+   * computes the advance-width swing across `opszSizes`, and pins accordingly. Costs an
+   * extra download on a cold generate (never on a warm one) and needs the optional peer
+   * dependencies `fontkit` and `wawoff2`. `npx tss-fonts opsz <Family>` prints the same
+   * answer without changing anything.
+   *
+   * Worth knowing before hand-picking a number: the axis range varies a lot between
+   * families — Fraunces is 9..144, Inter 14..32, Nunito Sans only 6..12, so the default
+   * of 16 is outside the axis on some families and is clamped.
    */
-  opszPin?: number
+  opszPin?: number | 'auto'
+  /**
+   * The px font sizes this family actually renders at, used by `opszPin: 'auto'` to
+   * decide where to pin. Defaults to a spread of body, subhead, heading and display
+   * sizes. Ignored unless `opszPin` is `'auto'`.
+   */
+  opszSizes?: number[]
 }
 
 /** One entry of the preload set, as an HTTP `Link:` header or a JSX `<link>`. */
@@ -72,15 +100,30 @@ export interface FontsOptions {
    * Emit preloads as an HTTP `Link:` response header via Nitro route rules. Default true.
    * This is what makes the plugin zero-app-edit. Set false and import `fontPreloads`
    * from `virtual:fonts` if you would rather render `<link>` tags yourself.
+   *
+   * The header is set on `/**`, since that is the only pattern covering every document
+   * route. Nitro merges matching rules' headers key-by-key with the more specific rule
+   * winning, so paths listed in `exclude` get an empty `Link:` instead — a browser reads
+   * zero links from it. Defaults to the hashed build output and the font files
+   * themselves; pass your own list to widen or narrow it.
    */
-  preloadHeader?: boolean
+  preloadHeader?: boolean | { exclude?: string[] }
+  /**
+   * Append two scoped `@utility` escape hatches to the generated stylesheet:
+   * `leading-auto` and `prose-auto`, both of which set `line-height: normal` on a
+   * subtree. Default false.
+   *
+   * Tailwind pins a unitless `line-height: 1.5` on `html` and again on every `text-*`
+   * utility, and a unitless leading makes the `ascent-override` / `descent-override` /
+   * `line-gap-override` descriptors on the fallback faces inert. These give you named,
+   * scoped ways out of that where you actually want optical leading.
+   *
+   * There is deliberately no global un-pin: measured net CLS benefit is zero if you ship
+   * metric fallbacks, and +0.02–0.06 if you do not.
+   */
+  leadingUtilities?: boolean
   silent?: boolean
 }
 
 export declare function fonts(options?: FontsOptions): Plugin
 export default fonts
-
-declare module 'virtual:fonts' {
-  export const fontPreloads: FontPreload[]
-  export const fontFamilies: Record<string, string>
-}

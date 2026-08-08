@@ -86,7 +86,7 @@ export default {
       themeVar: '--font-display',
       weights: [500, 700],
       axes: 'opsz,wght@9..144,500;9..144,700',
-      opszPin: 48,                       // see "opsz" below
+      opszPin: 48,                       // or 'auto' — see "opsz" below
       stack: ['Georgia', 'serif'],
       preloadWeights: [],
     },
@@ -97,6 +97,16 @@ export default {
 ```
 
 You can also pass the same object inline: `fonts({ families: [...] })`. Inline options win.
+
+### Requirements
+
+**Vite 7 or 8**, and **Tailwind v4** — v3 has no `@theme`. Node ≥22.
+
+**Nitro is what delivers the preloads.** The `Link:` header and the `immutable` caching on
+`/fonts/**` both ship as Nitro route rules, which is what makes this zero-app-edit. On
+plain Vite that config key is ignored: the fonts still generate, emit and serve, you just
+silently get neither. The plugin warns once when it does not find Nitro. To preload
+without it, set `preloadHeader: false` and render the links yourself from `virtual:fonts`.
 
 ---
 
@@ -146,6 +156,29 @@ after pinning opsz          ->  -0.31% error
 Only ~29 of 1,942 Google families carry `opsz` — but that includes Inter, DM Sans, Playfair,
 Literata, Nunito Sans, Merriweather and Fraunces.
 
+**What should you pin it at?** Measure, rather than guessing — the axis range is different for
+every family, and the default of 16 is off the end of some of them:
+
+```bash
+npx tss-fonts opsz Fraunces --sizes 16,24,48,96
+#   axis          opsz 9..144 (fvar default 9)
+#   width swing   2% across 16, 24, 48, 96px
+#   recommended   opszPin: 48
+
+npx tss-fonts opsz            # every family in your fonts.config.mjs
+npx tss-fonts opsz --write    # write the answers into fonts.config.mjs
+```
+
+| family | opsz axis | so a pin of 16 is |
+|---|---|---|
+| Fraunces | `9..144` | valid, but 3× too small for a display face |
+| Inter | `14..32` | about right |
+| Nunito Sans | `6..12` | **outside the axis** — clamped to 12 |
+
+`opszPin: 'auto'` runs the same measurement during generation, on a cold generate only — tell it
+what sizes the family renders at with `opszSizes: [16, 24, 48, 96]`. Both need the optional peers:
+`pnpm add -D fontkit wawoff2`.
+
 ---
 
 ## Deliberately not done
@@ -161,13 +194,31 @@ Literata, Nunito Sans, Merriweather and Fraunces.
 
 ---
 
-## Extras (opt-in, not installed)
+## Opt-in extras
 
-- `extras/server.ts` — a merged static-phase `103 Early Hints` + `Link:` server entry. On a slow
-  route (800 ms loader) it was the only option that improved FCP *and* the swap window together
-  (1516→1300 ms FCP, 1536→1259 ms fonts, ready *before* first paint). Worth nothing on fast routes.
-- `extras/leading-opt-in.css` — two scoped `@utility` escape hatches if you want optical leading on a
-  specific block. Note `leading-normal` is `1.5`; only `leading-[normal]` emits `normal`.
+**`103 Early Hints`** — the only preload mechanism that beats a slow route loader, because Start's
+first byte waits on the loader and a 103 does not. With an 800 ms loader it was the only option that
+improved FCP *and* the swap window together (1516→1300 ms FCP, 1536→1259 ms fonts, ready *before*
+first paint). Worth nothing on fast routes, where the `Link:` header already measures identical.
+
+```bash
+npx tss-fonts early-hints    # writes src/server.ts
+```
+
+```ts
+// src/server.ts — what that command writes
+import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'
+
+export default createFontsServerEntry()
+```
+
+Needs `@tanstack/react-start`. Chrome only acts on a 103 over HTTP/2+, and `writeEarlyHints` is a
+Node API — elsewhere this degrades to the `Link:` header, which the plugin already sets.
+
+**Optical leading** — `leadingUtilities: true` adds two scoped `@utility` escape hatches,
+`leading-auto` and `prose-auto`, for the rare block where you want font-metric leading. Note
+`leading-normal` is `1.5`; only `leading-[normal]` emits `normal`. There is deliberately no global
+un-pin: measured net CLS benefit is zero if you ship metric fallbacks, and worse if you don't.
 
 ## Measuring
 
@@ -175,6 +226,9 @@ Literata, Nunito Sans, Merriweather and Fraunces.
 `waterfall.mjs` (FCP / fonts-applied under emulated 4G — always `--runs 9`, FCP is noisy enough that
 3 runs produced a misleading outlier), `targets.mjs` (per-fallback accuracy vs the real font), and
 `clswidth.mjs` (container-width sweep).
+
+It lives in the repo, not in the npm package — clone
+[the repo](https://github.com/hbmartin/tailwind-vite-font-kit) to use it.
 
 Use `clswidth.mjs` before believing any width-related result: a config that read 0.0001 at two
 viewports was shifting 51 px at 2 of 36 container widths.

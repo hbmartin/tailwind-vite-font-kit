@@ -19,5 +19,14 @@
     "noImplicitAny": false,
     "useUnknownInCatchVariables": false
   },
-  "include": ["src", "bin", "index.d.ts", "test/types.test.mjs"]
+  "include": [
+    "src",
+    "bin",
+    "scripts",
+    "types",
+    "index.d.ts",
+    "start-server.d.ts",
+    "virtual-fonts.d.ts",
+    "test/types.test.mjs"
+  ]
 }

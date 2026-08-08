@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How do I choose an opszPin?
+    url: https://github.com/hbmartin/tailwind-vite-font-kit#opsz
+    about: Run `npx tss-fonts opsz <Family>` — it measures the font and tells you.
+  - name: Fonts are not applying at all
+    url: https://github.com/hbmartin/tailwind-vite-font-kit#what-it-does-and-why-each-part-is-load-bearing
+    about: Almost always fonts() listed after tailwindcss(), or a @theme inline that wins.

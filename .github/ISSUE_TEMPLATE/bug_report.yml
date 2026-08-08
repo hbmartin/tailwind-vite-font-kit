@@ -1,0 +1,59 @@
+name: Bug report
+description: Something generates, builds or renders differently than it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most issues in this package come down to what ended up in the generated stylesheet,
+        so that file is the single most useful thing you can paste.
+
+        Find it at `node_modules/.cache/tss-fonts/fonts-*.gen.css`, or in `.tss-fonts/` if
+        you use `output: 'commit'`.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Your font config
+      description: >-
+        `fonts.config.mjs`, or the options you pass to `fonts({...})` in vite.config.
+      render: js
+    validations:
+      required: true
+
+  - type: textarea
+    id: generated
+    attributes:
+      label: The generated CSS
+      description: >-
+        `fonts-*.gen.css`. If it is long, the `@theme` block and one `@font-face` per family
+        is usually enough. If the file does not exist, say so — that is itself the bug.
+      render: css
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: tailwind-vite-font-kit, vite, tailwindcss, node — and nitro if you use it
+      placeholder: 'font-kit 0.2.0, vite 8.2.0, tailwindcss 4.3.3, node 22.14'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Worth ruling out first
+      description: Each of these fails silently and accounts for a lot of reports.
+      options:
+        - label: '`fonts()` is listed BEFORE `tailwindcss()` in the plugins array'
+        - label: My theme vars are in a plain `@theme`, not `@theme inline`
+        - label: I checked the build output for `[tss-fonts]` warnings
