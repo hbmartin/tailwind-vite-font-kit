@@ -1,0 +1,14 @@
+{
+  "cssBytes": 7939,
+  "fontFaceTotal": 16,
+  "fontFaceWithSizeAdjust": 12,
+  "fontFaceWithLocalSrc": 12,
+  "fontFileCount": 3,
+  "fontBytes": 52812,
+  "googleapisRefs": 0,
+  "gstaticRefs": 0,
+  "blinkMacSystemFontLocals": 0,
+  "leakedThemeAtRule": 0,
+  "defaultFontFamilyIsVar": 1,
+  "themeVarsWithFallback": 2
+}
