@@ -1,6 +1,6 @@
 {
   "name": "tailwind-vite-font-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted Google fonts with metric-matched fallbacks for TanStack Start + Tailwind v4, as one Vite plugin",
   "keywords": [
     "vite-plugin",
@@ -61,8 +61,8 @@
     "verify:package": "npm publish --dry-run --ignore-scripts"
   },
   "peerDependencies": {
-    "vite": "^7 || ^8",
     "fontkit": "^2",
+    "vite": "^7 || ^8",
     "wawoff2": "^2"
   },
   "peerDependenciesMeta": {

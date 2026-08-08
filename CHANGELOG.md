@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
-Release this as **0.2.0** — it contains two breaking changes. Run `pnpm version minor`
-(which also creates the tag), then publish a GitHub release; see `docs/MAINTAINERS.md`.
+Two breaking changes, five bug fixes. The version is already bumped in `package.json`; to
+release, tag `v0.2.0` on `main` after this merges and publish a GitHub release — the tag
+alone does nothing, `release.yml` fires on `release: published`. See `docs/MAINTAINERS.md`.
+
+Note that the package version is part of the generation cache key, so every consumer
+regenerates once on upgrade. That is intended: several fixes below change what is emitted.
 
 ### Breaking
 
