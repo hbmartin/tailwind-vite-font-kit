@@ -109,6 +109,31 @@ test('an unknown `output` value fails the build rather than silently caching', a
   )
 })
 
+// On plain Vite the `nitro` config key is simply ignored: no preloads, no immutable
+// caching, no error. "It works but slower than the README claims" is exactly the kind of
+// silent degradation this package exists to stop, so it says so once.
+test('a build without Nitro says the preload header was not applied', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [{ name: 'vite:css' }, { name: '@tailwindcss/vite' }] })
+  assert.match(warned.join('\n'), /no Nitro plugin found/)
+  assert.match(warned.join('\n'), /virtual:fonts/, 'it should point at the way out')
+})
+
+test('a build with Nitro stays quiet', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [{ name: 'vite:nitro' }] })
+  assert.deepEqual(warned, [])
+})
+
+test('preloadHeader: false is a deliberate choice, not a missing Nitro', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t, { preloadHeader: false })
+  plugin.configResolved({ plugins: [{ name: 'vite:css' }] })
+  assert.deepEqual(warned, [])
+})
+
 // ---------------------------------------------------------------------------
 // assets: '<dir>' — the plugin writes into a directory the USER owns
 // ---------------------------------------------------------------------------

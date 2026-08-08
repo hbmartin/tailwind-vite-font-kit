@@ -56,7 +56,7 @@
     "verify:package": "npm publish --dry-run --ignore-scripts"
   },
   "peerDependencies": {
-    "vite": "^6 || ^7 || ^8"
+    "vite": "^7 || ^8"
   },
   "dependencies": {
     "@capsizecss/metrics": "^4"

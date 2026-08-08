@@ -277,6 +277,23 @@ export function fonts(userOptions = {}) {
     },
 
     // Dev has no bundle, so serve the same bytes off the generated dir.
+    // The `Link:` preload header and the immutable caching above are both delivered as
+    // Nitro route rules. On plain Vite there is no Nitro, the `nitro` config key is
+    // ignored, and nothing errors — fonts still generate, emit and serve, you just
+    // quietly lose preloading and long-lived caching. That is worth one line of output,
+    // because the symptom is "it works, but slower than the README says".
+    configResolved(resolved) {
+      if (!opts.preloadHeader || !gen?.preloads.length) return
+      if (resolved.plugins?.some((p) => p.name?.includes('nitro'))) return
+      warn(
+        `no Nitro plugin found, so the preload \`Link:\` header and \`immutable\` caching ` +
+          `on ${opts.publicPath}/ were not applied — those ship as Nitro route rules.\n` +
+          `  The fonts and the metric fallbacks still work. To preload without Nitro, set ` +
+          `\`preloadHeader: false\` and render the links yourself:\n` +
+          `    import { fontPreloads } from 'virtual:fonts'`,
+      )
+    },
+
     configureServer(server) {
       // Generation happens once, in config() — a config-file edit needs a restart, and
       // configFileDependencies does not cover files loaded by a plugin, so watch it here.
