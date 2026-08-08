@@ -6,3 +6,6 @@ cls-metrics.json
 coverage
 *.tgz
 *.tsbuildinfo
+
+# tss-fonts writes these before editing your files
+*.bak

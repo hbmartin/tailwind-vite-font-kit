@@ -22,7 +22,7 @@ import {
 } from '../src/detect.mjs'
 import { insertFontsPlugin } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
-import { unifiedDiff } from '../src/diff.mjs'
+import { color, unifiedDiff } from '../src/diff.mjs'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -34,12 +34,15 @@ const opt = (n, d) => {
 const DRY = flag('dry-run')
 const root = resolve(opt('cwd', process.cwd()))
 
+// Built from src/diff.mjs's palette rather than a second set of escape codes, so NO_COLOR
+// is honoured everywhere the CLI prints — it was respected in the diffs and ignored in the
+// surrounding prose, which is worse than not supporting it at all.
 const c = {
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  b: (s) => `\x1b[1m${s}\x1b[0m`,
-  g: (s) => `\x1b[32m${s}\x1b[0m`,
-  y: (s) => `\x1b[33m${s}\x1b[0m`,
-  r: (s) => `\x1b[31m${s}\x1b[0m`,
+  dim: color.dim,
+  b: color.bold,
+  g: color.green,
+  y: color.yellow,
+  r: color.red,
 }
 // Annotated on the binding, not the arrow: TS only narrows control flow past a
 // never-returning call when the *variable* carries the type.
@@ -439,9 +442,28 @@ for (const [file, before, after] of edits) {
   if (before && before !== after) copyFileSync(file, file + '.bak')
   writeFileSync(file, after)
 }
-console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak`)
-if (cmd === 'adopt')
-  console.log(c.dim('  If you have not added fonts() to vite.config.ts yet, see `tss-fonts init`.'))
+console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak ${c.dim('(gitignored)')}`)
+
+// `adopt` has just deleted the CSS that was applying these fonts, and unlike `init` it
+// does not wire the plugin. Until fonts() is in the plugins array the app has NO fonts —
+// so this is a warning when the config actually lacks it, not a dim footnote either way.
+if (cmd === 'adopt') {
+  const vite = detectViteConfig(root)
+  const wired = vite && readFileSync(vite, 'utf8').includes('tailwind-vite-font-kit')
+  if (wired) {
+    console.log(c.dim(`  ${relative(root, vite)} already has the plugin — you are done.`))
+  } else {
+    console.log(
+      `\n${c.y('!')} ${c.b('Your app has no fonts until you add the plugin.')} The declarations that\n` +
+        `  were applying them have just been removed, and the generated ones only exist\n` +
+        `  once fonts() runs.\n\n` +
+        `  ${c.b('npx tss-fonts init')}   does it for you\n` +
+        (vite
+          ? `  or add it by hand to ${relative(root, vite)}, BEFORE tailwindcss():${snippet()}`
+          : `  or add it by hand:${snippet()}`),
+    )
+  }
+}
 
 // ---------------------------------------------------------------------------
 

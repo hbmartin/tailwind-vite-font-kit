@@ -259,6 +259,35 @@ test('init leaves an already-wired vite config alone', (t) => {
   assert.equal(read(root, 'vite.config.ts'), wired)
 })
 
+// adopt deletes the declarations that were applying the fonts, and unlike init it does
+// not wire the plugin — so between the two commands the app has no fonts at all. That was
+// a dim footnote printed either way; it is now a warning, and only when it applies.
+test('adopt warns loudly when the plugin is not wired up yet', (t) => {
+  const root = project(t, { 'vite.config.ts': VITE_CONFIG })
+  const { out } = run(root, 'adopt')
+  assert.match(out, /Your app has no fonts until you add the plugin/)
+  assert.match(out, /npx tss-fonts init/, 'it should offer the one-command fix')
+  assert.match(out, /BEFORE tailwindcss\(\)/, 'ordering is the thing people get wrong')
+})
+
+test('adopt stays quiet when the plugin is already wired up', (t) => {
+  const wired = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\nimport { fonts } from 'tailwind-vite-font-kit'",
+  )
+  const root = project(t, { 'vite.config.ts': wired })
+  const { out } = run(root, 'adopt')
+  assert.ok(!out.includes('has no fonts'), 'nothing is wrong, so nothing should be alarming')
+  assert.match(out, /already has the plugin/)
+})
+
+test('NO_COLOR is honoured across the whole output, not just the diffs', (t) => {
+  const root = project(t, { 'vite.config.ts': VITE_CONFIG })
+  const { out } = run(root, 'init')
+  // eslint-disable-next-line no-control-regex -- asserting the ABSENCE of escape codes
+  assert.ok(!/\[/.test(out), 'found ANSI escapes despite NO_COLOR')
+})
+
 test('early-hints writes a server entry, and never overwrites one', (t) => {
   const root = project(t, { 'tsconfig.json': '{}' })
   assert.equal(run(root, 'early-hints').status, 0)
