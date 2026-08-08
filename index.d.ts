@@ -33,8 +33,24 @@ export interface FontFamily {
    * Where to pin an `opsz` axis, if the family has one. Defaults to 16.
    * Pinning removes the axis from the served file, which makes static metrics valid
    * again and shrinks the file ~45%. Use ~16 for body text, ~48 for a display face.
+   *
+   * `'auto'` measures the font instead of guessing: it downloads the variable font once,
+   * computes the advance-width swing across `opszSizes`, and pins accordingly. Costs an
+   * extra download on a cold generate (never on a warm one) and needs the optional peer
+   * dependencies `fontkit` and `wawoff2`. `npx tss-fonts opsz <Family>` prints the same
+   * answer without changing anything.
+   *
+   * Worth knowing before hand-picking a number: the axis range varies a lot between
+   * families — Fraunces is 9..144, Inter 14..32, Nunito Sans only 6..12, so the default
+   * of 16 is outside the axis on some families and is clamped.
    */
-  opszPin?: number
+  opszPin?: number | 'auto'
+  /**
+   * The px font sizes this family actually renders at, used by `opszPin: 'auto'` to
+   * decide where to pin. Defaults to a spread of body, subhead, heading and display
+   * sizes. Ignored unless `opszPin` is `'auto'`.
+   */
+  opszSizes?: number[]
 }
 
 /** One entry of the preload set, as an HTTP `Link:` header or a JSX `<link>`. */

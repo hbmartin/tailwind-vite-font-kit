@@ -57,13 +57,130 @@ ${c.b('tss-fonts')} — wiring for tailwind-vite-font-kit
           remove --font-* from your @theme (the generated one owns them now), and
           point hand-written font-family rules at the theme var.
   ${c.b('init')}    adopt, plus write fonts.config.mjs and add fonts() to vite.config.ts.
+  ${c.b('opsz')}    measure a family's optical-size axis and recommend an opszPin.
 
   --dry-run   print the diff, write nothing
   --cwd DIR   run against DIR instead of the current directory
+
+${c.b('tss-fonts opsz')} <Family> [--sizes 16,24,48,96] [--weights 400,700] [--write]
+
+  Downloads the variable font once and measures how much its advance widths move
+  across those sizes, then tells you what to pin \`opszPin\` at. Without it the
+  default is 16, which is a guess — and on some families (Nunito Sans: 6..12) it
+  is outside the axis entirely. --write puts the answer in fonts.config.mjs.
+
+  Needs the optional peers: ${c.dim('pnpm add -D fontkit wawoff2')}
 `)
   process.exit(0)
 }
-if (cmd !== 'adopt' && cmd !== 'init') die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz') {
+  die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+}
+
+// ---------------------------------------------------------------------------
+// opsz — read-only unless --write, and it never touches CSS, so it runs before
+// any of the project detection the other two commands need.
+// ---------------------------------------------------------------------------
+
+if (cmd === 'opsz') {
+  const nums = (s) => s?.split(',').map(Number).filter(Number.isFinite)
+  const family = args[1] && !args[1].startsWith('--') ? args[1] : null
+  const sizes = nums(opt('sizes'))
+  const weights = nums(opt('weights'))
+
+  const cfgPath = join(root, 'fonts.config.mjs')
+  /** @type {import('../index.d.ts').FontFamily[]} */
+  let configured = []
+  if (existsSync(cfgPath)) {
+    const cfg = await loadFontsConfig(cfgPath).catch(
+      () => /** @type {Record<string, unknown>} */ ({}),
+    )
+    if (Array.isArray(cfg.families)) configured = cfg.families
+  }
+
+  // With no family named, measure every family the project already declares — that is
+  // the question someone actually has after `init`.
+  /** @type {import('../index.d.ts').FontFamily[]} */
+  const targets = family
+    ? [
+        configured.find(
+          (f) => f.name.toLowerCase() === family.toLowerCase(),
+        ) ?? /** @type {import('../index.d.ts').FontFamily} */ ({ name: family }),
+      ]
+    : configured
+  if (!targets.length) {
+    die(
+      `name a family, e.g. \`tss-fonts opsz Fraunces\`, or run this in a project with a fonts.config.mjs.`,
+    )
+  }
+
+  const { recommendOpszPin } = await import('../src/opsz-auto.mjs')
+  /** @type {{name: string, pin: number}[]} */
+  const found = []
+
+  for (const fam of targets) {
+    const want = { ...fam, weights: weights ?? fam.weights }
+    process.stdout.write(`${c.b(fam.name)} `)
+    let rec
+    try {
+      rec = await recommendOpszPin(want, { sizes })
+    } catch (err) {
+      console.log(c.r('failed'))
+      console.log(`  ${err.message}`)
+      continue
+    }
+    if (!rec.hasOpsz) {
+      console.log(c.dim('— no opsz axis'))
+      console.log(c.dim(`  ${rec.reason}`))
+      continue
+    }
+    console.log('')
+    console.log(
+      `  axis          opsz ${rec.axis.min}..${rec.axis.max} (fvar default ${rec.axis.default})`,
+    )
+    console.log(
+      `  width swing   ${rec.swingPct}% across ${(sizes ?? [16, 24, 48, 96]).join(', ')}px`,
+    )
+    console.log(`  ${c.g('recommended')}   ${c.b(`opszPin: ${rec.pin}`)}`)
+    if (fam.opszPin != null && fam.opszPin !== 'auto' && fam.opszPin !== rec.pin) {
+      console.log(`  ${c.y('note')}          your config says opszPin: ${fam.opszPin}`)
+    }
+    found.push({ name: fam.name, pin: rec.pin })
+  }
+
+  if (flag('write')) {
+    if (!found.length) die('nothing to write — no family had an opsz axis.')
+    if (!existsSync(cfgPath)) die(`no fonts.config.mjs in ${root} to write to.`)
+    let text = readFileSync(cfgPath, 'utf8')
+    const before = text
+    // Rewrite descending, so an earlier edit never shifts a later entry's offsets.
+    for (const { name, pin } of [...found].reverse()) {
+      const edited = setOpszPin(text, name, pin)
+      if (edited == null) {
+        console.log(
+          `  ${c.y('!')} could not locate ${name} in fonts.config.mjs — set opszPin: ${pin} by hand`,
+        )
+      } else {
+        text = edited
+      }
+    }
+    if (text === before) {
+      console.log(`\n${c.dim('fonts.config.mjs already matches — nothing to write.')}`)
+    } else if (DRY) {
+      console.log(`\n${c.y('--dry-run')} — fonts.config.mjs would change:`)
+      console.log(unifiedDiff(before, text, 'fonts.config.mjs'))
+    } else {
+      copyFileSync(cfgPath, cfgPath + '.bak')
+      writeFileSync(cfgPath, text)
+      console.log(`\n${c.g('✓')} wrote fonts.config.mjs (backup: fonts.config.mjs.bak)`)
+    }
+  } else if (found.length) {
+    console.log(
+      `\n${c.dim("Pass --write to put this in fonts.config.mjs, or set opszPin: 'auto'.")}`,
+    )
+  }
+  process.exit(0)
+}
 
 // ---------------------------------------------------------------------------
 // locate the project
@@ -273,6 +390,55 @@ if (cmd === 'adopt')
   console.log(c.dim('  If you have not added fonts() to vite.config.ts yet, see `tss-fonts init`.'))
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Set `opszPin` on one family's entry in a fonts.config.mjs, by text surgery.
+ *
+ * Scoped by braces rather than by regex distance: a config with several families has
+ * several `opszPin:` lines, and matching the nearest one to a family name is how you end
+ * up writing a display face's pin onto the body face. Finds the object literal that
+ * CONTAINS this family's `name:`, and edits only inside it.
+ *
+ * @param {string} text
+ * @param {string} family
+ * @param {number} pin
+ * @returns {string | null} the edited text, or null when the entry could not be located
+ */
+function setOpszPin(text, family, pin) {
+  const nameRe = new RegExp(`name:\\s*['"\`]${family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`)
+  const at = text.search(nameRe)
+  if (at === -1) return null
+
+  // Walk out to the enclosing `{`, then match forward to its `}`.
+  let open = text.lastIndexOf('{', at)
+  if (open === -1) return null
+  let depth = 1
+  let i = open + 1
+  while (i < text.length && depth > 0) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}') depth--
+    i++
+  }
+  const entry = text.slice(open, i)
+
+  const existing = /(\n?[ \t]*opszPin:\s*)(?:[\d.]+|['"]auto['"])(,?)/.exec(entry)
+  const edited = existing
+    ? entry.replace(existing[0], `${existing[1]}${pin}${existing[2] || ','}`)
+    : // No pin yet — insert after the name, matching the entry's own layout. A one-line
+      // entry (`{ name: 'Inter', weights: [400] }`) stays on one line; a multi-line one
+      // gets a new line at the name line's indent. Splitting a one-line entry produced
+      // valid but unindented output, which is a diff nobody wants to review.
+      entry.replace(nameRe, (m) => {
+        const at = entry.search(nameRe)
+        const lineStart = entry.lastIndexOf('\n', at) + 1
+        const multiline = entry.slice(0, at).includes('\n') || entry.slice(at).includes('\n')
+        if (!multiline) return `${m}, opszPin: ${pin}`
+        const indent = /^[ \t]*/.exec(entry.slice(lineStart))?.[0] ?? '      '
+        return `${m},\n${indent}opszPin: ${pin}`
+      })
+
+  return text.slice(0, open) + edited + text.slice(i)
+}
 
 function renderConfig(fams) {
   return (

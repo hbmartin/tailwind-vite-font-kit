@@ -1,18 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// DROP-IN for a reusable font generator: decide what to do about `opsz`.
-// Everything here is offline — no network, no browser. Reads the axes out of the woff2
-// you are ACTUALLY going to serve.
+// Decide what to do about `opsz`. Everything here is offline — no network, no
+// browser. It reads the axes out of the woff2 you are ACTUALLY going to serve.
 //
-// Nothing in src/ imports this, so its dependencies are deliberately NOT the kit's —
-// install them in the project that uses it:
-//   pnpm add -D fontkit @capsizecss/unpack   # + wawoff2, only if you call toSfnt()
-//
-//   import { detectAxes, toSfnt, planOpsz, buildFallbackCss } from './opsz-policy.mjs'
-//
-//   const axes = detectAxes(woff2Buffer)          // fvar parses fine from a woff2
-//   const sfnt = await toSfnt(woff2Buffer)        // but measurement needs decompressed tables
-//   const plan = planOpsz(sfnt, { sizes: [16, 32, 56, 96], weights: [500, 700] })
-//   const css  = buildFallbackCss(sfnt, plan, { family: 'Fraunces', targets, metrics })
+// This is the machinery behind `npx tss-fonts opsz <Family>` and `opszPin: 'auto'`.
+// Both paths are opt-in: fontkit and wawoff2 are OPTIONAL peer dependencies, imported
+// lazily below, so a normal build never loads them and an install without them works.
 //
 // DECISION RULE (thresholds are the measured ones — see the report):
 //
@@ -47,57 +39,54 @@
 // headings in every strategy below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import * as fontkit from 'fontkit'
-import { createRequire } from 'node:module'
-import { readFileSync, readdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { WEIGHTINGS } from './weightings.mjs'
+
+// ── optional peers, imported on demand ───────────────────────────────────────
+// These are `peerDependenciesMeta.optional` rather than dependencies: they are only
+// needed by the two opt-in paths above, and fontkit + a brotli decompressor are a lot of
+// bytes to put on every install of a font plugin. Importing this module must never throw,
+// which is why nothing here is imported at module scope — the previous version of this
+// file did exactly that, in a top-level await, and could not be loaded at all without
+// @capsizecss/unpack present.
+
+const INSTALL_HINT = (pkgs) =>
+  `install ${pkgs.map((p) => `\`${p}\``).join(' and ')} to use this — ` +
+  `${pkgs.join(' ')} are optional peer dependencies of tailwind-vite-font-kit, ` +
+  `needed only by \`tss-fonts opsz\` and \`opszPin: 'auto'\`.`
+
+/** @type {Promise<any> | null} */
+let fontkitPromise = null
+async function loadFontkit() {
+  fontkitPromise ??= import('fontkit').catch(() => {
+    throw new Error(`[tss-fonts] ${INSTALL_HINT(['fontkit'])}`)
+  })
+  return fontkitPromise
+}
 
 // ── capsize's exact xWidthAvg algorithm, applied to a VARIATION INSTANCE ──────
-// @capsizecss/unpack only exposes family-level numbers, so the weighting table is
-// lifted out of its dist bundle and re-applied to a fontkit instance. The chunk that
-// carries it has a content hash in its name, so scan the dist dir for the source
-// markers instead of hardcoding a filename that breaks on every unpack release.
-const require = createRequire(import.meta.url)
-export const WEIGHTINGS = await (async () => {
-  let dist
-  try {
-    dist = dirname(require.resolve('@capsizecss/unpack'))
-  } catch {
-    throw new Error(
-      "opsz-policy: install '@capsizecss/unpack' — its per-subset weighting table drives xWidthAvg",
-    )
-  }
-  const START = 'var weightings_default'
-  const END = '//#endregion'
-  for (const f of readdirSync(dist)) {
-    if (!f.endsWith('.mjs')) continue
-    const src = readFileSync(join(dist, f), 'utf8')
-    const s = src.indexOf(START)
-    if (s === -1) continue
-    const e = src.indexOf(END, s)
-    if (e === -1) continue
-    return (
-      await import(
-        'data:text/javascript,' +
-          encodeURIComponent(src.slice(s, e).replace(START, 'export const weightings'))
-      )
-    ).weightings
-  }
-  throw new Error(
-    'opsz-policy: could not find the weightings table in @capsizecss/unpack dist — ' +
-      'its bundle layout changed; pin the version this file was written against or vendor the table',
-  )
-})()
+// @capsizecss/unpack only exposes family-level numbers, so the same weighting table is
+// re-applied here to a fontkit instance. The table is vendored in ./weightings.mjs
+// rather than scraped out of unpack's minified dist at import time; see that file.
 
+/**
+ * @param {any} font a fontkit font or variation instance
+ * @param {string} subset
+ */
 export function xWidthAvg(font, subset = 'latin') {
   const w = WEIGHTINGS[subset]
+  if (!w) {
+    throw new Error(
+      `[tss-fonts] no character weightings for subset "${subset}" ` +
+        `(have: ${Object.keys(WEIGHTINGS).join(', ')})`,
+    )
+  }
   const sample = Object.keys(w).join('')
   const glyphs = font.glyphsForString(sample)
   // The weighting is applied by index, so a glyph count that differs from the sample
   // length (shaping merged or dropped glyphs) would silently weight the wrong chars.
   if (glyphs.length !== sample.length) {
     throw new Error(
-      `opsz-policy: glyphsForString returned ${glyphs.length} glyphs for a ${sample.length}-char sample — ` +
+      `[tss-fonts] glyphsForString returned ${glyphs.length} glyphs for a ${sample.length}-char sample — ` +
         `index-based weighting would be wrong for this font/subset`,
     )
   }
@@ -116,14 +105,17 @@ const asBuf = (b) => (Buffer.isBuffer(b) ? b : Buffer.from(b))
 // glyf/cmap tables are still brotli-compressed and `glyphsForString` throws
 // "Cannot read properties of undefined (reading 'tables')". Anything that
 // measures widths must decompress first.
-//   import wawoff2 from 'wawoff2'
-//   const sfnt = await toSfnt(woff2Buffer)
+/** @param {Buffer | Uint8Array} buf */
 export async function toSfnt(buf) {
   const b = asBuf(buf)
   if (b.toString('ascii', 0, 4) !== 'wOF2') return b
-  const { default: wawoff2 } = await import('wawoff2')
-  return Buffer.from(await wawoff2.decompress(b))
+  const wawoff2 = await import('wawoff2').catch(() => {
+    throw new Error(`[tss-fonts] ${INSTALL_HINT(['wawoff2'])}`)
+  })
+  const decompress = wawoff2.default?.decompress ?? wawoff2.decompress
+  return Buffer.from(await decompress(b))
 }
+
 const pct = (n) => `${(n * 100).toFixed(4)}%`
 const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
 
@@ -133,7 +125,7 @@ const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
 function requireSfnt(buf, fn) {
   if (asBuf(buf).toString('ascii', 0, 4) === 'wOF2') {
     throw new Error(
-      `opsz-policy: ${fn} measures glyph advances, which fontkit cannot read from a woff2 — ` +
+      `[tss-fonts] ${fn} measures glyph advances, which fontkit cannot read from a woff2 — ` +
         `decompress first: const sfnt = await toSfnt(buf)`,
     )
   }
@@ -141,7 +133,8 @@ function requireSfnt(buf, fn) {
 
 // ── (a) DETECTION ────────────────────────────────────────────────────────────
 /** Read the fvar axes straight out of the woff2/ttf you downloaded. */
-export function detectAxes(buf) {
+export async function detectAxes(buf) {
+  const fontkit = await loadFontkit()
   const font = fontkit.create(asBuf(buf))
   const axes = font.variationAxes || {}
   const opsz = axes.opsz ?? null
@@ -176,6 +169,7 @@ export function detectAxesFromGoogleUrl(url) {
 export function readFvar(buf) {
   const u32 = (o) => buf.readUInt32BE(o)
   const u16 = (o) => buf.readUInt16BE(o)
+  /** @type {{off: number} | null} */
   let fvar = null
   for (let i = 0; i < u16(4); i++) {
     const rec = 12 + i * 16
@@ -196,15 +190,42 @@ export function readFvar(buf) {
 }
 
 // ── THE PLAN ─────────────────────────────────────────────────────────────────
+
 /**
- * @param buf                        the woff2/ttf you will serve
- * @param opts.sizes                 every px font-size this family renders at
- * @param opts.weights               the font-weight values on its @font-face rules
- * @param opts.opticalSizingPinned   app sets `font-optical-sizing: none`
- * @param opts.fluidTypeScale        sizes come from clamp()/vw, not a fixed ladder
- * @param opts.tolerancePct          max acceptable advance-width error (default 1.5)
+ * One instance of the variable font to generate a fallback face from.
+ * @typedef {object} OpszInstance
+ * @property {number} [weight]
+ * @property {Record<string, number>} variations
+ * @property {number[]} [sizes]   the px sizes this bucket covers (`buckets` strategy)
+ * @property {string} [suffix]    appended to the fallback family name, to keep buckets distinct
  */
-export function planOpsz(buf, opts = {}) {
+
+/**
+ * @typedef {object} OpszPlan
+ * @property {'static'|'pin-fvar-default'|'emit-optical-sizing-none'|'buckets'} strategy
+ * @property {string} reason
+ * @property {OpszInstance[]} instances
+ * @property {boolean} perWeight
+ * @property {{min: number, default: number, max: number}} [axis] absent when there is no opsz
+ * @property {number} [swingPct]  worst advance-width swing across the used sizes
+ * @property {number} [pin]       the single opsz value to request, when one is worth requesting
+ * @property {boolean} [recommendPinnedDownload]
+ * @property {string} [pinnedDownloadHint]
+ * @property {string} [css]
+ * @property {string} [warning]
+ */
+
+/**
+ * @param {Buffer | Uint8Array} buf   the woff2/ttf you will serve
+ * @param {object} [opts]
+ * @param {number[]} [opts.sizes]                 every px font-size this family renders at
+ * @param {number[]} [opts.weights]               the font-weight values on its faces
+ * @param {boolean} [opts.opticalSizingPinned]    app sets `font-optical-sizing: none`
+ * @param {boolean} [opts.fluidTypeScale]         sizes come from clamp()/vw, not a ladder
+ * @param {number} [opts.tolerancePct]            max acceptable advance-width error
+ * @returns {Promise<OpszPlan>}
+ */
+export async function planOpsz(buf, opts = {}) {
   const {
     sizes = [16],
     weights = [400],
@@ -212,10 +233,13 @@ export function planOpsz(buf, opts = {}) {
     fluidTypeScale = false,
     tolerancePct = 1.5,
   } = opts
+  const fontkit = await loadFontkit()
   const font = fontkit.create(asBuf(buf))
   const ax = font.variationAxes?.opsz
   const perWeight = weights.length > 1
-  const varyW = (w) => (font.variationAxes?.wght ? { wght: w } : {})
+  /** @type {(w: number) => Record<string, number>} */
+  const varyW = (w) =>
+    font.variationAxes?.wght ? { wght: w } : /** @type {Record<string, number>} */ ({})
 
   if (!ax) {
     return {
@@ -231,6 +255,7 @@ export function planOpsz(buf, opts = {}) {
 
   const clamp = (o) => Math.min(Math.max(o, ax.min), ax.max)
   const w0 = weights[0]
+  /** @type {(o: number, w?: number) => Record<string, number>} */
   const vary = (o, w = w0) => ({ ...varyW(w), opsz: clamp(o) })
   // Memoised: the bucketing loop re-measures the same (size, weight) pairs repeatedly,
   // and each miss costs a full getVariation + glyph walk.
@@ -280,6 +305,7 @@ export function planOpsz(buf, opts = {}) {
       `request a single opsz value instead of a range, e.g. ` +
       `https://fonts.googleapis.com/css2?family=<Family>:opsz,wght@${weights.map((w) => `${pin},${w}`).join(';')} ` +
       `— the served woff2 then has no opsz axis at all and is markedly smaller.`,
+    pin,
   }
   if (fluidTypeScale) {
     return {
@@ -338,14 +364,14 @@ export function planOpsz(buf, opts = {}) {
 
 // ── EMIT ─────────────────────────────────────────────────────────────────────
 /**
- * @param plan             result of planOpsz
- * @param opts.family      web font family name, e.g. 'Fraunces'
- * @param opts.targets     [[local() name, @capsizecss/metrics key], ...]
- * @param opts.metrics     @capsizecss/metrics entireMetricsCollection
+ * @param {Buffer | Uint8Array} buf
+ * @param {OpszPlan} plan
+ * @param {{family: string, targets: [string, string][], metrics: Record<string, any>}} opts
  */
-export function buildFallbackCss(buf, plan, opts) {
+export async function buildFallbackCss(buf, plan, opts) {
   const { family, targets, metrics } = opts
   requireSfnt(buf, 'buildFallbackCss')
+  const fontkit = await loadFontkit()
   const font = fontkit.create(asBuf(buf))
   const out = []
   for (const inst of plan.instances) {
@@ -355,7 +381,7 @@ export function buildFallbackCss(buf, plan, opts) {
       const fb = metrics[mk]
       if (!fb) {
         throw new Error(
-          `opsz-policy: no metrics entry for target key "${mk}" (local "${local}") — ` +
+          `[tss-fonts] no metrics entry for target key "${mk}" (local "${local}") — ` +
             `keys must exist in the passed entireMetricsCollection`,
         )
       }

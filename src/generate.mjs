@@ -284,7 +284,30 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
         `[tss-fonts] family "${fam.name}" declares no weights, and its axes spec has no wght values to derive them from.`,
       )
     }
-    const url = googleUrl(fam, log)
+    // `opszPin: 'auto'` measures the font instead of guessing a pin. It costs an extra
+    // css2 fetch plus one variable-font download, and needs the optional peers, so it is
+    // opt-in and happens only on a cold generate — the resolved pin is part of the cache
+    // key, so a warm build never repeats it.
+    let resolved = fam
+    if (fam.opszPin === 'auto') {
+      const {
+        recommendOpszPin,
+        applyRecommendation,
+        DEFAULT_SIZES: DEFAULT_OPSZ_SIZES,
+      } = await import('./opsz-auto.mjs')
+      const rec = await recommendOpszPin(fam, { sizes: fam.opszSizes, log })
+      if (rec.hasOpsz && rec.axis) {
+        log(
+          `  ${fam.name}: opsz ${rec.axis.min}..${rec.axis.max}, width swing ${rec.swingPct}% ` +
+            `over ${(fam.opszSizes ?? DEFAULT_OPSZ_SIZES).join(', ')}px -> pinning at ${rec.pin}`,
+        )
+      } else {
+        log(`  ${fam.name}: ${rec.reason}`)
+      }
+      resolved = applyRecommendation(fam, rec)
+    }
+
+    const url = googleUrl(resolved, log)
     log(`${fam.name}: ${url}`)
     const css = await (await fetchRetry(url, { log })).text()
 
