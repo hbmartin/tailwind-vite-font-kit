@@ -27,6 +27,10 @@
       "types": "./index.d.ts",
       "default": "./src/index.mjs"
     },
+    "./start-server": {
+      "types": "./start-server.d.ts",
+      "default": "./src/start-server.mjs"
+    },
     "./package.json": "./package.json"
   },
   "types": "./index.d.ts",
@@ -36,8 +40,9 @@
   "files": [
     "src",
     "bin",
-    "extras",
     "index.d.ts",
+    "start-server.d.ts",
+    "virtual-fonts.d.ts",
     "README.md"
   ],
   "scripts": {

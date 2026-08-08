@@ -58,6 +58,9 @@ ${c.b('tss-fonts')} — wiring for tailwind-vite-font-kit
           point hand-written font-family rules at the theme var.
   ${c.b('init')}    adopt, plus write fonts.config.mjs and add fonts() to vite.config.ts.
   ${c.b('opsz')}    measure a family's optical-size axis and recommend an opszPin.
+  ${c.b('early-hints')}
+          write src/server.ts, a TanStack Start entry that ships the preloads as
+          103 Early Hints — the only mechanism that beats a slow route loader.
 
   --dry-run   print the diff, write nothing
   --cwd DIR   run against DIR instead of the current directory
@@ -73,8 +76,59 @@ ${c.b('tss-fonts opsz')} <Family> [--sizes 16,24,48,96] [--weights 400,700] [--w
 `)
   process.exit(0)
 }
-if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz') {
+if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz' && cmd !== 'early-hints') {
   die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+}
+
+// ---------------------------------------------------------------------------
+// early-hints — write the Start server entry. One file, two lines; everything
+// interesting lives in the package so a fix reaches you through npm.
+// ---------------------------------------------------------------------------
+
+if (cmd === 'early-hints') {
+  // Start resolves `src/server.{ts,tsx}` as the server entry. Match the extension the
+  // project already uses for its routes rather than assuming TypeScript.
+  const isTs = existsSync(join(root, 'tsconfig.json'))
+  const dest = join(root, 'src', isTs ? 'server.ts' : 'server.js')
+  const body =
+    `// TanStack Start server entry. Ships the font preloads as 103 Early Hints, which is\n` +
+    `// the only preload mechanism that can beat a slow route loader — Start's first byte\n` +
+    `// waits on the loader, a 103 does not. Worth nothing on fast routes.\n` +
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n\n` +
+    `export default createFontsServerEntry()\n`
+
+  if (!existsSync(join(root, 'src'))) {
+    die(`no src/ directory under ${root} — is this a TanStack Start app? Pass --cwd.`)
+  }
+  const before = existsSync(dest) ? readFileSync(dest, 'utf8') : ''
+  if (before === body) {
+    console.log(`${c.g('✓')} ${relative(root, dest)} is already this entry — nothing to do.`)
+    process.exit(0)
+  }
+  if (before) {
+    // A hand-written server entry is not ours to overwrite: it may wrap the handler,
+    // add middleware, or do anything else. Show what to add instead.
+    console.log(
+      `${c.y('!')} ${relative(root, dest)} already exists. Add the wrapper by hand:\n\n${body}`,
+    )
+    process.exit(0)
+  }
+  console.log(`\n${c.b(relative(root, dest))} ${c.g('(new)')}`)
+  console.log(unifiedDiff('', body, relative(root, dest)))
+  if (DRY) {
+    console.log(`\n${c.y('--dry-run')} — nothing written.`)
+    process.exit(0)
+  }
+  writeFileSync(dest, body)
+  console.log(`\n${c.g('✓')} wrote ${relative(root, dest)}`)
+  console.log(
+    c.dim(
+      '  Early Hints need HTTP/2+ for Chrome to act on them, and a Node runtime for\n' +
+        '  writeEarlyHints. Elsewhere this degrades to the Link: header, which the plugin\n' +
+        '  already sets — so it is safe everywhere, just not always a win.',
+    ),
+  )
+  process.exit(0)
 }
 
 // ---------------------------------------------------------------------------

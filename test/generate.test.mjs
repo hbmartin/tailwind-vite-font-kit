@@ -158,6 +158,28 @@ test('the generator feeds fallbackFaces metrics that carry per-weight variants',
   )
 })
 
+// The utilities go into the GENERATED stylesheet rather than a file you import, because
+// Tailwind resolves its own at-imports itself and drops any `@utility` it never sees, with
+// no warning. Being inside fonts.gen.css is what guarantees it reaches Tailwind.
+test('leadingUtilities appends the escape hatches, and is off by default', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
+  const base = optsFor('Manrope')
+
+  const off = await generate(base, outDir)
+  assert.ok(!readFileSync(off.cssPath, 'utf8').includes('@utility'))
+
+  const on = await generate({ ...base, leadingUtilities: true }, outDir)
+  const css = readFileSync(on.cssPath, 'utf8')
+  assert.match(css, /@utility leading-auto/)
+  assert.match(css, /@utility prose-auto/)
+  // After the theme block: `@utility` is a Tailwind at-rule and the theme is what the
+  // rest of the file exists for.
+  assert.ok(css.indexOf('@utility') > css.indexOf('@theme'))
+
+  // Toggling it must not be a cache hit, or the utilities never appear (or never go away).
+  assert.notEqual(off.cssPath, on.cssPath, 'leadingUtilities must be part of the cache key')
+})
+
 // A file truncated by a killed build or a full disk keeps its name and its mtime, so
 // existence alone is not evidence it is intact — it would be served as a valid font
 // forever. The recorded digest is what turns that into a cache miss.

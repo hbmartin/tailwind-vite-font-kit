@@ -1,3 +1,4 @@
+/// <reference path="./virtual-fonts.d.ts" />
 import type { Plugin } from 'vite'
 
 export interface FontFamily {
@@ -102,13 +103,22 @@ export interface FontsOptions {
    * themselves; pass your own list to widen or narrow it.
    */
   preloadHeader?: boolean | { exclude?: string[] }
+  /**
+   * Append two scoped `@utility` escape hatches to the generated stylesheet:
+   * `leading-auto` and `prose-auto`, both of which set `line-height: normal` on a
+   * subtree. Default false.
+   *
+   * Tailwind pins a unitless `line-height: 1.5` on `html` and again on every `text-*`
+   * utility, and a unitless leading makes the `ascent-override` / `descent-override` /
+   * `line-gap-override` descriptors on the fallback faces inert. These give you named,
+   * scoped ways out of that where you actually want optical leading.
+   *
+   * There is deliberately no global un-pin: measured net CLS benefit is zero if you ship
+   * metric fallbacks, and +0.02–0.06 if you do not.
+   */
+  leadingUtilities?: boolean
   silent?: boolean
 }
 
 export declare function fonts(options?: FontsOptions): Plugin
 export default fonts
-
-declare module 'virtual:fonts' {
-  export const fontPreloads: FontPreload[]
-  export const fontFamilies: Record<string, string>
-}
