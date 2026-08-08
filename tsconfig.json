@@ -9,7 +9,9 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
-    "skipLibCheck": true,
+    // Off deliberately: `index.d.ts` is hand-written and is the package's public API,
+    // and skipLibCheck would exempt the one file most worth checking.
+    "skipLibCheck": false,
 
     // Strict, minus the two rules that only make sense in a TypeScript source tree:
     // every parameter would need a JSDoc tag, and every `catch (err)` an inline cast.

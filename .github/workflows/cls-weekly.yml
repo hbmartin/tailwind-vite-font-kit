@@ -41,6 +41,15 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          # This job also installs the cloned reference app, with --no-frozen-lockfile
+          # and no lockfile of its own to hash, so its store is a superset of the one
+          # ci.yml's `checks` builds. Listing this workflow file alongside the root
+          # lockfile is a key salt, nothing more: it gives the job a private cache key
+          # so it stops clobbering `checks` and losing the reference app's deps on
+          # every run. It changes only when someone edits this file.
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .github/workflows/cls-weekly.yml
 
       - name: Install kit
         run: pnpm install --frozen-lockfile

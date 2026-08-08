@@ -28,7 +28,7 @@ docs/                this file + FRAMEWORK-COUPLING.md (what Vite/Tailwind/TanSt
 ```bash
 pnpm install
 pnpm test                 # unit tests, no network, ~150 ms
-pnpm run check            # everything CI runs on every Node version, in CI's order
+pnpm run check            # the local gate: lint → typecheck → coverage, in CI's order
 pnpm registry:build       # regenerate registry/r from registry/registry.json
 ```
 

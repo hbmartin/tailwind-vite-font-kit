@@ -150,3 +150,40 @@ test('returns null when an unrelated key on the plugins line holds the call', ()
     `export default defineConfig({ plugins: [], build: { rollupOptions: [tailwindcss()] } })\n`
   assert.equal(insertFontsPlugin(src), null)
 })
+
+// fonts() is a Vite plugin. `css.postcss.plugins` is spelled identically to the Vite key,
+// and the anchor used to accept it, writing a config that loads and then fails.
+test('returns null when the only tailwindcss() is in css.postcss.plugins', () => {
+  const src =
+    HEADER +
+    `export default defineConfig({\n  css: { postcss: { plugins: [tailwindcss()] } },\n})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+test('returns null when the only tailwindcss() is in build.rollupOptions.plugins', () => {
+  const src =
+    HEADER +
+    `export default defineConfig({\n  build: { rollupOptions: { plugins: [tailwindcss()] } },\n})\n`
+  assert.equal(insertFontsPlugin(src), null)
+})
+
+// The rejection is about depth, not the word `postcss`: a real plugins array still takes
+// the insert when a nested one sits alongside it.
+test('inserts into the Vite plugins array despite a nested postcss plugins array', () => {
+  const src =
+    HEADER +
+    `export default defineConfig({\n  plugins: [tailwindcss()],\n  css: { postcss: { plugins: [autoprefixer()] } },\n})\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n/)
+  assert.match(out, /postcss: \{ plugins: \[autoprefixer\(\)\] \}/) // untouched
+  assert.equal(count(out, 'fonts(),'), 1)
+})
+
+// A config object reached through a callback is still top level — the enclosing braces
+// are anonymous, so the depth check must not reject it.
+test('accepts a config object returned from a defineConfig callback', () => {
+  const src =
+    HEADER + `export default defineConfig(({ mode }) => ({\n  plugins: [tailwindcss()],\n}))\n`
+  const out = insertFontsPlugin(src)
+  assert.match(out, /\n  plugins: \[fonts\(\), tailwindcss\(\)\],\n/)
+})
