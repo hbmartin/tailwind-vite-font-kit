@@ -1,3 +1,8 @@
+// The one case the rule does not cover: `virtual-fonts.d.ts` is a global SCRIPT declaring
+// an ambient module, and there is no ECMAScript import that pulls one of those in. An
+// `import` here would make it a module and the ambient declaration would stop resolving —
+// which is the bug that put it in its own file to begin with. See that file's header.
+// oxlint-disable-next-line typescript/triple-slash-reference
 /// <reference path="./virtual-fonts.d.ts" />
 import type { Plugin } from 'vite'
 
