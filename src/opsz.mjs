@@ -63,7 +63,13 @@ export function pinOpsz(axes, pin) {
  * @param {(message: string) => void} [log]
  */
 export function googleUrl(fam, log = () => {}) {
-  let axes = fam.axes ?? `wght@${[...fam.weights].sort((a, b) => a - b).join(';')}`
+  // `weights` is optional when `axes` supplies a wght axis. With neither there is no URL
+  // to build — generate() rejects this earlier with the same complaint, but an empty
+  // `wght@` is a silently malformed request, so refuse it here too.
+  if (!fam.axes && !fam.weights?.length) {
+    throw new Error(`[tss-fonts] family "${fam.name}" has neither \`weights\` nor \`axes\`.`)
+  }
+  let axes = fam.axes ?? `wght@${[...(fam.weights ?? [])].sort((a, b) => a - b).join(';')}`
   if (hasOpszAxis(axes)) {
     const pin = fam.opszPin ?? 16
     axes = pinOpsz(axes, pin)

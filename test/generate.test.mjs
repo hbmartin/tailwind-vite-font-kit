@@ -2,9 +2,9 @@
 // Google's URL in src, so no woff2 download happens either.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { generate } from '../src/generate.mjs'
 
 const CSS2 = `/* latin */
@@ -17,6 +17,35 @@ const CSS2 = `/* latin */
   unicode-range: U+0000-00FF;
 }
 `
+
+/** A css2 response naming an arbitrary family, so two configs can be told apart. */
+const css2For = (family) => CSS2.replace('Fakefam', family)
+
+/** Minimal single-family options; `cdn` keeps everything offline. */
+const optsFor = (name) => ({
+  families: [
+    { name, themeVar: '--font-sans', weights: [400], preloadWeights: [], strategy: 'cdn' },
+  ],
+  subsets: ['latin'],
+  publicPath: '/fonts',
+  output: 'cache',
+})
+
+/** Swap in a mocked fetch and a temp outDir, restored when the subtest ends. */
+function sandbox(t, respond) {
+  const outDir = mkdtempSync(join(tmpdir(), 'tss-fonts-test-'))
+  const realFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    calls.push(String(url))
+    return respond(String(url), init)
+  }
+  t.after(() => {
+    globalThis.fetch = realFetch
+    rmSync(outDir, { recursive: true, force: true })
+  })
+  return { outDir, calls }
+}
 
 test('preloadWeights match a variable font-weight range like "100 900"', async (t) => {
   const outDir = mkdtempSync(join(tmpdir(), 'tss-fonts-test-'))
@@ -46,4 +75,117 @@ test('preloadWeights match a variable font-weight range like "100 900"', async (
   assert.equal(gen.preloads.length, 1, '400 sits inside 100–900, so the face must preload')
   assert.match(gen.preloads[0].href, /abc123\.woff2/)
   assert.equal(gen.realFaces, 1)
+})
+
+// The cache is keyed on the config hash. If the CSS file is NOT keyed with it, a config
+// that was generated, replaced, and then restored reports a cache hit while the CSS on
+// disk still belongs to the config that overwrote it — a clean build serving the wrong
+// fonts, with `cache hit` in the log. Reachable by switching a branch that changes
+// fonts.config.mjs, or by undoing a config edit.
+test('a cache hit never serves CSS generated for a different config', async (t) => {
+  let family = 'Alpha'
+  const { outDir } = sandbox(t, () => new Response(css2For(family), { status: 200 }))
+  const familyIn = (gen) => /font-family:"([^"]+)"/.exec(readFileSync(gen.cssPath, 'utf8'))[1]
+
+  family = 'Alpha'
+  assert.equal(familyIn(await generate(optsFor('Alpha'), outDir)), 'Alpha')
+
+  family = 'Beta'
+  assert.equal(familyIn(await generate(optsFor('Beta'), outDir)), 'Beta')
+
+  // Back to the first config. Whether this is a hit or a miss is an implementation
+  // detail; what must hold is that cssPath describes the config that was asked for.
+  family = 'Alpha'
+  const back = await generate(optsFor('Alpha'), outDir)
+  assert.equal(familyIn(back), 'Alpha', 'cache hit served the other config’s CSS')
+})
+
+test("output:'cache' keeps other configs' output, so a branch flip stays a cache hit", async (t) => {
+  let family = 'Alpha'
+  const { outDir, calls } = sandbox(t, () => new Response(css2For(family), { status: 200 }))
+
+  family = 'Alpha'
+  await generate(optsFor('Alpha'), outDir)
+  family = 'Beta'
+  await generate(optsFor('Beta'), outDir)
+
+  const before = calls.length
+  family = 'Alpha'
+  const back = await generate(optsFor('Alpha'), outDir)
+  assert.equal(back.fromCache, true, 'the first config should still be cached')
+  assert.equal(calls.length, before, 'a cache hit must not touch the network')
+  assert.equal(readdirSync(outDir).filter((f) => f.endsWith('.gen.css')).length, 2)
+})
+
+// A file truncated by a killed build or a full disk keeps its name and its mtime, so
+// existence alone is not evidence it is intact — it would be served as a valid font
+// forever. The recorded digest is what turns that into a cache miss.
+test('a woff2 whose bytes no longer match the recorded digest forces a regenerate', async (t) => {
+  const { outDir, calls } = sandbox(t, (url) =>
+    url.endsWith('.woff2')
+      ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0x01, 0x02]), { status: 200 })
+      : new Response(CSS2, { status: 200 }),
+  )
+  const selfHosted = {
+    ...optsFor('Fakefam'),
+    families: [{ ...optsFor('Fakefam').families[0], strategy: 'self-host' }],
+  }
+
+  const first = await generate(selfHosted, outDir)
+  assert.equal(first.files.length, 1)
+  assert.ok(first.digests?.[first.files[0]]?.sha256, 'the digest must be recorded')
+
+  const hit = await generate(selfHosted, outDir)
+  assert.equal(hit.fromCache, true)
+
+  // Truncate the cached font the way an interrupted write would.
+  writeFileSync(join(outDir, 'files', first.files[0]), Buffer.alloc(2))
+  const before = calls.length
+  const after = await generate(selfHosted, outDir)
+  assert.equal(after.fromCache, false, 'a corrupt cached font must not be reused')
+  assert.ok(calls.length > before, 'it should have been re-downloaded')
+})
+
+test('a font URL pointing somewhere other than gstatic is refused', async (t) => {
+  const evil = CSS2.replace('https://fonts.gstatic.com', 'https://fonts.gstatic.com.evil.test')
+  const { outDir } = sandbox(t, () => new Response(evil, { status: 200 }))
+  const selfHosted = {
+    ...optsFor('Fakefam'),
+    families: [{ ...optsFor('Fakefam').families[0], strategy: 'self-host' }],
+  }
+  await assert.rejects(() => generate(selfHosted, outDir), /refusing to download a font from/)
+})
+
+test('no temp files survive a successful generate', async (t) => {
+  const { outDir } = sandbox(t, (url) =>
+    url.endsWith('.woff2')
+      ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 })
+      : new Response(CSS2, { status: 200 }),
+  )
+  await generate(
+    {
+      ...optsFor('Fakefam'),
+      families: [{ ...optsFor('Fakefam').families[0], strategy: 'self-host' }],
+    },
+    outDir,
+  )
+  const strays = [...readdirSync(outDir), ...readdirSync(join(outDir, 'files'))].filter((f) =>
+    f.endsWith('.tmp'),
+  )
+  assert.deepEqual(strays, [])
+})
+
+test("output:'commit' prunes other configs, so the committed dir describes one config", async (t) => {
+  let family = 'Alpha'
+  const { outDir } = sandbox(t, () => new Response(css2For(family), { status: 200 }))
+  const commit = (name) => ({ ...optsFor(name), output: 'commit' })
+
+  family = 'Alpha'
+  await generate(commit('Alpha'), outDir)
+  family = 'Beta'
+  const gen = await generate(commit('Beta'), outDir)
+
+  const generated = readdirSync(outDir).filter((f) => f.endsWith('.gen.css'))
+  assert.deepEqual(generated, [basename(gen.cssPath)], 'the stale stylesheet was left behind')
+  assert.equal(readdirSync(outDir).filter((f) => f.startsWith('meta-')).length, 1)
 })

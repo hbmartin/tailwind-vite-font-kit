@@ -59,6 +59,18 @@ test('the plugin factory returns a Vite plugin named after the package', () => {
     silent: true,
   }
 
+  // A family whose weights live only in the axes spec is a supported shape — the
+  // generator derives them (src/generate.mjs) — so the types must accept it. `weights`
+  // was declared required here for a while, which made this config a type error.
+  /** @type {import('../index.d.ts').FontFamily} */
+  const axesOnly = {
+    name: 'Fraunces',
+    themeVar: '--font-display',
+    axes: 'opsz,wght@9..144,500;9..144,700',
+    opszPin: 48,
+  }
+  assert.equal(axesOnly.weights, undefined)
+
   const plugin = entry.fonts(options)
   const name = JSON.parse(
     readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),

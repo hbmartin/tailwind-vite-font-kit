@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { loadFontsConfig, validateFamilies } from '../src/config.mjs'
 import {
   detectTailwindEntry,
   detectViteConfig,
@@ -100,8 +100,17 @@ let families
 let detectedFromConfig = false
 
 if (existsSync(configPath) && !flag('from-css')) {
-  const mod = await import(pathToFileURL(configPath).href + `?t=${Date.now()}`)
-  families = (mod.default ?? mod).families
+  // Validated before anything else reads it: the next section DELETES the CSS that
+  // names these families, so a config this tool cannot understand has to stop the run
+  // rather than fail partway through with a TypeError.
+  const cfg = await loadFontsConfig(configPath).catch((err) =>
+    die(`could not load fonts.config.mjs — ${err.message}`),
+  )
+  try {
+    families = validateFamilies(cfg.families, 'fonts.config.mjs')
+  } catch (err) {
+    die(`${err.message}\n\n  ${c.b('--from-css')}  ignore it and adopt what your CSS uses instead`)
+  }
   detectedFromConfig = true
   console.log(
     `${c.dim('config')}          fonts.config.mjs (${families.map((f) => f.name).join(', ')})`,

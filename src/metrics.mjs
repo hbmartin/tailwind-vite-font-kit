@@ -58,12 +58,21 @@ const targetVariant = (m, weight) => m.variants?.[weight >= 600 ? '700' : 'regul
  * @param {string} subset
  * @param {number[]} weights
  * @param {(message: string) => void} [log]
+ * @param {(message: string) => void} [warn] for outcomes where the build succeeds but the
+ *   result is wrong; must not be silenceable
  * @returns {{ css: string, names: string[] }} `names` go into the @theme stack, in order.
  */
-export function fallbackFaces(METRICS, family, subset, weights, log = () => {}) {
+export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, warn = () => {}) {
   const m = METRICS[metricsKey(family)]
   if (!m) {
-    log(`  ! no capsize metrics for "${family}" — no fallback faces emitted`)
+    // Not a log line. With no metrics there are no fallback faces, no size-adjust and no
+    // CLS protection — the font still loads and the page still looks right until it
+    // reflows, so nothing else will ever tell anyone this happened.
+    warn(
+      `no capsize metrics for "${family}" — NO metric-matched fallbacks were emitted for it, ` +
+        `so this family gets no CLS protection. Check the spelling against the Google Fonts ` +
+        `family name, or set a \`stack\` you are happy to fall back to.`,
+    )
     return { css: '', names: [] }
   }
   const cat = FALLBACK_TARGETS[m.category] ? m.category : 'sans-serif'
@@ -87,7 +96,7 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}) 
       const fbUpem = fb.unitsPerEm ?? fbFamily.unitsPerEm
       const sizeAdjust = xAvg / upem / (fbAvg / fbUpem)
       if (!Number.isFinite(sizeAdjust) || sizeAdjust <= 0) {
-        log(`  ! non-finite size-adjust for "${name}" weight ${weight} — face skipped`)
+        warn(`non-finite size-adjust for "${name}" weight ${weight} — that face was skipped`)
         continue
       }
       const ascent = v.ascent ?? m.ascent

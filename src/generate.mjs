@@ -6,7 +6,15 @@
 // be @imported from a Tailwind entry (hard build failure, not a silent one).
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join, posix } from 'node:path'
 import { createRequire } from 'node:module'
 import { fallbackFaces } from './metrics.mjs'
@@ -23,6 +31,62 @@ const UA =
 
 const slug = (s) => s.toLowerCase().replace(/\s+/g, '-')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** @param {Buffer} buf */
+export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
+
+/**
+ * Write via a temp file in the same directory, then rename.
+ *
+ * `node_modules/.cache` is shared: a monorepo building two apps at once, or a dev server
+ * running beside a build, has two generators in the same directory. A plain writeFileSync
+ * lets a reader observe a half-written stylesheet or a truncated woff2, and the digest
+ * check would then reject a cache that was never actually bad. rename(2) is atomic within
+ * a filesystem, so a reader sees either the old file or the whole new one.
+ *
+ * The temp name carries the pid so two writers cannot collide on it.
+ * @param {string} path
+ * @param {string | Buffer} data
+ */
+function writeAtomic(path, data) {
+  const tmp = `${path}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, data)
+    renameSync(tmp, path)
+  } catch (err) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      // Best effort: the write already failed, and the temp file may never have existed.
+    }
+    throw err
+  }
+}
+
+// The font URLs are read out of a network response, so nothing about them is trusted by
+// construction. Google serves the binaries from exactly one host; anything else means the
+// css2 response was not what we think it was, and the build should stop rather than
+// download and ship it.
+const FONT_HOSTS = new Set(['fonts.gstatic.com'])
+
+/**
+ * @param {string} src the `src: url(...)` taken from a css2 response
+ * @param {string} family for the error message
+ */
+function assertFontHost(src, family) {
+  let host
+  try {
+    host = new URL(src).host
+  } catch {
+    throw new Error(`[tss-fonts] ${family}: css2 returned an unparseable font URL: ${src}`)
+  }
+  if (!FONT_HOSTS.has(host)) {
+    throw new Error(
+      `[tss-fonts] ${family}: refusing to download a font from ${host} — ` +
+        `expected ${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
+    )
+  }
+}
 
 /**
  * fetch with retry+backoff. A bare ETIMEDOUT to fonts.googleapis.com killed a build
@@ -71,6 +135,36 @@ async function fetchRetry(
   )
 }
 
+/** The generated stylesheet's name for a given cache key. Exported so the plugin can
+ *  recognise an entry that already carries the import. */
+export const cssName = (key) => `fonts-${key}.gen.css`
+
+/** Matches any generated stylesheet name, keyed or not. Used to spot an already-injected
+ *  entry even when the key has since changed, and to prune stale pairs. */
+export const CSS_NAME_RE = /fonts(?:-[0-9a-f]{16})?\.gen\.css/
+
+/**
+ * Cached files whose bytes no longer match what was downloaded.
+ *
+ * A meta written before digests were recorded has none, in which case there is nothing to
+ * check and the cache is taken at face value — an upgrade must not force a re-download.
+ * @param {{files: string[], digests?: Record<string, {sha256: string, bytes: number}>}} meta
+ * @param {string} filesDir
+ */
+function corruptFiles(meta, filesDir) {
+  if (!meta.digests) return []
+  return meta.files.filter((f) => {
+    const want = meta.digests?.[f]
+    if (!want) return false
+    try {
+      const buf = readFileSync(join(filesDir, f))
+      return buf.length !== want.bytes || sha256(buf) !== want.sha256
+    } catch {
+      return true
+    }
+  })
+}
+
 /** Everything that changes the output, hashed — the cache key. The package version is
  *  part of it so upgrading the generator invalidates stale caches automatically. */
 function cacheKey(opts) {
@@ -100,6 +194,9 @@ function cacheKey(opts) {
  * @property {string} cssPath
  * @property {string} filesDir
  * @property {string[]} files
+ * @property {Record<string, {sha256: string, bytes: number}>} [digests] keyed by filename;
+ *   absent on a meta written by an older version, and on `strategy: 'cdn'` families,
+ *   which download nothing
  * @property {import('../index.d.ts').FontPreload[]} preloads
  * @property {number} realFaces
  * @property {number} fallbackFaces
@@ -110,13 +207,17 @@ function cacheKey(opts) {
  * @param {ResolvedOptions} opts
  * @param {string} outDir
  * @param {(message: string) => void} [log]
+ * @param {(message: string) => void} [warn] surfaced even under `silent` — see src/index.mjs
  * @returns {Promise<Generated>}
  */
-export async function generate(opts, outDir, log = () => {}) {
+export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
   const key = cacheKey(opts)
   const metaPath = join(outDir, `meta-${key}.json`)
   const filesDir = join(outDir, 'files')
-  const cssPath = join(outDir, 'fonts.gen.css')
+  // Keyed, like the meta beside it. With a fixed name, a config that was generated,
+  // replaced and then restored found its own meta AND a CSS file belonging to whatever
+  // config overwrote it — reported as a cache hit, and the app shipped the wrong fonts.
+  const cssPath = join(outDir, cssName(key))
 
   if (existsSync(metaPath) && existsSync(cssPath)) {
     // A truncated or hand-mangled meta file is a cache MISS, not a crash.
@@ -126,8 +227,17 @@ export async function generate(opts, outDir, log = () => {}) {
       meta = JSON.parse(readFileSync(metaPath, 'utf8'))
     } catch {}
     if (Array.isArray(meta?.files) && meta.files.every((f) => existsSync(join(filesDir, f)))) {
-      log(`cache hit (${meta.files.length} woff2, ${meta.realFaces} faces) — no network`)
-      return { ...meta, cssPath, filesDir, fromCache: true }
+      // Existing is not the same as intact. A file truncated by a killed build or a full
+      // disk keeps its name and its mtime, and would be served as a valid font forever.
+      const bad = corruptFiles(meta, filesDir)
+      if (bad.length) {
+        log(
+          `cache rejected — ${bad.join(', ')} ${bad.length > 1 ? 'do' : 'does'} not match the recorded digest`,
+        )
+      } else {
+        log(`cache hit (${meta.files.length} woff2, ${meta.realFaces} faces) — no network`)
+        return { ...meta, cssPath, filesDir, fromCache: true }
+      }
     }
   }
 
@@ -145,6 +255,8 @@ export async function generate(opts, outDir, log = () => {}) {
   const preloads = []
   const files = []
   const seenSrc = new Map()
+  /** @type {Record<string, {sha256: string, bytes: number}>} */
+  const digests = {}
 
   for (const fam of opts.families) {
     // Weights may live only in an axes spec ('opsz,wght@9..144,500;9..144,700'); the
@@ -202,10 +314,15 @@ export async function generate(opts, outDir, log = () => {}) {
           // Google's own filenames already carry a content hash, so a fixed name is
           // safe to serve `immutable`.
           file = `${slug(fam.name)}-${src.split('/').pop()}`
+          assertFontHost(src, fam.name)
           const buf = Buffer.from(await (await fetchRetry(src, { log })).arrayBuffer())
-          writeFileSync(join(filesDir, file), buf)
+          writeAtomic(join(filesDir, file), buf)
           seenSrc.set(src, file)
           files.push(file)
+          // Recorded so a cache hit can prove the bytes on disk are still the bytes that
+          // were downloaded, and so the `assets` directory copy can spot a stale or
+          // truncated file rather than trusting the filename.
+          digests[file] = { sha256: sha256(buf), bytes: buf.length }
           log(`  downloaded ${file} (${(buf.length / 1024).toFixed(1)} kB)`)
         }
         href = posix.join(opts.publicPath, file)
@@ -239,7 +356,14 @@ export async function generate(opts, outDir, log = () => {}) {
       }
     }
 
-    const { css: fbCss, names } = fallbackFaces(METRICS, fam.name, opts.subsets[0], famWeights, log)
+    const { css: fbCss, names } = fallbackFaces(
+      METRICS,
+      fam.name,
+      opts.subsets[0],
+      famWeights,
+      log,
+      warn,
+    )
     if (fbCss) fallbackCss.push(fbCss)
 
     // Plain `@theme`, NEVER `@theme inline`. Under `inline` Tailwind bakes the literal
@@ -254,17 +378,52 @@ export async function generate(opts, outDir, log = () => {}) {
   const out =
     `/* GENERATED by tailwind-vite-font-kit — do not edit. */\n\n` +
     `${realFaces.join('\n')}\n\n${fallbackCss.join('\n')}\n\n@theme {\n${themeLines.join('\n')}\n}\n`
-  writeFileSync(cssPath, out)
+  writeAtomic(cssPath, out)
 
   const meta = {
     files,
+    digests,
     preloads,
     realFaces: realFaces.length,
     fallbackFaces: fallbackCss.join('\n').split('@font-face').length - 1,
   }
-  writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+  // The meta is written LAST and names the CSS: a reader that sees the meta is
+  // guaranteed the stylesheet and every woff2 it refers to are already complete.
+  writeAtomic(metaPath, JSON.stringify(meta, null, 2))
+  pruneStale(outDir, key, opts.output, log)
   log(
-    `wrote fonts.gen.css — ${meta.realFaces} real faces, ${meta.fallbackFaces} fallback faces, ${preloads.length} preloads`,
+    `wrote ${cssName(key)} — ${meta.realFaces} real faces, ${meta.fallbackFaces} fallback faces, ${preloads.length} preloads`,
   )
   return { ...meta, cssPath, filesDir, fromCache: false }
+}
+
+/**
+ * Drop meta/CSS pairs belonging to other configs.
+ *
+ * Only under `output: 'commit'`, where the directory is checked into the repo and should
+ * describe exactly the config that is in the repo beside it. Under `output: 'cache'` they
+ * are a few KB each and keeping them is what makes flipping between two branches a cache
+ * hit rather than a fresh download. `files/` is left alone either way — the names carry
+ * Google's content hash, so they are shared across configs and safe to keep.
+ *
+ * @param {string} outDir
+ * @param {string} key
+ * @param {string} output
+ * @param {(message: string) => void} log
+ */
+function pruneStale(outDir, key, output, log) {
+  if (output !== 'commit') return
+  const keep = new Set([cssName(key), `meta-${key}.json`])
+  let removed = 0
+  for (const name of readdirSync(outDir)) {
+    if (keep.has(name)) continue
+    if (!CSS_NAME_RE.test(name) && !/^meta-[0-9a-f]{16}\.json$/.test(name)) continue
+    try {
+      unlinkSync(join(outDir, name))
+      removed++
+    } catch {
+      // A file another process is mid-rename on is not worth failing a build over.
+    }
+  }
+  if (removed) log(`pruned ${removed} stale generated file(s) from .tss-fonts/`)
 }

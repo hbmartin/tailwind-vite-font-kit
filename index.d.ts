@@ -8,8 +8,14 @@ export interface FontFamily {
    * `@theme { --font-sans: 'Manrope', '<fallbacks>', <stack> }`.
    */
   themeVar: `--font-${string}`
-  /** Weights to request. One fallback face is generated per weight. */
-  weights: number[]
+  /**
+   * Weights to request. One fallback face is generated per weight.
+   *
+   * Optional only when `axes` carries a `wght` axis, in which case the weights are
+   * derived from it — `'opsz,wght@9..144,500;9..144,700'` yields `[500, 700]`. A family
+   * with neither is an error: the fallback faces need concrete values.
+   */
+  weights?: number[]
   /** Tail of the font stack, after the generated fallback families. */
   stack?: string[]
   /**
@@ -72,8 +78,14 @@ export interface FontsOptions {
    * Emit preloads as an HTTP `Link:` response header via Nitro route rules. Default true.
    * This is what makes the plugin zero-app-edit. Set false and import `fontPreloads`
    * from `virtual:fonts` if you would rather render `<link>` tags yourself.
+   *
+   * The header is set on `/**`, since that is the only pattern covering every document
+   * route. Nitro merges matching rules' headers key-by-key with the more specific rule
+   * winning, so paths listed in `exclude` get an empty `Link:` instead — a browser reads
+   * zero links from it. Defaults to the hashed build output and the font files
+   * themselves; pass your own list to widen or narrow it.
    */
-  preloadHeader?: boolean
+  preloadHeader?: boolean | { exclude?: string[] }
   silent?: boolean
 }
 
