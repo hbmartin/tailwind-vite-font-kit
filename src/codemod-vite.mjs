@@ -81,11 +81,54 @@ const PLUGINS_ANCHOR_RE = /(?:\bplugins\s*:|\bplugins\s*(?::[^=\n]*)?=>?)\s*$/
 // `css: { postcss: { plugins: [...] } }` and `build: { rollupOptions: { plugins: [...] } }`
 // spell the key exactly like the Vite one, and fonts() is a Vite plugin — writing it into
 // either produces a config that loads and then fails. What separates them is depth, not
-// spelling: Vite's `plugins` lives directly in the config object, and a config object is
-// never itself the value of a named property. It is the argument to defineConfig, the
-// `export default`, or a `const config = {…}`. So every object literal enclosing the
-// anchor must be anonymous; one keyed ancestor means the array belongs to something else.
-const OBJECT_KEY_RE = /(?:[\w$]+|['"][^'"]*['"])\s*:\s*$/
+// spelling: Vite's `plugins` lives directly in the config object, which is the argument to
+// defineConfig, the `export default`, or a const that reaches one of those.
+//
+// "No keyed ancestor" is the wrong way to measure that depth, because anything standing
+// between a key and its object launders the object into an anonymous one — a wrapping call
+// (`css: createPostcss({ plugins: […] })`) or a binding that never had a key at all
+// (`const postcssConfig = { plugins: […] }`). So rather than blacklist the shapes that
+// shadow the Vite key, every bracket enclosing the anchor has to be a recognised link in
+// the chain down from the root. A property value, an unknown call, an object literal in any
+// other position — none of them are links, so the anchor is rejected and the CLI prints the
+// manual snippet. An unrecognised-but-legitimate wrapper falls out here too; that costs a
+// config the automatic edit, which is the direction this file is allowed to fail in.
+const CHAIN_RE = {
+  // The call parens of defineConfig/mergeConfig, or the parens around an arrow's object return.
+  '(': /(?:\b(?:defineConfig|mergeConfig)|=>)\s*$/,
+  // An object literal in argument position, an arrow or `return` body, or the default export.
+  '{': /(?:[(,]|=>|\breturn\b|\bexport\s+default\b)\s*$/,
+}
+
+// `const config = {…}` is a link only when that binding is the one handed to the root. The
+// identical shape holding a postcss config is not, and nothing but the name tells them apart.
+const CONST_BINDING_RE = /\b(?:const|let|var)\s+([\w$]+)\s*(?::[^=\n]*)?=\s*$/
+
+/**
+ * Whether `name` is what the config root is built from, rather than some other object.
+ * The binding has to BE the export or a whole argument — `defineConfig({ css: { postcss:
+ * postcssConfig } })` mentions the name but hands the root something else entirely.
+ */
+function reachesRoot(masked, name) {
+  const id = `(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`
+  const other = '[\\w$]+\\s*'
+  return new RegExp(
+    `export\\s+default\\s+${id}\\s*;?\\s*$` +
+      `|\\b(?:defineConfig|mergeConfig)\\s*\\(\\s*(?:${other},\\s*)*${id}\\s*(?:,\\s*${other})*\\)`,
+    'm',
+  ).test(masked)
+}
+
+/** Whether every bracket enclosing the plugins array is a link down from the config root. */
+function rootedInConfig(masked, ancestors) {
+  return ancestors.every((i) => {
+    const prefix = masked.slice(0, i)
+    if (CHAIN_RE[masked[i]]?.test(prefix)) return true
+    if (masked[i] !== '{') return false
+    const bound = CONST_BINDING_RE.exec(prefix)
+    return bound !== null && reachesRoot(masked, bound[1])
+  })
+}
 
 /**
  * @param {string} source  vite.config.* text
@@ -107,7 +150,7 @@ export function insertFontsPlugin(source) {
   const open = stack[stack.length - 1]
   if (open == null || masked[open] !== '[') return null
   if (!PLUGINS_ANCHOR_RE.test(masked.slice(0, open))) return null
-  if (stack.some((i) => masked[i] === '{' && OBJECT_KEY_RE.test(masked.slice(0, i)))) return null
+  if (!rootedInConfig(masked, stack.slice(0, -1))) return null
 
   // fonts() without its import is a ReferenceError, so a config whose imports cannot be
   // located falls back to the manual instructions instead of getting a half-edit.
