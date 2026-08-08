@@ -117,6 +117,47 @@ test("output:'cache' keeps other configs' output, so a branch flip stays a cache
   assert.equal(readdirSync(outDir).filter((f) => f.endsWith('.gen.css')).length, 2)
 })
 
+// Guards the SEAM, not the math: test/metrics.test.mjs proves fallbackFaces() emits
+// per-weight size-adjust given metrics that carry `variants`, but nothing there checks
+// that the generator hands it such metrics.
+//
+// This matters because `@capsizecss/metrics` exposes per-family modules
+// (`@capsizecss/metrics/manrope`) that look like a drop-in replacement for the 3.76 MB
+// `entireMetricsCollection` — and they have NO `variants` key at all. Switching to them
+// to save the parse silently collapses every fallback onto the family-level average,
+// which is the exact error this package exists to remove (Arial regular 913 vs 700 983,
+// the measured 7.7%). It would break nothing, throw nothing, and pass every other test.
+test('the generator feeds fallbackFaces metrics that carry per-weight variants', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
+  const gen = await generate(
+    {
+      families: [
+        {
+          name: 'Manrope',
+          themeVar: '--font-sans',
+          weights: [400, 700],
+          preloadWeights: [],
+          strategy: 'cdn',
+        },
+      ],
+      subsets: ['latin'],
+      publicPath: '/fonts',
+      output: 'cache',
+    },
+    outDir,
+  )
+
+  const css = readFileSync(gen.cssPath, 'utf8')
+  const arial = [...css.matchAll(/@font-face\{([^}]*local\("Arial"\)[^}]*)\}/g)].map((m) => m[1])
+  assert.equal(arial.length, 2, 'one Arial fallback face per declared weight')
+  const sizeAdjust = (decls) => /size-adjust:([^;}]+)/.exec(decls)[1]
+  assert.notEqual(
+    sizeAdjust(arial[0]),
+    sizeAdjust(arial[1]),
+    'per-weight metrics collapsed — the generator is loading variant-less metrics',
+  )
+})
+
 // A file truncated by a killed build or a full disk keeps its name and its mtime, so
 // existence alone is not evidence it is intact — it would be served as a valid font
 // forever. The recorded digest is what turns that into a cache miss.

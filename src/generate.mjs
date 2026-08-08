@@ -241,6 +241,19 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     }
   }
 
+  // DO NOT "optimise" this into per-family imports.
+  //
+  // `@capsizecss/metrics` exposes `@capsizecss/metrics/manrope` etc. through a wildcard
+  // export, and at 3.76 MB this collection is an obvious thing to want to avoid loading.
+  // Those per-family modules do NOT carry a `variants` key — measured, not assumed:
+  // `entireMetricsCollection.manrope.variants` has 7 entries, `@capsizecss/metrics/manrope`
+  // has none. Without variants every fallback face falls back to the family-level average,
+  // which silently reintroduces the single largest error this package removes (Arial
+  // regular 913 vs 700 983 — the 7.7% in metrics.mjs). Nothing throws; the CSS just gets
+  // quietly worse. test/generate.test.mjs pins this.
+  //
+  // The cost is bounded anyway: this line sits AFTER the cache-hit return above, so it is
+  // paid on a cold generate and never on a warm build.
   const { entireMetricsCollection: METRICS } =
     await import('@capsizecss/metrics/entireMetricsCollection').catch(() =>
       require_('@capsizecss/metrics/entireMetricsCollection'),
