@@ -1,0 +1,10 @@
+# pnpm settings (pnpm >=10 reads these from here, not from a `pnpm` field in
+# package.json).
+#
+# The override keeps the optional `@tanstack/react-start` peer OUT of the dev install:
+# pnpm installs a project's own peerDependencies locally, but this repo deliberately
+# typechecks against the `types/ambient.d.ts` stubs rather than Start's real types —
+# which also cannot pass our `skipLibCheck: false` + DOM-less `lib` settings. Consumers
+# are unaffected; overrides only apply to installs rooted here.
+overrides:
+  '@tanstack/react-start': '-'

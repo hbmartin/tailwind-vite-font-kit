@@ -274,11 +274,23 @@ test('adopt stays quiet when the plugin is already wired up', (t) => {
   const wired = VITE_CONFIG.replace(
     "import tailwindcss from '@tailwindcss/vite'",
     "import tailwindcss from '@tailwindcss/vite'\nimport { fonts } from 'tailwind-vite-font-kit'",
-  )
+  ).replace('tailwindcss(),', 'fonts(),\n    tailwindcss(),')
   const root = project(t, { 'vite.config.ts': wired })
   const { out } = run(root, 'adopt')
   assert.ok(!out.includes('has no fonts'), 'nothing is wrong, so nothing should be alarming')
   assert.match(out, /already has the plugin/)
+})
+
+// The package name alone is not wiring: an import nothing calls (or a commented-out
+// line) leaves the app with no fonts, which is exactly what the warning is for.
+test('adopt still warns when the plugin is imported but never called', (t) => {
+  const imported = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\nimport { fonts } from 'tailwind-vite-font-kit'",
+  )
+  const root = project(t, { 'vite.config.ts': imported })
+  const { out } = run(root, 'adopt')
+  assert.match(out, /Your app has no fonts until you add the plugin/)
 })
 
 test('NO_COLOR is honoured across the whole output, not just the diffs', (t) => {
@@ -288,8 +300,42 @@ test('NO_COLOR is honoured across the whole output, not just the diffs', (t) => 
   assert.ok(!/\[/.test(out), 'found ANSI escapes despite NO_COLOR')
 })
 
+// The opsz measurement itself needs the network; everything here dies before it.
+test('opsz rejects sizes and weights that are not positive numbers', (t) => {
+  const root = project(t)
+  for (const [flag, value] of [
+    ['sizes', 'foo'],
+    ['sizes', '16,,48'],
+    ['weights', '0,-400'],
+  ]) {
+    const res = run(root, 'opsz', 'Fraunces', `--${flag}`, value)
+    assert.equal(res.status, 1, `--${flag} ${value} must be rejected`)
+    assert.match(res.out, new RegExp(`--${flag} expects a comma-separated list`))
+  }
+})
+
+test('opsz refuses a malformed fonts.config.mjs rather than measuring around it', (t) => {
+  // themeVar missing: --write would then do text surgery on a config the package
+  // itself considers broken.
+  const root = project(t, {
+    'fonts.config.mjs': `export default { families: [{ name: 'Poppins' }] }`,
+  })
+  const res = run(root, 'opsz', 'Poppins')
+  assert.equal(res.status, 1)
+  assert.match(res.out, /\[tss-fonts\] fonts\.config\.mjs:/)
+})
+
+test('opsz with no family and no config says what to do', (t) => {
+  const root = project(t)
+  const res = run(root, 'opsz')
+  assert.equal(res.status, 1)
+  assert.match(res.out, /name a family/)
+})
+
 test('early-hints writes a server entry, and never overwrites one', (t) => {
-  const root = project(t, { 'tsconfig.json': '{}' })
+  // No tsconfig on purpose: Start resolves src/server.ts as the entry either way, so
+  // the extension must not depend on one.
+  const root = project(t)
   assert.equal(run(root, 'early-hints').status, 0)
   const entry = read(root, 'src/server.ts')
   assert.match(entry, /createFontsServerEntry/)

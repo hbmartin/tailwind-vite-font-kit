@@ -90,7 +90,7 @@ Not removable, and specifically **v4** — v3 has no `@theme`.
   transform in a multi-environment build.
 - `emitFile` in `buildStart()` for the client bundle; `configureServer()` middleware for
   dev, which has no bundle.
-- Peer range is `vite: ^6 || ^7 || ^8`.
+- Peer range is `vite: ^7 || ^8`.
 
 ## If you wanted to drop TanStack entirely
 

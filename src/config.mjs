@@ -10,6 +10,7 @@
 // here is hand-editing a config the tool generated.
 
 import { pathToFileURL } from 'node:url'
+import { weightsFromSpec } from './detect.mjs'
 
 const STRATEGIES = ['self-host', 'cdn']
 
@@ -73,18 +74,35 @@ export function validateFamilies(families, source) {
         fail(`${at} has a \`weights\` that is not an array of numbers, e.g. [400, 700].`)
       }
     }
-    // Weights may be carried by the axes spec instead; the generator derives them.
-    if (!fam.weights?.length && !fam.axes) {
-      fail(`${at} declares neither \`weights\` nor \`axes\`, so no faces can be requested.`)
-    }
     if (fam.axes !== undefined && typeof fam.axes !== 'string') {
       fail(`${at} has an \`axes\` that is not a string, e.g. 'opsz,wght@9..144,400;9..144,700'.`)
+    }
+    // Weights may be carried by the axes spec instead; the generator derives them — so an
+    // axes spec with no wght axis leaves it nothing to derive, and generate() would throw
+    // after `adopt` has already deleted the CSS. Catch it here, before anything destructive.
+    if (!fam.weights?.length) {
+      if (!fam.axes) {
+        fail(`${at} declares neither \`weights\` nor \`axes\`, so no faces can be requested.`)
+      }
+      if (!weightsFromSpec(fam.axes).weights.length) {
+        fail(
+          `${at} has no \`weights\`, and its \`axes\` spec declares no wght axis to derive ` +
+            `them from — add weights, or a wght axis like 'opsz,wght@9..144,400'.`,
+        )
+      }
     }
     if (fam.strategy !== undefined && !STRATEGIES.includes(fam.strategy)) {
       fail(`${at} has strategy ${JSON.stringify(fam.strategy)}; expected 'self-host' or 'cdn'.`)
     }
-    if (fam.opszPin !== undefined && !(Number.isFinite(fam.opszPin) && fam.opszPin > 0)) {
-      fail(`${at} has an \`opszPin\` that is not a positive number (a px size, e.g. 16 or 48).`)
+    if (
+      fam.opszPin !== undefined &&
+      fam.opszPin !== 'auto' &&
+      !(Number.isFinite(fam.opszPin) && fam.opszPin > 0)
+    ) {
+      fail(
+        `${at} has an \`opszPin\` that is not a positive number (a px size, e.g. 16 or 48) ` +
+          `or 'auto'.`,
+      )
     }
     if (fam.preloadWeights !== undefined && !Array.isArray(fam.preloadWeights)) {
       fail(`${at} has a \`preloadWeights\` that is not an array. Use [] to disable preloading.`)
@@ -104,6 +122,15 @@ export function validateFamilies(families, source) {
  */
 export async function loadAndValidate(path, label = path) {
   const cfg = await loadFontsConfig(path)
+  // A config that default-exports the families array directly (or a string, or a
+  // function) has no `.families` to read — name the mistake instead of reporting the
+  // misleading "expected a `families` array, got nothing".
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+    throw new Error(
+      `[tss-fonts] ${label}: the default export must be an object shaped like ` +
+        `{ families: [...] }, got ${Array.isArray(cfg) ? 'an array' : typeof cfg}.`,
+    )
+  }
   validateFamilies(cfg.families, label)
   return cfg
 }

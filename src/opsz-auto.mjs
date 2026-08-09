@@ -14,8 +14,10 @@
 // difference between pinning at 16 and pinning at 48 was measured at ~20% of advance
 // width. The default is a guess; this is a measurement.
 
-import { hasOpszAxis } from './opsz.mjs'
+import { hasOpszAxis, pinOpsz } from './opsz.mjs'
 import { detectAxes, planOpsz, toSfnt } from './opsz-policy.mjs'
+import { weightsFromSpec } from './detect.mjs'
+import { assertFontHost } from './generate.mjs'
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -136,7 +138,10 @@ export async function recommendOpszPin(
   fam,
   { sizes = DEFAULT_SIZES, tolerancePct = 1.5, log = () => {} } = {},
 ) {
-  const weights = fam.weights?.length ? fam.weights : [400]
+  // A family configured through its axes spec carries its weights there — measure at
+  // those, not at a 400 the config never asked for. [400] is only for a bare name.
+  const specWeights = !fam.weights?.length && fam.axes ? weightsFromSpec(fam.axes).weights : []
+  const weights = fam.weights?.length ? fam.weights : specWeights.length ? specWeights : [400]
 
   // Cheap pre-check: if the config already spells out the axes and opsz is not among
   // them, there is nothing to measure and nothing to download.
@@ -170,10 +175,18 @@ export async function recommendOpszPin(
   const url = `https://fonts.googleapis.com/css2?family=${fam.name.replace(/\s+/g, '+')}:${spec}&display=swap`
   log(`fetching ${url}`)
   const css = await (await get(url)).text()
-  const src = /src:\s*url\(([^)]+)\)/.exec(css)?.[1]
+  // css2 labels each subset's @font-face with a comment, and the first block is whatever
+  // subset sorts first (cyrillic-ext, for many families) — a per-subset file with the
+  // wrong glyphs to measure. Pick the latin block explicitly.
+  const blocks = [...css.matchAll(/\/\*\s*([a-z0-9-]+)\s*\*\/\s*(@font-face\s*\{[^}]*\})/g)]
+  const latin = blocks.find(([, subset]) => subset === 'latin')
+  const src = latin ? /src:\s*url\(([^)]+)\)/.exec(latin[2])?.[1] : undefined
   if (!src) {
-    throw new Error(`[tss-fonts] could not find a font URL in the css2 response for ${fam.name}`)
+    throw new Error(
+      `[tss-fonts] could not find a latin @font-face block in the css2 response for ${fam.name}`,
+    )
   }
+  assertFontHost(src, fam.name)
 
   log(`downloading ${src}`)
   const woff2 = Buffer.from(await (await get(src)).arrayBuffer())
@@ -215,9 +228,16 @@ export async function recommendOpszPin(
     // axis, so the measured pin silently does nothing and Google serves whatever instance
     // it likes. Handing back a ready-made spec is what closes that loop.
     //
-    // Only opsz and wght: the other axes a family may carry (Fraunces has SOFT and WONK)
-    // would keep the file variable along them for no benefit here.
-    pinnedAxes: `opsz,wght@${weights.map((w) => `${pin},${w}`).join(';')}`,
+    // A family that already spells out its axes keeps them: pin opsz in place and leave
+    // every other axis (wdth, ital, the declared weight tuples) exactly as configured —
+    // rebuilding from scratch here used to silently drop them. (The early return above
+    // guarantees fam.axes carries opsz when it exists at all.)
+    //
+    // The rebuilt spec is only opsz and wght: extra axes a family may carry (Fraunces has
+    // SOFT and WONK) would keep the file variable along them for no benefit here.
+    pinnedAxes: fam.axes
+      ? pinOpsz(fam.axes, pin)
+      : `opsz,wght@${weights.map((w) => `${pin},${w}`).join(';')}`,
     pin,
   }
 }

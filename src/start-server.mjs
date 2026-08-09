@@ -23,7 +23,7 @@
 //     (Network.responseReceivedEarlyHints fires) but issues no preload.
 //   - `writeEarlyHints` is a Node http.ServerResponse method, reached through srvx as
 //     `request.runtime.node.res`. Under workerd or Deno it is absent, and this degrades
-//     to the `Link:` header below.
+//     to the plugin's `Link:` header (or the opt-in `linkHeader` below).
 //
 // Keep head().links preloads as well if you have them: they are the only thing that works
 // when neither of the above applies (static export, Safari, no CDN).
@@ -57,9 +57,10 @@ function nodeResponseOf(request) {
 /**
  * @typedef {object} FontsServerEntryOptions
  * @property {boolean} [earlyHints] write a 103 when the runtime supports it. Default true.
- * @property {boolean} [linkHeader] append `Link:` to the document response. Default true.
- *   The Vite plugin already sets this via Nitro route rules; keep both only if you have
- *   turned `preloadHeader` off there.
+ * @property {boolean} [linkHeader] append `Link:` to the document response. Default false:
+ *   the Vite plugin already ships the same header via Nitro route rules, so the default
+ *   would duplicate it on every document. Opt in only if you have turned `preloadHeader`
+ *   off there.
  * @property {(streamHandler: any) => any} [createHandler] override how the Start handler is
  *   built. Exists for tests and for apps that already wrap `createStartHandler`.
  */
@@ -70,7 +71,7 @@ function nodeResponseOf(request) {
  * @param {FontsServerEntryOptions} [options]
  */
 export function createFontsServerEntry(options = {}) {
-  const { earlyHints = true, linkHeader = true, createHandler } = options
+  const { earlyHints = true, linkHeader = false, createHandler } = options
 
   /** @type {Promise<any> | null} */
   let handlerPromise = null
