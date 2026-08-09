@@ -19,6 +19,19 @@ test('pinOpsz leaves an already-pinned spec alone', () => {
   assert.equal(pinOpsz('opsz,wght@48,500;48,700', 16), 'opsz,wght@48,500;48,700')
 })
 
+// A measured pin has to land in EVERY tuple: mixed fixed values keep the opsz axis on
+// the wire, which is exactly what pinning exists to remove.
+test('pinOpsz replaceFixed pins fixed values too, preserving other axes', () => {
+  assert.equal(
+    pinOpsz('opsz,wght@12,400;72,700', 21, { replaceFixed: true }),
+    'opsz,wght@21,400;21,700',
+  )
+  assert.equal(
+    pinOpsz('ital,opsz,wght@0,12,400;1,72,700', 21, { replaceFixed: true }),
+    'ital,opsz,wght@0,21,400;1,21,700',
+  )
+})
+
 test('pinOpsz pins the opsz position when other axes come first', () => {
   // css2 axis tags are alphabetical, so ital precedes opsz — the pin must land on the
   // opsz slot of every tuple, not on whatever value happens to be first.
@@ -44,6 +57,18 @@ test('googleUrl honours an explicit opszPin', () => {
     weights: [500],
     opszPin: 48,
   })
+  assert.match(url, /opsz,wght@48,500;48,700/)
+})
+
+// This is how the pin `opszPin: 'auto'` measured (and the CLI wrote back into the
+// config) reaches the wire when the family's axes spec carries fixed opsz values.
+test('googleUrl: an explicit opszPin overrides fixed opsz values in every tuple', () => {
+  const url = googleUrl({ name: 'Fraunces', axes: 'opsz,wght@12,500;72,700', opszPin: 48 })
+  assert.match(url, /opsz,wght@48,500;48,700/)
+})
+
+test('googleUrl leaves hand-pinned opsz values alone when no opszPin is set', () => {
+  const url = googleUrl({ name: 'Fraunces', axes: 'opsz,wght@48,500;48,700' })
   assert.match(url, /opsz,wght@48,500;48,700/)
 })
 

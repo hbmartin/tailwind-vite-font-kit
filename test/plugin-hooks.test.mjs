@@ -87,6 +87,31 @@ test('asset paths and the fonts themselves carry an empty preload header', async
   assert.equal(rules['/fonts/**'].headers['access-control-allow-origin'], '*')
 })
 
+// Vite serves files emitted as `fonts/x.woff2` below its configured `base`. The generated
+// CSS and Nitro rules need that base in their URL, but Rollup's output filename must not
+// contain it or `/docs/fonts/x.woff2` becomes `/docs/docs/fonts/x.woff2` in production.
+test('Vite base prefixes font URLs but not emitted asset filenames', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+    publicPath: '/fonts/',
+  })
+  const returned = await plugin.config({ root, base: '/docs/' }, { command: 'build' })
+
+  assert.ok(returned.nitro.routeRules['/docs/fonts/**'])
+  assert.equal(returned.nitro.routeRules['/docs/fonts/**'].headers.link, '')
+  assert.equal(returned.nitro.routeRules['/docs/fonts//**'], undefined)
+  assert.match(plugin.load('\0virtual:fonts'), /href":"\/docs\/fonts\/manrope-/)
+
+  const emitted = []
+  plugin.buildStart.call({
+    environment: { config: { consumer: 'client' } },
+    emitFile: (asset) => emitted.push(asset),
+  })
+  assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/)
+})
+
 test('preloadHeader.exclude replaces the default exclusion list', async (t) => {
   const { rules } = await routeRules(t, { preloadHeader: { exclude: ['/static/**'] } })
   assert.equal(rules['/static/**'].headers.link, '')
@@ -143,6 +168,19 @@ test("opszPin: 'auto' passes validation from a loaded fonts.config.mjs", async (
   const plugin = fonts({ silent: true })
   const returned = await plugin.config({ root }, { command: 'build' })
   assert.ok(returned.nitro.routeRules['/fonts/**'], 'generation ran to completion')
+})
+
+// The plugin once merged whatever the file exported: spreading an array into the options
+// produces index keys and no `families`, which ended at the misleading "no families
+// configured". The shape error has to name the actual mistake instead.
+test('a config that default-exports the families array is named as the mistake', async (t) => {
+  const root = sandbox(t)
+  writeFileSync(join(root, 'fonts.config.mjs'), `export default [${JSON.stringify(FAMILY)}]\n`)
+  const plugin = fonts({ silent: true })
+  await assert.rejects(
+    () => plugin.config({ root }, { command: 'build' }),
+    /fonts\.config\.mjs: the default export must be an object shaped like \{ families: \[\.\.\.\] \}, got an array/,
+  )
 })
 
 // On plain Vite the `nitro` config key is simply ignored: no preloads, no immutable

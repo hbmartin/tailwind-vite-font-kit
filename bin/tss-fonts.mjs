@@ -20,7 +20,7 @@ import {
   buildFontPlan,
   GENERIC_STACK_RE,
 } from '../src/detect.mjs'
-import { insertFontsPlugin } from '../src/codemod-vite.mjs'
+import { insertFontsPlugin, mask } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
 import { color, unifiedDiff } from '../src/diff.mjs'
 
@@ -50,6 +50,15 @@ const c = {
 const die = (m) => {
   console.error(`${c.r('error')} ${m}`)
   process.exit(1)
+}
+
+/** Preserve an existing recovery copy instead of silently replacing it on a later run. */
+function backupFile(file) {
+  let n = 0
+  let backup = file + '.bak'
+  while (existsSync(backup)) backup = file + `.bak.${++n}`
+  copyFileSync(file, backup)
+  return backup
 }
 
 if (!cmd || flag('help') || cmd === 'help') {
@@ -240,9 +249,9 @@ if (cmd === 'opsz') {
       console.log(`\n${c.y('--dry-run')} — fonts.config.mjs would change:`)
       console.log(unifiedDiff(before, text, 'fonts.config.mjs'))
     } else {
-      copyFileSync(cfgPath, cfgPath + '.bak')
+      const backup = backupFile(cfgPath)
       writeFileSync(cfgPath, text)
-      console.log(`\n${c.g('✓')} wrote fonts.config.mjs (backup: fonts.config.mjs.bak)`)
+      console.log(`\n${c.g('✓')} wrote fonts.config.mjs (backup: ${relative(root, backup)})`)
     }
   } else if (found.length) {
     console.log(
@@ -417,7 +426,9 @@ if (cmd === 'init') {
     console.log(`\n${c.y('!')} no vite.config.ts found — add the plugin yourself:\n${snippet()}`)
   } else {
     const vText = readFileSync(vite, 'utf8')
-    if (vText.includes('tailwind-vite-font-kit')) {
+    // Masked so a commented-out import does not count as "already has it" — the real
+    // specifier survives (mask keeps string content here), commented lines are blanked.
+    if (mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit')) {
       console.log(`\n${c.dim('vite.config already has the plugin (skipped)')}`)
     } else {
       const out = insertFontsPlugin(vText)
@@ -451,11 +462,15 @@ if (DRY) {
   console.log(`\n${c.y('--dry-run')} — no files written (${edits.length} would change).`)
   process.exit(0)
 }
+const backups = []
 for (const [file, before, after] of edits) {
-  if (before && before !== after) copyFileSync(file, file + '.bak')
+  if (before && before !== after) backups.push(relative(root, backupFile(file)))
   writeFileSync(file, after)
 }
-console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak ${c.dim('(gitignored)')}`)
+console.log(
+  `\n${c.g('✓')} wrote ${edits.length} file(s). ` +
+    `Backups: ${backups.length ? backups.join(', ') : 'none'} ${c.dim('(gitignored)')}`,
+)
 
 // `adopt` has just deleted the CSS that was applying these fonts, and unlike `init` it
 // does not wire the plugin. Until fonts() is in the plugins array the app has NO fonts —
@@ -463,9 +478,15 @@ console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak ${c.d
 if (cmd === 'adopt') {
   const vite = detectViteConfig(root)
   const vText = vite ? readFileSync(vite, 'utf8') : ''
-  // The package name alone is not wiring — a commented-out line or an unused import
-  // matches it, and the app still has no fonts. Require an actual fonts() call too.
-  const wired = vite && vText.includes('tailwind-vite-font-kit') && /\bfonts\s*\(/.test(vText)
+  // The package name alone is not wiring — an unused import matches it, and the app
+  // still has no fonts. Require an actual fonts() call too, and check both on masked
+  // text so a commented-out import or invocation (or either appearing inside some
+  // unrelated string) does not read as wiring. The import check keeps string content,
+  // because the specifier IS a string; the call check blanks strings too.
+  const wired =
+    vite &&
+    mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit') &&
+    /\bfonts\s*\(/.test(mask(vText))
   if (wired) {
     console.log(c.dim(`  ${relative(root, vite)} already has the plugin — you are done.`))
   } else {

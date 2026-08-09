@@ -102,6 +102,10 @@ You can also pass the same object inline: `fonts({ families: [...] })`. Inline o
 
 **Vite 7 or 8**, and **Tailwind v4** — v3 has no `@theme`. Node ≥22.
 
+**Vite path-based `base` is respected.** Leave `publicPath` as `'/fonts'` when deploying under a
+subpath: with `base: '/docs/'`, emitted files live at `fonts/*` and are requested from
+`/docs/fonts/*`. A trailing slash in `publicPath` is normalized.
+
 **Nitro is what delivers the preloads.** The `Link:` header and the `immutable` caching on
 `/fonts/**` both ship as Nitro route rules, which is what makes this zero-app-edit. On
 plain Vite that config key is ignored: the fonts still generate, emit and serve, you just

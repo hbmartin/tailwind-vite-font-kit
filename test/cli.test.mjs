@@ -125,6 +125,13 @@ test('a backup is written for edited files, but not for new ones', (t) => {
   )
 })
 
+test('adopt preserves an existing backup instead of overwriting the recovery copy', (t) => {
+  const root = project(t, { 'src/styles.css.bak': 'the older recovery copy\n' })
+  run(root, 'adopt')
+  assert.equal(read(root, 'src/styles.css.bak'), 'the older recovery copy\n')
+  assert.equal(read(root, 'src/styles.css.bak.1'), ENTRY)
+})
+
 // ---------------------------------------------------------------------------
 // the refusal — the most important thing this CLI does
 // ---------------------------------------------------------------------------
@@ -291,6 +298,33 @@ test('adopt still warns when the plugin is imported but never called', (t) => {
   const root = project(t, { 'vite.config.ts': imported })
   const { out } = run(root, 'adopt')
   assert.match(out, /Your app has no fonts until you add the plugin/)
+})
+
+// A commented-out import and invocation are not wiring: the app still has no fonts.
+// Both checks run on masked text, so neither line above counts.
+test('adopt still warns when the wiring is commented out', (t) => {
+  const commented = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\n// import { fonts } from 'tailwind-vite-font-kit'",
+  ).replace('tailwindcss(),', '// fonts(),\n    tailwindcss(),')
+  const root = project(t, { 'vite.config.ts': commented })
+  const { out } = run(root, 'adopt')
+  assert.match(out, /Your app has no fonts until you add the plugin/)
+})
+
+// The same masked check on the init side: a commented-out import must not read as
+// "already has the plugin", or init skips the one edit it exists to make.
+test('init treats a commented-out import as absent and wires the plugin', (t) => {
+  const commented = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "// import { fonts } from 'tailwind-vite-font-kit'\nimport tailwindcss from '@tailwindcss/vite'",
+  )
+  const root = project(t, { 'vite.config.ts': commented })
+  const { status } = run(root, 'init')
+  assert.equal(status, 0)
+  const vite = read(root, 'vite.config.ts')
+  assert.match(vite, /^import \{ fonts \} from 'tailwind-vite-font-kit'$/m)
+  assert.match(vite, /fonts\(\),\s*\n\s*tailwindcss\(\)/, 'fonts() must precede tailwindcss()')
 })
 
 test('NO_COLOR is honoured across the whole output, not just the diffs', (t) => {

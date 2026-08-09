@@ -23,10 +23,44 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, posix } from 'node:path'
 import { CSS_NAME_RE, generate } from './generate.mjs'
-import { loadFontsConfig, validateFamilies } from './config.mjs'
+import { assertConfigShape, loadFontsConfig, validateFamilies } from './config.mjs'
 
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
+
+/** Turn a user-facing URL prefix into one absolute directory path. */
+function normalizePublicPath(value, label = 'publicPath') {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`[tss-fonts] \`${label}\` must be a non-empty URL path, e.g. '/fonts'.`)
+  }
+  const path = '/' + value.trim().replace(/^\/+|\/+$/g, '')
+  if (path === '/') {
+    throw new Error(`[tss-fonts] \`${label}\` must name a directory, e.g. '/fonts', not '/'.`)
+  }
+  return path
+}
+
+/**
+ * A Vite `base` prefixes the public URL but not Rollup's output filename. Keep those
+ * separate: with base '/docs/', `fonts/x.woff2` is emitted under dist/fonts/ and served
+ * from /docs/fonts/x.woff2. A single `publicPath` used for both worked only at root.
+ */
+function publicPathsForVite(base, publicPath) {
+  const assetPath = normalizePublicPath(publicPath)
+  if (!base || base === '/') return { assetPath, publicPath: assetPath }
+  if (!base.startsWith('/')) {
+    throw new Error(
+      `[tss-fonts] Vite \`base\` must be an absolute path to self-host fonts, got ${JSON.stringify(base)}.`,
+    )
+  }
+  const basePath = normalizePublicPath(base, 'base')
+  // Keep an explicit path that already includes base working: users may have used it as
+  // a workaround before the plugin learned Vite's base semantics.
+  if (assetPath === basePath || assetPath.startsWith(`${basePath}/`)) {
+    return { assetPath: assetPath.slice(basePath.length) || '/', publicPath: assetPath }
+  }
+  return { assetPath, publicPath: posix.join(basePath, assetPath) }
+}
 
 /**
  * @param {import('../index.d.ts').FontsOptions} userOptions
@@ -81,8 +115,10 @@ export function fonts(userOptions = {}) {
     for (const name of candidates) {
       const p = join(r, name)
       if (!existsSync(p)) continue
-      // Cache-busted so a dev-server restart in the same process sees edits.
-      const cfg = await loadFontsConfig(p)
+      // Cache-busted so a dev-server restart in the same process sees edits. Shape-checked
+      // before merging: spreading an array (or a string) into `opts` produces index keys
+      // and no `families`, which would end at the misleading "no families configured".
+      const cfg = assertConfigShape(await loadFontsConfig(p), name)
       Object.assign(opts, { ...cfg, ...userOptions })
       configFile = p
       log(`loaded ${name}`)
@@ -104,6 +140,8 @@ export function fonts(userOptions = {}) {
 
   let root = process.cwd()
   let isServe = false
+  // The URL in generated CSS includes Vite's base; emitted Rollup filenames must not.
+  let assetPath = '/fonts'
   // Assigned in config(), which is the earliest async hook; every other hook runs after.
   /** @type {Awaited<ReturnType<typeof generate>>} */
   let gen
@@ -128,6 +166,9 @@ export function fonts(userOptions = {}) {
       isServe = env.command === 'serve'
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
+      const paths = publicPathsForVite(config.base, opts.publicPath)
+      assetPath = paths.assetPath
+      opts.publicPath = paths.publicPath
       // Paths that must NOT carry the preload header. Defaults cover the two that
       // dominate an SSR page's response count: the hashed build output and the fonts
       // themselves (which would otherwise preload themselves). A non-array (a string is
@@ -279,7 +320,7 @@ export function fonts(userOptions = {}) {
       for (const f of gen.files) {
         this.emitFile({
           type: 'asset',
-          fileName: posix.join(opts.publicPath.replace(/^\//, ''), f),
+          fileName: posix.join(assetPath.replace(/^\//, ''), f),
           source: readFileSync(join(gen.filesDir, f)),
         })
       }

@@ -76,7 +76,11 @@ export interface FontsOptions {
   families?: FontFamily[]
   /** Subsets to keep from Google's per-subset blocks. Default `['latin']`. */
   subsets?: string[]
-  /** URL prefix the fonts are served from. Default `'/fonts'`. */
+  /**
+   * Directory URL path for emitted fonts, relative to Vite's absolute path `base`. Default `'/fonts'`.
+   * With `base: '/docs/'`, these are served from `'/docs/fonts/'`; trailing slashes are
+   * normalized. The path must name a directory rather than the site root.
+   */
   publicPath?: string
   /**
    * `'emit'` (default) — woff2 emitted as build assets; nothing lands in your source tree.
