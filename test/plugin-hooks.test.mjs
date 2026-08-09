@@ -36,10 +36,15 @@ const FAMILY = {
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), 'tss-fonts-hooks-'))
   const realFetch = globalThis.fetch
-  globalThis.fetch = async (url) =>
-    String(url).endsWith('.woff2')
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    // The axis-discovery endpoint `opszPin: 'auto'` asks first. No axes at all means
+    // "not a variable font, nothing to pin" — the cheapest offline answer.
+    if (u.includes('/metadata/fonts/')) return new Response(`)]}'\n{"axes": []}`, { status: 200 })
+    return u.endsWith('.woff2')
       ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 })
       : new Response(CSS2, { status: 200 })
+  }
   t.after(() => {
     globalThis.fetch = realFetch
     rmSync(root, { recursive: true, force: true })
@@ -107,6 +112,37 @@ test('an unknown `output` value fails the build rather than silently caching', a
     () => plugin.config({ root }, { command: 'build' }),
     /`output` must be 'cache' or 'commit'/,
   )
+})
+
+test('a non-array preloadHeader.exclude is rejected, not iterated as characters', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [FAMILY],
+    silent: true,
+    preloadHeader: { exclude: '/static/**' },
+  })
+  await assert.rejects(
+    () => plugin.config({ root }, { command: 'build' }),
+    /`preloadHeader\.exclude` must be an array/,
+  )
+})
+
+// index.d.ts and the README both promise `opszPin: 'auto'`; validation once rejected it
+// as "not a positive number". Pin the promise, on both ways families reach the plugin.
+test("opszPin: 'auto' passes validation from inline options", async (t) => {
+  const { rules } = await routeRules(t, { families: [{ ...FAMILY, opszPin: 'auto' }] })
+  assert.ok(rules['/fonts/**'], 'generation ran to completion')
+})
+
+test("opszPin: 'auto' passes validation from a loaded fonts.config.mjs", async (t) => {
+  const root = sandbox(t)
+  writeFileSync(
+    join(root, 'fonts.config.mjs'),
+    `export default { families: [${JSON.stringify({ ...FAMILY, opszPin: 'auto' })}] }\n`,
+  )
+  const plugin = fonts({ silent: true })
+  const returned = await plugin.config({ root }, { command: 'build' })
+  assert.ok(returned.nitro.routeRules['/fonts/**'], 'generation ran to completion')
 })
 
 // On plain Vite the `nitro` config key is simply ignored: no preloads, no immutable

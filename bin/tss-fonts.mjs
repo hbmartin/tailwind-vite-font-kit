@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { loadFontsConfig, validateFamilies } from '../src/config.mjs'
+import { loadAndValidate, loadFontsConfig, validateFamilies } from '../src/config.mjs'
 import {
   detectTailwindEntry,
   detectViteConfig,
@@ -89,10 +89,10 @@ if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz' && cmd !== 'early-hints'
 // ---------------------------------------------------------------------------
 
 if (cmd === 'early-hints') {
-  // Start resolves `src/server.{ts,tsx}` as the server entry. Match the extension the
-  // project already uses for its routes rather than assuming TypeScript.
-  const isTs = existsSync(join(root, 'tsconfig.json'))
-  const dest = join(root, 'src', isTs ? 'server.ts' : 'server.js')
+  // Start resolves `src/server.ts` as the server entry — always .ts, regardless of
+  // whether the project has a tsconfig. Vite compiles it either way, and the body below
+  // is plain JS, so a JS project loses nothing by the extension.
+  const dest = join(root, 'src', 'server.ts')
   const body =
     `// TanStack Start server entry. Ships the font preloads as 103 Early Hints, which is\n` +
     `// the only preload mechanism that can beat a slow route loader — Start's first byte\n` +
@@ -140,19 +140,32 @@ if (cmd === 'early-hints') {
 // ---------------------------------------------------------------------------
 
 if (cmd === 'opsz') {
-  const nums = (s) => s?.split(',').map(Number).filter(Number.isFinite)
+  // Absent is not the same as invalid: a missing option falls back to the defaults, but
+  // `--sizes foo` or `--weights 0,-400` must be rejected — an empty or negative list
+  // would silently skew the measurement (and the printout) instead of erroring.
+  const nums = (name) => {
+    const raw = opt(name)
+    if (raw === undefined) return undefined
+    const list = String(raw).split(',').map(Number)
+    if (list.some((n) => !Number.isFinite(n) || n <= 0)) {
+      die(`--${name} expects a comma-separated list of positive numbers, got "${raw}"`)
+    }
+    return list
+  }
   const family = args[1] && !args[1].startsWith('--') ? args[1] : null
-  const sizes = nums(opt('sizes'))
-  const weights = nums(opt('weights'))
+  const sizes = nums('sizes')
+  const weights = nums('weights')
 
   const cfgPath = join(root, 'fonts.config.mjs')
   /** @type {import('../index.d.ts').FontFamily[]} */
   let configured = []
   if (existsSync(cfgPath)) {
-    const cfg = await loadFontsConfig(cfgPath).catch(
-      () => /** @type {Record<string, unknown>} */ ({}),
+    // Same load-and-validate path as adopt: a config this tool cannot understand has to
+    // stop the run — --write would otherwise do text surgery on a file it cannot parse.
+    const cfg = await loadAndValidate(cfgPath, 'fonts.config.mjs').catch(
+      /** @param {Error} err */ (err) => die(err.message),
     )
-    if (Array.isArray(cfg.families)) configured = cfg.families
+    configured = /** @type {import('../index.d.ts').FontFamily[]} */ (cfg.families)
   }
 
   // With no family named, measure every family the project already declares — that is
@@ -449,7 +462,10 @@ console.log(`\n${c.g('✓')} wrote ${edits.length} file(s). Backups: *.bak ${c.d
 // so this is a warning when the config actually lacks it, not a dim footnote either way.
 if (cmd === 'adopt') {
   const vite = detectViteConfig(root)
-  const wired = vite && readFileSync(vite, 'utf8').includes('tailwind-vite-font-kit')
+  const vText = vite ? readFileSync(vite, 'utf8') : ''
+  // The package name alone is not wiring — a commented-out line or an unused import
+  // matches it, and the app still has no fonts. Require an actual fonts() call too.
+  const wired = vite && vText.includes('tailwind-vite-font-kit') && /\bfonts\s*\(/.test(vText)
   if (wired) {
     console.log(c.dim(`  ${relative(root, vite)} already has the plugin — you are done.`))
   } else {

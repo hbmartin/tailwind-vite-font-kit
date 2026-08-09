@@ -130,11 +130,21 @@ export function fonts(userOptions = {}) {
       await resolveFamilies(root)
       // Paths that must NOT carry the preload header. Defaults cover the two that
       // dominate an SSR page's response count: the hashed build output and the fonts
-      // themselves (which would otherwise preload themselves).
-      const preloadExcludes =
-        typeof opts.preloadHeader === 'object' && opts.preloadHeader?.exclude
-          ? opts.preloadHeader.exclude
-          : [`${opts.publicPath}/**`, '/assets/**']
+      // themselves (which would otherwise preload themselves). A non-array (a string is
+      // iterable — the loop below would mint one route rule PER CHARACTER) is a config
+      // error, not something to pass through.
+      const excludeOpt =
+        typeof opts.preloadHeader === 'object' ? opts.preloadHeader?.exclude : undefined
+      if (
+        excludeOpt !== undefined &&
+        (!Array.isArray(excludeOpt) || excludeOpt.some((p) => typeof p !== 'string'))
+      ) {
+        throw new Error(
+          `[tss-fonts] \`preloadHeader.exclude\` must be an array of route patterns, ` +
+            `e.g. ['/api/**']`,
+        )
+      }
+      const preloadExcludes = excludeOpt ?? [`${opts.publicPath}/**`, '/assets/**']
       if (opts.output !== 'cache' && opts.output !== 'commit') {
         throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
       }

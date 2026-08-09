@@ -13,10 +13,11 @@ export interface FontsServerEntryOptions {
    */
   earlyHints?: boolean
   /**
-   * Append `Link:` preload headers to the document response. Default true.
+   * Append `Link:` preload headers to the document response. Default false.
    *
-   * The Vite plugin already sets this through Nitro route rules, so leaving both on is
-   * harmless but redundant — turn one off, not both.
+   * The Vite plugin already sets this through Nitro route rules, so turning it on beside
+   * the plugin duplicates the header on every document. Opt in only if you have set
+   * `preloadHeader: false` there.
    */
   linkHeader?: boolean
   /** Override how the Start handler is built. For tests, and for apps that already wrap

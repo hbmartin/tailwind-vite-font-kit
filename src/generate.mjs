@@ -45,12 +45,15 @@ export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
  * check would then reject a cache that was never actually bad. rename(2) is atomic within
  * a filesystem, so a reader sees either the old file or the whole new one.
  *
- * The temp name carries the pid so two writers cannot collide on it.
+ * The temp name carries the pid so two processes cannot collide on it, and a per-call
+ * counter so two concurrent generate() runs in ONE process (a monorepo building two apps,
+ * a dev server beside a build) cannot share or unlink each other's temp file either.
  * @param {string} path
  * @param {string | Buffer} data
  */
+let tmpSeq = 0
 function writeAtomic(path, data) {
-  const tmp = `${path}.${process.pid}.tmp`
+  const tmp = `${path}.${process.pid}.${tmpSeq++}.tmp`
   try {
     writeFileSync(tmp, data)
     renameSync(tmp, path)
@@ -74,7 +77,7 @@ const FONT_HOSTS = new Set(['fonts.gstatic.com'])
  * @param {string} src the `src: url(...)` taken from a css2 response
  * @param {string} family for the error message
  */
-function assertFontHost(src, family) {
+export function assertFontHost(src, family) {
   let host
   try {
     host = new URL(src).host
@@ -346,6 +349,10 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       const weight = grab(/font-weight:\s*([^;]+)/, 'font-weight').trim()
       const style = grab(/font-style:\s*([^;]+)/, 'font-style').trim()
       const src = grab(/src:\s*url\(([^)]+)\)/, 'src')
+      // Validated for BOTH strategies: 'cdn' writes this URL straight into the emitted
+      // CSS, so an off-host src is just as much a poisoned css2 response there as it is
+      // on the self-host download path.
+      assertFontHost(src, fam.name)
       const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
 
       let href = src
@@ -355,7 +362,6 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
           // Google's own filenames already carry a content hash, so a fixed name is
           // safe to serve `immutable`.
           file = `${slug(fam.name)}-${src.split('/').pop()}`
-          assertFontHost(src, fam.name)
           const buf = Buffer.from(await (await fetchRetry(src, { log })).arrayBuffer())
           writeAtomic(join(filesDir, file), buf)
           seenSrc.set(src, file)

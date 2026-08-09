@@ -61,11 +61,15 @@
     "verify:package": "npm publish --dry-run --ignore-scripts"
   },
   "peerDependencies": {
+    "@tanstack/react-start": "^1",
     "fontkit": "^2",
     "vite": "^7 || ^8",
     "wawoff2": "^2"
   },
   "peerDependenciesMeta": {
+    "@tanstack/react-start": {
+      "optional": true
+    },
     "fontkit": {
       "optional": true
     },
