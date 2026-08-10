@@ -1,0 +1,33 @@
+{
+  "measuredAt": "2026-08-10T06:49:12.799Z",
+  "worst": {
+    "k": "mobile/hero",
+    "cls": 0.12320640767191973
+  },
+  "rows": [
+    {
+      "k": "desktop/hero",
+      "cls": 0.08266615346272786
+    },
+    {
+      "k": "desktop/tailwind",
+      "cls": 0.010262250995635987
+    },
+    {
+      "k": "desktop/normal",
+      "cls": 0.0076765869140625
+    },
+    {
+      "k": "mobile/hero",
+      "cls": 0.12320640767191973
+    },
+    {
+      "k": "mobile/tailwind",
+      "cls": 0.05878631389162937
+    },
+    {
+      "k": "mobile/normal",
+      "cls": 0.03340073526235674
+    }
+  ]
+}
