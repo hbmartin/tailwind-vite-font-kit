@@ -172,7 +172,9 @@ test('the backup note requires every backup path to be ignored', (t) => {
     'vite.config.ts': VITE_CONFIG,
   })
   initGit(root)
-  assert.match(run(root, 'init').out, /add '\*\.bak' to \.gitignore/)
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.match(out, /add '\*\.bak' to \.gitignore/)
 })
 
 // ---------------------------------------------------------------------------
