@@ -213,8 +213,12 @@ export function fonts(userOptions = {}) {
   // The URL in generated CSS includes Vite's base; emitted Rollup filenames must not.
   let assetPath = '/fonts'
   // The server-side request path for fonts — Nitro patterns and the dev middleware use
-  // this, never `opts.publicPath`, which under a full-URL base carries the CDN origin.
+  // this, never `publicPath`, which under a full-URL base carries the CDN origin.
   let routePath = '/fonts'
+  // The generated href prefix for this config run. Keep it separate from `opts.publicPath`:
+  // Vite can invoke config() more than once on a shared plugin instance, and rewriting the
+  // configured value would make the next invocation resolve an already-resolved URL.
+  let publicPath = '/fonts'
   // Whether any family self-hosts: decides how loudly base problems are reported.
   let selfHosts = true
   // What config() saw as `base`, checked against the final value in configResolved().
@@ -256,7 +260,7 @@ export function fonts(userOptions = {}) {
       })
       assetPath = paths.assetPath
       routePath = paths.routePath
-      opts.publicPath = paths.publicPath
+      publicPath = paths.publicPath
       // When assets emit at the bundle root, font filenames and documents share one
       // namespace. No route pattern can select only the fonts without also selecting HTML.
       const fontsShareDocumentNamespace = paths.assetPath === '/'
@@ -279,9 +283,12 @@ export function fonts(userOptions = {}) {
       // Both defaults are request paths, so both carry the base: hashed build output is
       // requested at <base>/assets/**, and an unprefixed '/assets/**' matches none of it.
       // When fonts share the bundle root, no pattern can single them out — skip it.
+      const assetsDir = (config.build?.assetsDir ?? 'assets').replace(/^\/+|\/+$/g, '')
       const preloadExcludes = excludeOpt ?? [
         ...(fontsShareDocumentNamespace ? [] : [`${routePath}/**`]),
-        posix.join(paths.basePath || '/', 'assets') + '/**',
+        // An empty assetsDir puts chunks at the bundle root, where excluding the whole
+        // namespace would also suppress preloads on documents.
+        ...(assetsDir ? [posix.join(paths.basePath || '/', assetsDir) + '/**'] : []),
       ]
       if (opts.output !== 'cache' && opts.output !== 'commit') {
         throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
@@ -290,7 +297,7 @@ export function fonts(userOptions = {}) {
       mkdirSync(outDir, { recursive: true })
 
       const t0 = Date.now()
-      gen = await generate(opts, outDir, log, warn)
+      gen = await generate({ ...opts, publicPath }, outDir, log, warn)
       if (!gen.fromCache) log(`generation took ${Date.now() - t0}ms`)
 
       // If the user asked for real files on disk, write them HERE, not in buildStart.
@@ -458,7 +465,7 @@ export function fonts(userOptions = {}) {
       if (resolved.plugins?.some((p) => p.name?.includes('nitro'))) return
       warn(
         `no Nitro plugin found, so the preload \`Link:\` header and \`immutable\` caching ` +
-          `on ${opts.publicPath}/ were not applied — those ship as Nitro route rules.\n` +
+          `on ${publicPath}/ were not applied — those ship as Nitro route rules.\n` +
           `  The fonts and the metric fallbacks still work. To preload without Nitro, set ` +
           `\`preloadHeader: false\` and render the links yourself:\n` +
           `    import { fontPreloads } from 'virtual:fonts'`,

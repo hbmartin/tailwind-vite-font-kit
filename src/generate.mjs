@@ -21,7 +21,7 @@ import { fallbackFaces } from './metrics.mjs'
 import { leadingUtilities } from './leading.mjs'
 import { googleUrl } from './opsz.mjs'
 import { weightsFromSpec } from './detect.mjs'
-import { assertFontHost } from './font-host.mjs'
+import { assertFontHost, redirectRefusalError } from './font-host.mjs'
 
 // Kept as an internal re-export for callers and tests that already import this guard from
 // generate.mjs. Its implementation lives in a dependency-free shared module.
@@ -111,13 +111,8 @@ async function fetchRetry(
       // with the reason only in err.cause. It is deterministic — retrying re-refuses
       // the same redirect — and it is the origin guard tripping, not a network hiccup,
       // so name it instead of pointing the user at CI caching.
-      if (redirect === 'error' && /redirect/i.test(String(err?.cause?.message ?? ''))) {
-        throw new Error(
-          `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
-            `would hand the download to a different origin than the one just approved. ` +
-            `Check for an intercepting proxy or captive portal.`,
-        )
-      }
+      const redirectError = redirect === 'error' ? redirectRefusalError(url, err) : null
+      if (redirectError) throw redirectError
       lastErr = err
       if (err.permanent || i === tries - 1) break
       const wait = baseDelay * 2 ** i
@@ -326,8 +321,9 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     // identical — only the src changes. No other tool offers this toggle: fontless hard-
     // rewrites every remote src, and unplugin-fonts' google provider never downloads.
     const selfHost = (fam.strategy ?? 'self-host') === 'self-host'
+    const rangesBySubset = new Map()
 
-    for (const [, , block] of wanted) {
+    for (const [, subset, block] of wanted) {
       // If Google reshapes the css2 output, fail with a message naming the family and
       // URL instead of a bare TypeError on a null match.
       const grab = (re, what) => {
@@ -347,6 +343,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       // on the self-host download path.
       assertFontHost(src, fam.name)
       const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
+      if (!rangesBySubset.has(subset)) rangesBySubset.set(subset, range)
 
       let href = src
       if (selfHost) {
@@ -406,11 +403,6 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     // than its Latin one. A single fallback face calculated from opts.subsets[0] makes
     // every other selected script reflow on swap. Mirror Google's unicode-range split
     // so the browser selects the matching metric face for each script.
-    const rangesBySubset = new Map()
-    for (const [, subset, block] of wanted) {
-      if (rangesBySubset.has(subset)) continue
-      rangesBySubset.set(subset, /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim())
-    }
     // Keyed on the subsets this family actually SERVES, not on how many the config asks
     // for: a family covering only latin out of ['latin', 'greek'] needs no ranges at
     // all — its one set of fallback faces may go unscoped, exactly like a
@@ -442,21 +434,21 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     // subsets by the CSS they produce: each distinct group becomes one set of faces
     // scoped to the union of its ranges, and a group covering every served subset
     // needs no range at all.
-    /** @type {Map<string, {names: string[], ranges: string[]}>} */
+    /** @type {Map<string, {ranges: string[]}>} */
     const bySignature = new Map()
+    /** @type {string[] | undefined} */
+    let fallbackNames
     for (const [subset, range] of rangesBySubset) {
       const result = fallbackFaces(METRICS, fam.name, subset, famWeights, log, warnOnce)
+      fallbackNames ??= result.names
       const group = bySignature.get(result.css)
       if (group) {
         if (range) group.ranges.push(range)
       } else {
-        bySignature.set(result.css, { names: result.names, ranges: range ? [range] : [] })
+        bySignature.set(result.css, { ranges: range ? [range] : [] })
       }
     }
-    /** @type {string[]} */
-    let names = []
     for (const [css, group] of bySignature) {
-      if (!names.length) names = group.names
       if (!css) continue
       // Every fallback rule is single-line with exactly one closing brace, so this
       // appends the descriptor to each rule in the group.
@@ -466,6 +458,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
           : css,
       )
     }
+    const names = fallbackNames ?? []
 
     // Plain `@theme`, NEVER `@theme inline`. Under `inline` Tailwind bakes the literal
     // value into `.font-*` utilities and into `--default-font-family`, so nothing

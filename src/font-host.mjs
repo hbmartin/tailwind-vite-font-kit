@@ -19,10 +19,27 @@ export function assertFontHost(src, family) {
   // the download's transport security (and becomes mixed content in `strategy: 'cdn'`).
   // A custom port is likewise not Google's font origin.
   if (url.protocol !== 'https:' || url.port || !FONT_HOSTS.has(url.hostname)) {
+    const actual = url.origin === 'null' ? url.href : url.origin
     throw new Error(
-      `[tss-fonts] ${family}: refusing to download a font from ${url.origin} — ` +
+      `[tss-fonts] ${family}: refusing to download a font from ${actual} — ` +
         `expected https://${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
     )
   }
-  return url
+}
+
+/**
+ * Turn Node's generic fetch failure for `redirect: 'error'` into the same actionable
+ * diagnostic everywhere a validated font binary is downloaded.
+ * @param {string} url
+ * @param {unknown} err
+ * @returns {Error | null}
+ */
+export function redirectRefusalError(url, err) {
+  const cause = /** @type {{cause?: {message?: unknown}}} */ (err)?.cause
+  if (!/redirect/i.test(String(cause?.message ?? ''))) return null
+  return new Error(
+    `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
+      `would hand the download to a different origin than the one just approved. ` +
+      `Check for an intercepting proxy or captive portal.`,
+  )
 }

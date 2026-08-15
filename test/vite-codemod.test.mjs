@@ -13,6 +13,17 @@ test('mask blanks a regex body instead of reading its quote as a string opener',
   assert.ok(!masked.includes(`['"]`), 'the regex body is blanked')
 })
 
+test('a statement-position regex cannot hide later plugin wiring', () => {
+  const src =
+    `import { fonts } from 'tailwind-vite-font-kit'\n` +
+    `if (enabled) /['"]/g.test(value)\n` +
+    `export default { plugins: [fonts(), tailwindcss()] }\n`
+  const masked = mask(src)
+  assert.equal(masked.length, src.length, 'masking must preserve length')
+  assert.match(masked, /fonts\(\)/, 'the raw newline must end the misclassified string')
+  assert.equal(analyzeFontsPluginWiring(src).wired, true)
+})
+
 test('mask keeps division as division', () => {
   const src = `const half = total / 2\nconst quarter = total / 2 / 2\n`
   assert.equal(mask(src), src)
@@ -53,6 +64,41 @@ test('active import detection follows default, renamed and namespace bindings', 
   assert.equal(dynamic.packageImports, 1)
   assert.deepEqual(dynamic.bindings, [])
   assert.equal(dynamic.wired, false)
+})
+
+test('a standalone binding is not called by a same-named member access', () => {
+  const source = `import { fonts } from 'tailwind-vite-font-kit'\n` + `somePlugin.fonts()\n`
+  const state = analyzeFontsPluginWiring(source)
+  assert.deepEqual(state.bindings, ['fonts'])
+  assert.deepEqual(state.calledBindings, [])
+  assert.equal(state.wired, false)
+})
+
+test('active wiring detection follows CommonJS destructured and namespace bindings', () => {
+  for (const source of [
+    `const { fonts } = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fonts()] }\n`,
+    `const { fonts: fontPlugin } = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fontPlugin()] }\n`,
+    `const fontKit = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fontKit.fonts()] }\n`,
+    `module.exports = { plugins: [require('tailwind-vite-font-kit').fonts()] }\n`,
+  ]) {
+    assert.equal(analyzeFontsPluginWiring(source).wired, true, source)
+  }
+})
+
+test('CommonJS-shaped strings and comments are not wiring', () => {
+  const stringOnly = analyzeFontsPluginWiring(
+    `const note = "require('tailwind-vite-font-kit').fonts()"\n`,
+  )
+  assert.equal(stringOnly.packageImports, 0)
+  assert.equal(stringOnly.wired, false)
+  assert.equal(stringOnly.commentOnlyMention, false)
+
+  const commentOnly = analyzeFontsPluginWiring(
+    `// const { fonts } = require('tailwind-vite-font-kit')\n// fonts()\n`,
+  )
+  assert.equal(commentOnly.packageImports, 0)
+  assert.equal(commentOnly.wired, false)
+  assert.equal(commentOnly.commentOnlyMention, true)
 })
 
 const HEADER = `import { defineConfig } from 'vite'\nimport tailwindcss from '@tailwindcss/vite'\n\n`
@@ -113,6 +159,15 @@ test('can insert only the call when a callable import already exists', () => {
   const out = insertFontsPlugin(src, { addImport: false, callee: 'fontPlugin' })
   assert.equal(count(out, "from 'tailwind-vite-font-kit'"), 1)
   assert.match(out, /plugins: \[fontPlugin\(\), tailwindcss\(\)\]/)
+})
+
+test('can insert a missing CommonJS-bound call into module.exports', () => {
+  const src =
+    `const tailwindcss = require('@tailwindcss/vite')\n` +
+    `const { fonts: fontPlugin } = require('tailwind-vite-font-kit')\n\n` +
+    `module.exports = { plugins: [tailwindcss()] }\n`
+  const out = insertFontsPlugin(src, { addImport: false, callee: 'fontPlugin' })
+  assert.match(out, /module\.exports = \{ plugins: \[fontPlugin\(\), tailwindcss\(\)\] \}/)
 })
 
 test('leaves a multiline final import intact', () => {

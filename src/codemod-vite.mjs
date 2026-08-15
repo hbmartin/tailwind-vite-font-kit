@@ -28,10 +28,15 @@ const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
  * quote inside `/['"]/g` no longer flips the scanner into string mode, and division
  * stays division.
  */
-export function mask(src, { keepStrings = false } = {}) {
-  const out = src.split('')
-  const blank = (from, to) => {
+function maskViews(src) {
+  const active = src.split('')
+  const withStrings = src.split('')
+  const blank = (out, from, to) => {
     for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
+  }
+  const blankBoth = (from, to) => {
+    blank(active, from, to)
+    blank(withStrings, from, to)
   }
 
   // Whether a `/` at `i` can start a regex literal. The masked prefix is final by the
@@ -39,23 +44,31 @@ export function mask(src, { keepStrings = false } = {}) {
   // and string bodies never fake an expression position.
   const regexCanStart = (i) => {
     let k = i - 1
-    while (k >= 0 && /\s/.test(out[k])) k--
+    while (k >= 0 && /\s/.test(active[k])) k--
     if (k < 0) return true
-    if ('(,=:[!&|?{};+-*%<>~^'.includes(out[k])) return true
+    if ('(,=:[!&|?{};+-*%<>~^'.includes(active[k])) return true
     let w = k
-    while (w >= 0 && /[\w$]/.test(out[w])) w--
+    while (w >= 0 && /[\w$]/.test(active[w])) w--
     return /^(?:return|typeof|instanceof|case|delete|void|throw|new|in|of|do|else|yield|await)$/.test(
       src.slice(w + 1, k + 1),
     )
   }
 
-  /** `"` or `'` at i: scan to the closing quote. */
+  /** `"` or `'` at i: scan to the closing quote or an unescaped line break. */
   const scanString = (i) => {
     const q = src[i]
     let j = i + 1
-    while (j < src.length && src[j] !== q) j += src[j] === '\\' ? 2 : 1
-    if (!keepStrings) blank(i + 1, j) // keep the quotes: they delimit the import specifier
-    return j + 1
+    while (j < src.length && src[j] !== q && src[j] !== '\n' && src[j] !== '\r') {
+      if (src[j] !== '\\') {
+        j++
+      } else {
+        // Escapes include line continuations. A CRLF continuation consumes both of its
+        // line-ending characters; every other escape consumes the following character.
+        j += src[j + 1] === '\r' && src[j + 2] === '\n' ? 3 : 2
+      }
+    }
+    blank(active, i + 1, j) // keep the quotes: they delimit the import specifier
+    return src[j] === q ? j + 1 : j
   }
 
   /** '`' at i: template literal, with `${…}` scanned as code. */
@@ -68,11 +81,11 @@ export function mask(src, { keepStrings = false } = {}) {
         continue
       }
       if (src[j] === '`') {
-        if (!keepStrings) blank(seg, j)
+        blank(active, seg, j)
         return j + 1
       }
       if (src[j] === '$' && src[j + 1] === '{') {
-        if (!keepStrings) blank(seg, j)
+        blank(active, seg, j)
         j = scanCode(j + 2, true)
         if (j < src.length) j++ // step over the closing '}'
         seg = j
@@ -80,7 +93,7 @@ export function mask(src, { keepStrings = false } = {}) {
       }
       j++
     }
-    if (!keepStrings) blank(seg, j)
+    blank(active, seg, j)
     return j
   }
 
@@ -100,7 +113,7 @@ export function mask(src, { keepStrings = false } = {}) {
       } else if (src[j] === '[') {
         inClass = true
       } else if (src[j] === '/') {
-        blank(i + 1, j) // always: a package name inside a regex is never wiring
+        blankBoth(i + 1, j) // a package name inside a regex is never wiring
         j++
         while (j < src.length && /[a-z]/i.test(src[j])) j++ // flags
         return j
@@ -118,12 +131,12 @@ export function mask(src, { keepStrings = false } = {}) {
       if (two === '//') {
         const end = src.indexOf('\n', i)
         const stop = end === -1 ? src.length : end
-        blank(i, stop)
+        blankBoth(i, stop)
         i = stop
       } else if (two === '/*') {
         const end = src.indexOf('*/', i + 2)
         const stop = end === -1 ? src.length : end + 2
-        blank(i, stop)
+        blankBoth(i, stop)
         i = stop
       } else if (src[i] === '"' || src[i] === "'") {
         i = scanString(i)
@@ -147,15 +160,19 @@ export function mask(src, { keepStrings = false } = {}) {
   }
 
   scanCode(0)
-  return out.join('')
+  return { active: active.join(''), withStrings: withStrings.join('') }
+}
+
+export function mask(src, { keepStrings = false } = {}) {
+  const views = maskViews(src)
+  return keepStrings ? views.withStrings : views.active
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** Callable local expressions introduced by one static root-package import statement. */
+/** Callable local expressions introduced by one visible static root-package import. */
 function callableBindings(statement) {
-  const kept = mask(statement, { keepStrings: true })
-  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(kept)
+  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(statement)
   if (!match || /^type\b/.test(match[1].trim())) return []
 
   const clause = match[1].trim()
@@ -183,20 +200,76 @@ function callableBindings(statement) {
 }
 
 /**
- * Inspect active imports with es-module-lexer, then use the masked source only to see
- * whether a callable binding is invoked. Package imports from subpaths and dynamic or
- * side-effect imports count as mentions, but not as Vite-plugin wiring.
+ * Find static CommonJS requires on the already-masked code view. String bodies are blank,
+ * so a require-shaped ordinary string cannot become wiring; matching quote offsets still
+ * point into `source`, where the actual package specifier can be read.
+ */
+function commonJsWiring(source, active) {
+  const bindings = []
+  const directCalls = []
+  let packageRequires = 0
+  const requireCall = /\brequire\s*\(\s*(['"])[ \t]*\1\s*\)/g
+
+  for (const match of active.matchAll(requireCall)) {
+    const quoteOffset = match[0].search(/['"]/)
+    const openQuote = match.index + quoteOffset
+    const closeQuote = active.indexOf(match[1], openQuote + 1)
+    const specifier = source.slice(openQuote + 1, closeQuote)
+    if (specifier !== PACKAGE_SPECIFIER && !specifier.startsWith(`${PACKAGE_SPECIFIER}/`)) {
+      continue
+    }
+    packageRequires++
+    if (specifier !== PACKAGE_SPECIFIER) continue
+
+    const before = active.slice(0, match.index)
+    const declaration = /\b(?:const|let|var)\s+(\{([^{}]*)\}|[\w$]+)\s*=\s*$/.exec(before)
+    const after = active.slice(match.index + match[0].length)
+    const member = /^\s*\.\s*(fonts|default)\b/.exec(after)
+    const calledDirectly = member && /^\s*\(/.test(after.slice(member[0].length))
+
+    if (declaration?.[2] !== undefined) {
+      for (const raw of declaration[2].split(',')) {
+        const part = raw.trim()
+        const property = /^(fonts|default)(?:\s*:\s*([\w$]+))?(?:\s*=.*)?$/.exec(part)
+        if (property) bindings.push(property[2] ?? property[1])
+      }
+    } else if (declaration) {
+      const local = declaration[1]
+      if (member) bindings.push(local)
+      else bindings.push(`${local}.fonts`, `${local}.default`)
+    }
+
+    if (calledDirectly) directCalls.push(`require(${JSON.stringify(specifier)}).${member[1]}`)
+  }
+
+  return { packageRequires, bindings, directCalls }
+}
+
+/**
+ * Inspect active imports with es-module-lexer and static CommonJS require calls, then use
+ * the masked source only to see whether a callable binding is invoked. Package references
+ * from subpaths and dynamic or side-effect imports count as mentions, but not as wiring.
  *
  * @param {string} source
  * @returns {{parseError: unknown, packageImports: number, bindings: string[],
- *            calledBindings: string[], wired: boolean}}
+ *            calledBindings: string[], wired: boolean, commentOnlyMention: boolean}}
  */
 export function analyzeFontsPluginWiring(source) {
+  const { active, withStrings } = maskViews(source)
+  const commentOnlyMention =
+    source.includes(PACKAGE_SPECIFIER) && !withStrings.includes(PACKAGE_SPECIFIER)
   let imports
   try {
     ;[imports] = parse(source)
   } catch (parseError) {
-    return { parseError, packageImports: 0, bindings: [], calledBindings: [], wired: false }
+    return {
+      parseError,
+      packageImports: 0,
+      bindings: [],
+      calledBindings: [],
+      wired: false,
+      commentOnlyMention,
+    }
   }
 
   const packageImports = imports.filter(
@@ -208,24 +281,27 @@ export function analyzeFontsPluginWiring(source) {
     ...new Set(
       packageImports.flatMap((entry) => {
         if (entry.n !== PACKAGE_SPECIFIER || entry.d !== -1) return []
-        const statement = source.slice(entry.ss, entry.se)
+        const statement = withStrings.slice(entry.ss, entry.se)
         if (!/^\s*import\b/.test(statement)) return []
         return callableBindings(statement)
       }),
     ),
   ]
-  const active = mask(source)
+  const commonJs = commonJsWiring(source, active)
+  bindings.push(...commonJs.bindings.filter((binding) => !bindings.includes(binding)))
   const calledBindings = bindings.filter((binding) => {
     const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
-    return new RegExp(`(?<![\\w$])${expression}\\s*\\(`).test(active)
+    return new RegExp(`(?<![\\w$.])${expression}\\s*\\(`).test(active)
   })
+  calledBindings.push(...commonJs.directCalls)
 
   return {
     parseError: null,
-    packageImports: packageImports.length,
+    packageImports: packageImports.length + commonJs.packageRequires,
     bindings,
     calledBindings,
     wired: calledBindings.length > 0,
+    commentOnlyMention,
   }
 }
 
@@ -287,8 +363,9 @@ const PLUGINS_ANCHOR_RE = /(?:\bplugins\s*:|\bplugins\s*(?::[^=\n]*)?=>?)\s*$/
 const CHAIN_RE = {
   // The call parens of defineConfig/mergeConfig, or the parens around an arrow's object return.
   '(': /(?:\b(?:defineConfig|mergeConfig)|=>)\s*$/,
-  // An object literal in argument position, an arrow or `return` body, or the default export.
-  '{': /(?:[(,]|=>|\breturn\b|\bexport\s+default\b)\s*$/,
+  // An object literal in argument position, an arrow or `return` body, or either module
+  // system's default export.
+  '{': /(?:[(,]|=>|\breturn\b|\bexport\s+default\b|\bmodule\s*\.\s*exports\s*=)\s*$/,
 }
 
 // `const config = {…}` is a link only when that binding is the one handed to the root. The

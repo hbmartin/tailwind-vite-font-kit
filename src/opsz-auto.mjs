@@ -17,7 +17,7 @@
 import { hasOpszAxis, pinOpsz } from './opsz.mjs'
 import { detectAxes, planOpsz, toSfnt } from './opsz-policy.mjs'
 import { weightsFromSpec } from './detect.mjs'
-import { assertFontHost } from './font-host.mjs'
+import { assertFontHost, redirectRefusalError } from './font-host.mjs'
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -123,12 +123,8 @@ async function get(url, { redirect = 'follow' } = {}) {
   } catch (err) {
     // A refused redirect surfaces as TypeError('fetch failed') with the reason only in
     // err.cause — name the guard that tripped instead of leaking the generic message.
-    if (redirect === 'error' && /redirect/i.test(String(err?.cause?.message ?? ''))) {
-      throw new Error(
-        `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
-          `would hand the download to a different origin than the one just approved.`,
-      )
-    }
+    const redirectError = redirect === 'error' ? redirectRefusalError(url, err) : null
+    if (redirectError) throw redirectError
     throw err
   }
   if (!res.ok) throw new Error(`[tss-fonts] HTTP ${res.status} for ${url}`)

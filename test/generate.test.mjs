@@ -236,6 +236,14 @@ test('font URLs must use HTTPS on the approved gstatic origin', () => {
     () => assertFontHost('https://fonts.gstatic.com:444/s/fake/v1/abc123.woff2', 'Fakefam'),
     /expected https:\/\/fonts\.gstatic\.com/,
   )
+  assert.throws(
+    () => assertFontHost('data:font/woff2,not-a-google-font', 'Fakefam'),
+    (err) => {
+      assert.match(err.message, /from data:font\/woff2,not-a-google-font/)
+      assert.ok(!err.message.includes('from null'))
+      return true
+    },
+  )
 })
 
 test('self-hosted font downloads reject redirects away from the approved origin', async (t) => {
