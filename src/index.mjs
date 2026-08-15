@@ -28,38 +28,108 @@ import { assertConfigShape, loadFontsConfig, validateFamilies } from './config.m
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
 
-/** Turn a user-facing URL prefix into one absolute directory path. */
+/** Turn a user-facing URL prefix into one absolute directory path. `'/'` is legal —
+ *  fonts then live at the bundle root, which worked before base handling existed. */
 function normalizePublicPath(value, label = 'publicPath') {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`[tss-fonts] \`${label}\` must be a non-empty URL path, e.g. '/fonts'.`)
   }
-  const path = '/' + value.trim().replace(/^\/+|\/+$/g, '')
-  if (path === '/') {
-    throw new Error(`[tss-fonts] \`${label}\` must name a directory, e.g. '/fonts', not '/'.`)
+  return '/' + value.trim().replace(/^\/+|\/+$/g, '')
+}
+
+/** Mirror the parts of Vite's base resolution that affect generated URLs. Config hooks
+ * see the raw user value, while configResolved sees this command-specific form. */
+function viteBaseForCommand(base, { isServe = false } = {}) {
+  if (base == null) return '/'
+  if (base === '' || base === './') return isServe ? '/' : './'
+  if (base.startsWith('.')) return '/'
+
+  const external = /^(?:https?:)?\/\//.test(base)
+  if (!isServe && external) return base.replace(/\/+$/, '') + '/'
+
+  try {
+    const resolved = new URL(base, 'http://vite.dev').pathname
+    return (resolved.startsWith('/') ? resolved : `/${resolved}`).replace(/\/+$/, '') + '/'
+  } catch {
+    // Vite will report a malformed base itself. Keep comparison deterministic and let the
+    // existing public-path parser produce this package's more specific warning.
+    return base.replace(/\/+$/, '') + '/'
   }
-  return path
 }
 
 /**
  * A Vite `base` prefixes the public URL but not Rollup's output filename. Keep those
  * separate: with base '/docs/', `fonts/x.woff2` is emitted under dist/fonts/ and served
  * from /docs/fonts/x.woff2. A single `publicPath` used for both worked only at root.
+ *
+ * Every Vite-legal base has to come out of here with a working build — a full URL (CDN
+ * deploy) and a relative './' are documented values, and rejecting them broke configs
+ * that self-host nothing at all. Returns:
+ *   assetPath   where Rollup emits / the assets directory writes — never carries base
+ *   publicPath  what goes into hrefs; under a URL base this carries the origin
+ *   routePath   the path font requests take on THIS server — Nitro patterns and the dev
+ *               middleware key on it; equals publicPath except under a URL base
+ *   basePath    the base's path portion, for prefixing other route patterns ('' at root)
+ * @param {string | undefined} base
+ * @param {string} publicPath
+ * @param {{isServe?: boolean, selfHost?: boolean,
+ *          warn?: (message: string) => void}} [context]
  */
-function publicPathsForVite(base, publicPath) {
+function publicPathsForVite(
+  base,
+  publicPath,
+  { isServe = false, selfHost = true, warn = () => {} } = {},
+) {
   const assetPath = normalizePublicPath(publicPath)
-  if (!base || base === '/') return { assetPath, publicPath: assetPath }
+  if (!base || base === '/') {
+    return { assetPath, publicPath: assetPath, routePath: assetPath, basePath: '' }
+  }
+  // A full-URL base (CDN deploy). Only hrefs carry the origin, and only in the build —
+  // dev serves off the local server, where just the path portion applies. The path
+  // portion stays in the route patterns: an origin-pull CDN forwards it to this server.
+  if (/^(?:https?:)?\/\//.test(base)) {
+    let url
+    try {
+      url = new URL(base.startsWith('//') ? `https:${base}` : base)
+    } catch {
+      warn(`could not parse Vite \`base\` ${JSON.stringify(base)} — font URLs will not carry it.`)
+      return { assetPath, publicPath: assetPath, routePath: assetPath, basePath: '' }
+    }
+    const basePath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+    const routePath = assetPath === '/' ? basePath || '/' : posix.join(basePath || '/', assetPath)
+    return {
+      assetPath,
+      publicPath: isServe ? routePath : url.origin + routePath,
+      routePath,
+      basePath,
+    }
+  }
+  // A relative base ('./'). Vite rewrites ITS asset URLs per importing page, but the
+  // URLs in the generated CSS are written here, with no page to be relative to — they
+  // stay root-absolute, which is exactly what pre-base versions emitted. Only worth a
+  // warning when fonts are actually self-hosted; a pure-CDN config never touches them.
   if (!base.startsWith('/')) {
-    throw new Error(
-      `[tss-fonts] Vite \`base\` must be an absolute path to self-host fonts, got ${JSON.stringify(base)}.`,
-    )
+    if (selfHost) {
+      warn(
+        `Vite \`base\` is relative (${JSON.stringify(base)}), which the generated font URLs ` +
+          `cannot follow — they stay root-absolute (${assetPath}/...). Self-hosted fonts only ` +
+          `resolve if the site deploys at the domain root; use an absolute or full-URL base, ` +
+          `or \`strategy: 'cdn'\`.`,
+      )
+    }
+    return { assetPath, publicPath: assetPath, routePath: assetPath, basePath: '' }
   }
   const basePath = normalizePublicPath(base, 'base')
   // Keep an explicit path that already includes base working: users may have used it as
   // a workaround before the plugin learned Vite's base semantics.
   if (assetPath === basePath || assetPath.startsWith(`${basePath}/`)) {
-    return { assetPath: assetPath.slice(basePath.length) || '/', publicPath: assetPath }
+    const stripped = assetPath.slice(basePath.length) || '/'
+    return { assetPath: stripped, publicPath: assetPath, routePath: assetPath, basePath }
   }
-  return { assetPath, publicPath: posix.join(basePath, assetPath) }
+  // Fonts at the bundle root occupy the base namespace itself. Avoid a trailing slash
+  // sentinel here: downstream route patterns must make that namespace collision explicit.
+  const joined = assetPath === '/' ? basePath : posix.join(basePath, assetPath)
+  return { assetPath, publicPath: joined, routePath: joined, basePath }
 }
 
 /**
@@ -142,6 +212,16 @@ export function fonts(userOptions = {}) {
   let isServe = false
   // The URL in generated CSS includes Vite's base; emitted Rollup filenames must not.
   let assetPath = '/fonts'
+  // The server-side request path for fonts — Nitro patterns and the dev middleware use
+  // this, never `opts.publicPath`, which under a full-URL base carries the CDN origin.
+  let routePath = '/fonts'
+  // Whether any family self-hosts: decides how loudly base problems are reported.
+  let selfHosts = true
+  // What config() saw as `base`, checked against the final value in configResolved().
+  /** @type {string | undefined} */
+  let assumedBase
+  // Vite's command-specific resolution of assumedBase, used for generation and comparison.
+  let generatedBase = '/'
   // Assigned in config(), which is the earliest async hook; every other hook runs after.
   /** @type {Awaited<ReturnType<typeof generate>>} */
   let gen
@@ -166,9 +246,20 @@ export function fonts(userOptions = {}) {
       isServe = env.command === 'serve'
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
-      const paths = publicPathsForVite(config.base, opts.publicPath)
+      assumedBase = config.base
+      generatedBase = viteBaseForCommand(config.base, { isServe })
+      selfHosts = opts.families.some((f) => (f.strategy ?? 'self-host') === 'self-host')
+      const paths = publicPathsForVite(generatedBase, opts.publicPath, {
+        isServe,
+        selfHost: selfHosts,
+        warn,
+      })
       assetPath = paths.assetPath
+      routePath = paths.routePath
       opts.publicPath = paths.publicPath
+      // When assets emit at the bundle root, font filenames and documents share one
+      // namespace. No route pattern can select only the fonts without also selecting HTML.
+      const fontsShareDocumentNamespace = paths.assetPath === '/'
       // Paths that must NOT carry the preload header. Defaults cover the two that
       // dominate an SSR page's response count: the hashed build output and the fonts
       // themselves (which would otherwise preload themselves). A non-array (a string is
@@ -185,7 +276,13 @@ export function fonts(userOptions = {}) {
             `e.g. ['/api/**']`,
         )
       }
-      const preloadExcludes = excludeOpt ?? [`${opts.publicPath}/**`, '/assets/**']
+      // Both defaults are request paths, so both carry the base: hashed build output is
+      // requested at <base>/assets/**, and an unprefixed '/assets/**' matches none of it.
+      // When fonts share the bundle root, no pattern can single them out — skip it.
+      const preloadExcludes = excludeOpt ?? [
+        ...(fontsShareDocumentNamespace ? [] : [`${routePath}/**`]),
+        posix.join(paths.basePath || '/', 'assets') + '/**',
+      ]
       if (opts.output !== 'cache' && opts.output !== 'commit') {
         throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
       }
@@ -256,16 +353,20 @@ export function fonts(userOptions = {}) {
       // returns is the LAST argument, i.e. the LOWEST priority. These rules are
       // defaults: a same-key rule in the user's own `nitro({ routeRules })` wins.
       /** @type {Record<string, {headers: Record<string, string>}>} */
-      const routeRules = {
-        // Nitro serves public/ and any non-/assets path with NO cache-control at all,
-        // while giving hashed /assets/* immutable. Safe here because the filenames
-        // carry Google's content hash.
-        [`${opts.publicPath}/**`]: {
+      const routeRules = {}
+      // Nitro serves public/ and any non-/assets path with NO cache-control at all,
+      // while giving hashed /assets/* immutable. Safe here because the filenames
+      // carry Google's content hash. Keyed on routePath, not publicPath — under a
+      // full-URL base publicPath carries an origin, which no route pattern can match.
+      // At the bundle root the fonts share every document's namespace and no pattern can
+      // scope them safely, whether the site base itself is '/' or '/docs/'.
+      if (!fontsShareDocumentNamespace) {
+        routeRules[`${routePath}/**`] = {
           headers: {
             'cache-control': 'public, max-age=31536000, immutable',
             'access-control-allow-origin': '*',
           },
-        },
+        }
       }
 
       if (opts.preloadHeader && gen.preloads.length) {
@@ -334,6 +435,25 @@ export function fonts(userOptions = {}) {
     // quietly lose preloading and long-lived caching. That is worth one line of output,
     // because the symptom is "it works, but slower than the README says".
     configResolved(resolved) {
+      // config() above runs before every OTHER plugin's config hook (this plugin is
+      // enforce:'pre'), so a `base` a framework plugin injects from its own config()
+      // was invisible there — only here is the final value known. The generated CSS and
+      // the returned route rules are already built, so a mismatch cannot be repaired,
+      // only reported: as a hard failure when self-hosted URLs are baked wrong, as a
+      // warning when only route patterns can be off (CDN hrefs point at Google).
+      const finalBase = viteBaseForCommand(resolved.base, { isServe })
+      if (finalBase !== generatedBase) {
+        const msg =
+          `Vite \`base\` resolved to ${JSON.stringify(resolved.base)}, but it was ` +
+          `${JSON.stringify(assumedBase ?? '/')} in the config hook (resolved there as ` +
+          `${JSON.stringify(generatedBase)}) when the fonts were generated — another ` +
+          `plugin set it after this one read it. Set \`base\` directly in your Vite config ` +
+          `so every plugin sees the same value.`
+        if (selfHosts) {
+          throw new Error(`[tss-fonts] ${msg} Until then the self-hosted font URLs are wrong.`)
+        }
+        warn(`${msg} (Only route-rule patterns are affected — the font URLs point at Google.)`)
+      }
       if (!opts.preloadHeader || !gen?.preloads.length) return
       if (resolved.plugins?.some((p) => p.name?.includes('nitro'))) return
       warn(
@@ -357,7 +477,9 @@ export function fonts(userOptions = {}) {
           }
         })
       }
-      const prefix = opts.publicPath.replace(/\/$/, '') + '/'
+      // routePath, not publicPath: dev requests hit this server's paths, and under a
+      // full-URL base publicPath would carry an origin no req.url ever starts with.
+      const prefix = routePath.replace(/\/$/, '') + '/'
       server.middlewares.use((req, res, next) => {
         const url = (req.url || '').split('?')[0]
         if (!url.startsWith(prefix)) return next()

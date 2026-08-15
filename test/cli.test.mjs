@@ -129,7 +129,20 @@ test('adopt preserves an existing backup instead of overwriting the recovery cop
   const root = project(t, { 'src/styles.css.bak': 'the older recovery copy\n' })
   run(root, 'adopt')
   assert.equal(read(root, 'src/styles.css.bak'), 'the older recovery copy\n')
-  assert.equal(read(root, 'src/styles.css.bak.1'), ENTRY)
+  // `.1.bak`, not `.bak.1`: every backup name has to end in `.bak` so one conventional
+  // `*.bak` ignore rule covers numbered ones too.
+  assert.equal(read(root, 'src/styles.css.1.bak'), ENTRY)
+})
+
+// The CLI never writes ignore rules, so "(gitignored)" is a claim about the project's
+// own .gitignore — asserted unconditionally it sends people committing stale recovery
+// copies of their stylesheets.
+test('the backup note only claims (gitignored) when .gitignore actually covers *.bak', (t) => {
+  const bare = project(t)
+  assert.match(run(bare, 'adopt').out, /add '\*\.bak' to \.gitignore/)
+
+  const ignored = project(t, { '.gitignore': 'node_modules\n*.bak\n' })
+  assert.match(run(ignored, 'adopt').out, /\(gitignored\)/)
 })
 
 // ---------------------------------------------------------------------------
@@ -211,6 +224,21 @@ for (const [what, body] of Object.entries(badConfigs)) {
   })
 }
 
+// The families array as the default export is the closest wrong shape there is, and
+// "expected a `families` array, got nothing" is exactly backwards for it — the families
+// array IS the export; only the wrapping object is missing. The shape error has to
+// reach the adopt path too, because adopt is the command that goes on to delete CSS.
+test('adopt names the shape mistake when the config default-exports the array', (t) => {
+  const root = project(t, {
+    'fonts.config.mjs': `export default [{ name: 'Poppins', themeVar: '--font-sans', weights: [400] }]\n`,
+  })
+  const { status, out } = run(root, 'adopt')
+  assert.equal(status, 1)
+  assert.match(out, /default export must be an object shaped like \{ families: \[\.\.\.\] \}/)
+  assert.ok(!out.includes('got nothing'), 'the misleading message must be gone')
+  assert.equal(read(root, 'src/styles.css'), ENTRY, 'nothing may be deleted on a bad config')
+})
+
 test('a config that will not even parse is reported, not thrown', (t) => {
   const root = project(t, { 'fonts.config.mjs': 'export default { families: [ }' })
   const { status, out } = run(root, 'adopt')
@@ -258,12 +286,38 @@ test('init leaves an already-wired vite config alone', (t) => {
   const wired = VITE_CONFIG.replace(
     "import tailwindcss from '@tailwindcss/vite'",
     "import tailwindcss from '@tailwindcss/vite'\nimport { fonts } from 'tailwind-vite-font-kit'",
-  )
+  ).replace('tailwindcss(),', 'fonts(),\n    tailwindcss(),')
   const root = project(t, { 'vite.config.ts': wired })
   const { status, out } = run(root, 'init')
   assert.equal(status, 0)
   assert.match(out, /already has the plugin/)
   assert.equal(read(root, 'vite.config.ts'), wired)
+})
+
+test('init completes an existing import by inserting its missing call', (t) => {
+  const imported = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\nimport { fonts as fontPlugin } from 'tailwind-vite-font-kit'",
+  )
+  const root = project(t, { 'vite.config.ts': imported })
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.match(out, /added fontPlugin\(\) before tailwindcss\(\)/)
+  const vite = read(root, 'vite.config.ts')
+  assert.equal(vite.split("from 'tailwind-vite-font-kit'").length - 1, 1)
+  assert.match(vite, /fontPlugin\(\),\s*\n\s*tailwindcss\(\)/)
+})
+
+test('init ignores import-shaped text inside an ordinary string', (t) => {
+  const mentioned = VITE_CONFIG.replace(
+    'export default defineConfig({',
+    `const note = "from 'tailwind-vite-font-kit'"\n\nexport default defineConfig({`,
+  )
+  const root = project(t, { 'vite.config.ts': mentioned })
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.ok(!out.includes('already has the plugin'))
+  assert.match(read(root, 'vite.config.ts'), /fonts\(\),\s*\n\s*tailwindcss\(\)/)
 })
 
 // adopt deletes the declarations that were applying the fonts, and unlike init it does
@@ -312,19 +366,56 @@ test('adopt still warns when the wiring is commented out', (t) => {
   assert.match(out, /Your app has no fonts until you add the plugin/)
 })
 
-// The same masked check on the init side: a commented-out import must not read as
-// "already has the plugin", or init skips the one edit it exists to make.
-test('init treats a commented-out import as absent and wires the plugin', (t) => {
+// A commented-out import is wiring somebody disabled ON PURPOSE. It must not read as
+// "already has the plugin" (that silently skips the edit with a false claim) — but
+// inserting a fresh import beside it is worse: the moment the user uncomments their
+// lines, vite.config has two `fonts` bindings, a SyntaxError that stops the dev server
+// from even loading the config. init says what it found and touches nothing.
+test('init leaves a commented-out import alone and says it looks disabled', (t) => {
   const commented = VITE_CONFIG.replace(
     "import tailwindcss from '@tailwindcss/vite'",
     "// import { fonts } from 'tailwind-vite-font-kit'\nimport tailwindcss from '@tailwindcss/vite'",
   )
   const root = project(t, { 'vite.config.ts': commented })
-  const { status } = run(root, 'init')
+  const { status, out } = run(root, 'init')
   assert.equal(status, 0)
+  assert.match(out, /only in\s+comments/)
+  assert.ok(!out.includes('already has the plugin'), 'a comment is not an install')
+  assert.equal(read(root, 'vite.config.ts'), commented, 'nothing may be inserted')
+})
+
+// The package name inside an unrelated string — `optimizeDeps: { exclude: [...] }` is a
+// realistic line for a Vite plugin package — is not wiring either, and unlike a
+// commented-out import there is nothing to re-enable: init must do its one edit.
+test('init wires the plugin when the name only appears in an unrelated string', (t) => {
+  const mentioned = VITE_CONFIG.replace(
+    'export default defineConfig({',
+    "export default defineConfig({\n  optimizeDeps: { exclude: ['tailwind-vite-font-kit'] },",
+  )
+  const root = project(t, { 'vite.config.ts': mentioned })
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.ok(!out.includes('already has the plugin'), 'a string mention is not an install')
   const vite = read(root, 'vite.config.ts')
   assert.match(vite, /^import \{ fonts \} from 'tailwind-vite-font-kit'$/m)
   assert.match(vite, /fonts\(\),\s*\n\s*tailwindcss\(\)/, 'fonts() must precede tailwindcss()')
+})
+
+// mask() once had no notion of regex literals: the quote inside `/['"]/g` flipped it
+// into string mode, which swallowed the real fonts() call and made adopt print "your
+// app has no fonts" right after deleting the user's font CSS.
+test('adopt still sees the wiring past a regex literal containing a quote', (t) => {
+  const wired = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\nimport { fonts } from 'tailwind-vite-font-kit'",
+  ).replace(
+    'tailwindcss(),',
+    "{ name: 'q', transform: (code) => code.replace(/'/g, '\"') },\n    fonts(),\n    tailwindcss(),",
+  )
+  const root = project(t, { 'vite.config.ts': wired })
+  const { out } = run(root, 'adopt')
+  assert.ok(!out.includes('has no fonts'), 'the wiring is real and must be seen')
+  assert.match(out, /already has the plugin/)
 })
 
 test('NO_COLOR is honoured across the whole output, not just the diffs', (t) => {

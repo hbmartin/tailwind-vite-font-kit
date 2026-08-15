@@ -15,12 +15,17 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join, posix } from 'node:path'
+import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { fallbackFaces } from './metrics.mjs'
 import { leadingUtilities } from './leading.mjs'
 import { googleUrl } from './opsz.mjs'
 import { weightsFromSpec } from './detect.mjs'
+import { assertFontHost } from './font-host.mjs'
+
+// Kept as an internal re-export for callers and tests that already import this guard from
+// generate.mjs. Its implementation lives in a dependency-free shared module.
+export { assertFontHost } from './font-host.mjs'
 
 const require_ = createRequire(import.meta.url)
 const PKG_VERSION = require_('../package.json').version
@@ -67,36 +72,6 @@ function writeAtomic(path, data) {
   }
 }
 
-// The font URLs are read out of a network response, so nothing about them is trusted by
-// construction. Google serves the binaries from exactly one host; anything else means the
-// css2 response was not what we think it was, and the build should stop rather than
-// download and ship it.
-const FONT_HOSTS = new Set(['fonts.gstatic.com'])
-
-/**
- * @param {string} src the `src: url(...)` taken from a css2 response
- * @param {string} family for the error message
- */
-export function assertFontHost(src, family) {
-  let url
-  try {
-    url = new URL(src)
-  } catch {
-    throw new Error(`[tss-fonts] ${family}: css2 returned an unparseable font URL: ${src}`)
-  }
-  // The host is only half the origin. An `http:` URL has the same host but downgrades
-  // the download's transport security (and becomes mixed content in `strategy: 'cdn'`).
-  // A custom port is likewise not Google's font origin. css2 URLs are untrusted network
-  // input, so pin the complete origin rather than accepting a familiar hostname alone.
-  if (url.protocol !== 'https:' || url.port || !FONT_HOSTS.has(url.hostname)) {
-    throw new Error(
-      `[tss-fonts] ${family}: refusing to download a font from ${url.origin} — ` +
-        `expected https://${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
-    )
-  }
-  return url
-}
-
 /**
  * fetch with retry+backoff. A bare ETIMEDOUT to fonts.googleapis.com killed a build
  * during testing with no recovery; a cold first contact was measured at 61s.
@@ -132,6 +107,17 @@ async function fetchRetry(
       }
       return res
     } catch (err) {
+      // A refused redirect (redirect: 'error') surfaces as TypeError('fetch failed')
+      // with the reason only in err.cause. It is deterministic — retrying re-refuses
+      // the same redirect — and it is the origin guard tripping, not a network hiccup,
+      // so name it instead of pointing the user at CI caching.
+      if (redirect === 'error' && /redirect/i.test(String(err?.cause?.message ?? ''))) {
+        throw new Error(
+          `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
+            `would hand the download to a different origin than the one just approved. ` +
+            `Check for an intercepting proxy or captive portal.`,
+        )
+      }
       lastErr = err
       if (err.permanent || i === tries - 1) break
       const wait = baseDelay * 2 ** i
@@ -322,7 +308,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       resolved = applyRecommendation(fam, rec)
     }
 
-    const url = googleUrl(resolved, log)
+    const url = googleUrl(resolved, log, warn)
     log(`${fam.name}: ${url}`)
     const css = await (await fetchRetry(url, { log })).text()
 
@@ -383,7 +369,9 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
           digests[file] = { sha256: sha256(buf), bytes: buf.length }
           log(`  downloaded ${file} (${(buf.length / 1024).toFixed(1)} kB)`)
         }
-        href = posix.join(opts.publicPath, file)
+        // NOT posix.join: under a full-URL base publicPath is 'https://cdn…/fonts', and
+        // join would collapse the '//' after the scheme.
+        href = `${opts.publicPath.replace(/\/+$/, '')}/${file}`
       }
 
       realFaces.push(
@@ -420,30 +408,63 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     // so the browser selects the matching metric face for each script.
     const rangesBySubset = new Map()
     for (const [, subset, block] of wanted) {
-      const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
-      if (!range && opts.subsets.length > 1) {
+      if (rangesBySubset.has(subset)) continue
+      rangesBySubset.set(subset, /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim())
+    }
+    // Keyed on the subsets this family actually SERVES, not on how many the config asks
+    // for: a family covering only latin out of ['latin', 'greek'] needs no ranges at
+    // all — its one set of fallback faces may go unscoped, exactly like a
+    // single-subset config's.
+    if (rangesBySubset.size > 1) {
+      const rangeless = [...rangesBySubset].filter(([, r]) => !r).map(([s]) => s)
+      if (rangeless.length) {
         throw new Error(
-          `[tss-fonts] could not parse unicode-range for ${fam.name}'s ${subset} subset; ` +
-            `multiple subsets need separate metric fallbacks.`,
+          `[tss-fonts] could not parse unicode-range for ${fam.name}'s ` +
+            `${rangeless.join(', ')} subset(s); multiple subsets need separate metric fallbacks.`,
         )
       }
-      if (!rangesBySubset.has(subset)) rangesBySubset.set(subset, range)
+    }
+
+    // Each warning below is one problem, not one line per subset that shares it: the
+    // missing-metrics message repeats identically for every subset, and the per-face
+    // messages name their subset, so identical text IS the same problem.
+    const seenWarnings = new Set()
+    /** @param {string} m */
+    const warnOnce = (m) => {
+      if (seenWarnings.has(m)) return
+      seenWarnings.add(m)
+      warn(m)
+    }
+
+    // capsize only differentiates a few scripts per family (latin and thai, at time of
+    // writing), so most subset pairs produce byte-identical faces — and emitting each
+    // under two unicode-ranges doubles the render-blocking CSS for nothing. Group the
+    // subsets by the CSS they produce: each distinct group becomes one set of faces
+    // scoped to the union of its ranges, and a group covering every served subset
+    // needs no range at all.
+    /** @type {Map<string, {names: string[], ranges: string[]}>} */
+    const bySignature = new Map()
+    for (const [subset, range] of rangesBySubset) {
+      const result = fallbackFaces(METRICS, fam.name, subset, famWeights, log, warnOnce)
+      const group = bySignature.get(result.css)
+      if (group) {
+        if (range) group.ranges.push(range)
+      } else {
+        bySignature.set(result.css, { names: result.names, ranges: range ? [range] : [] })
+      }
     }
     /** @type {string[]} */
     let names = []
-    for (const [subset, range] of rangesBySubset) {
-      const result = fallbackFaces(
-        METRICS,
-        fam.name,
-        subset,
-        famWeights,
-        log,
-        // Missing metrics are one family-level problem, not one warning per subset.
-        names.length ? () => {} : warn,
-        range,
+    for (const [css, group] of bySignature) {
+      if (!names.length) names = group.names
+      if (!css) continue
+      // Every fallback rule is single-line with exactly one closing brace, so this
+      // appends the descriptor to each rule in the group.
+      fallbackCss.push(
+        bySignature.size > 1
+          ? css.replaceAll('}', `;unicode-range:${group.ranges.join(', ')}}`)
+          : css,
       )
-      if (result.css) fallbackCss.push(result.css)
-      if (!names.length) names = result.names
     }
 
     // Plain `@theme`, NEVER `@theme inline`. Under `inline` Tailwind bakes the literal

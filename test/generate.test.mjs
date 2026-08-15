@@ -364,6 +364,88 @@ test('each selected subset gets a unicode-scoped fallback with its own metrics',
   )
 })
 
+// capsize's data only differentiates a few scripts (latin and thai, at time of writing);
+// latin and latin-ext resolve to the same family-level averages, so emitting a face per
+// subset doubles the render-blocking CSS with byte-identical rules. Identical subsets
+// collapse into one set of faces — and covering every served subset, they need no range.
+test('subsets with identical metrics share one set of fallback faces', async (t) => {
+  const latinExt = MULTI_SUBSET_CSS2.replace('/* thai */', '/* latin-ext */').replace(
+    'U+0E00-0E7F',
+    'U+0100-024F',
+  )
+  const { outDir } = sandbox(t, () => new Response(latinExt, { status: 200 }))
+  const gen = await generate({ ...optsFor('Poppins'), subsets: ['latin', 'latin-ext'] }, outDir)
+  const css = readFileSync(gen.cssPath, 'utf8')
+  const arial = [
+    ...css.matchAll(/@font-face\{([^}]*font-family:"Poppins Fallback: Arial"[^}]*)\}/g),
+  ].map((m) => m[1])
+  assert.equal(arial.length, 1, 'identical per-subset faces must not be duplicated')
+  assert.ok(!arial[0].includes('unicode-range'), 'a face covering every subset needs no range')
+})
+
+// The hard-error is keyed on the subsets a family actually SERVES, not on how many the
+// config selects: a family covering only latin out of ['latin', 'greek'] gets a single
+// rangeless fallback face — failing the whole build there helped nobody.
+test('a single-subset family tolerates a missing unicode-range under a multi-subset config', async (t) => {
+  const rangeless = CSS2.replace(/\s*unicode-range:[^;]+;/, '')
+  const { outDir } = sandbox(t, () => new Response(rangeless, { status: 200 }))
+  const gen = await generate({ ...optsFor('Manrope'), subsets: ['latin', 'greek'] }, outDir)
+  const css = readFileSync(gen.cssPath, 'utf8')
+  assert.match(css, /Manrope Fallback: Arial/, 'the fallback faces must still be emitted')
+})
+
+test('a family really serving several subsets still demands parseable ranges', async (t) => {
+  const broken = MULTI_SUBSET_CSS2.replace(/\s*unicode-range: U\+0E00-0E7F;/, '')
+  const { outDir } = sandbox(t, () => new Response(broken, { status: 200 }))
+  await assert.rejects(
+    () => generate({ ...optsFor('Poppins'), subsets: ['latin', 'thai'] }, outDir),
+    /could not parse unicode-range for Poppins's thai subset/,
+  )
+})
+
+// Missing capsize metrics are one family-level problem. The warning used to print once
+// per selected subset — and the mechanism meant to stop that silenced genuinely distinct
+// per-subset warnings instead.
+test('the missing-metrics warning prints once, not once per subset', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(MULTI_SUBSET_CSS2, { status: 200 }))
+  const warned = []
+  await generate(
+    { ...optsFor('Fakefam'), subsets: ['latin', 'thai'] },
+    outDir,
+    () => {},
+    (m) => warned.push(m),
+  )
+  assert.equal(
+    warned.filter((m) => m.includes('no capsize metrics')).length,
+    1,
+    'one family-level problem, one warning',
+  )
+})
+
+// A refused redirect is the origin guard tripping, deterministically — retrying it
+// re-refuses the same redirect, and the generic "fetch failed" + CI-cache advice made
+// the guard's trip indistinguishable from a network outage.
+test('a refused redirect is not retried and the error names the redirect', async (t) => {
+  let woff2Attempts = 0
+  const { outDir } = sandbox(t, (url, init) => {
+    if (url.endsWith('.woff2')) {
+      woff2Attempts++
+      assert.equal(init?.redirect, 'error')
+      throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') })
+    }
+    return new Response(CSS2, { status: 200 })
+  })
+  const selfHosted = {
+    ...optsFor('Fakefam'),
+    families: [{ ...optsFor('Fakefam').families[0], strategy: 'self-host' }],
+  }
+  await assert.rejects(
+    () => generate(selfHosted, outDir),
+    /answered with a redirect, which was refused/,
+  )
+  assert.equal(woff2Attempts, 1, 'a deterministic refusal must not be retried')
+})
+
 test('a family with neither weights nor axes is rejected before any request', async (t) => {
   const { outDir, calls } = sandbox(t, () => new Response(CSS2, { status: 200 }))
   await assert.rejects(

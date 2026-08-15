@@ -78,7 +78,8 @@
     }
   },
   "dependencies": {
-    "@capsizecss/metrics": "^4"
+    "@capsizecss/metrics": "^4",
+    "es-module-lexer": "^2.3.1"
   },
   "engines": {
     "node": ">=22"

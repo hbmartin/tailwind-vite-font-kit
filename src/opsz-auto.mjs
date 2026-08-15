@@ -17,7 +17,7 @@
 import { hasOpszAxis, pinOpsz } from './opsz.mjs'
 import { detectAxes, planOpsz, toSfnt } from './opsz-policy.mjs'
 import { weightsFromSpec } from './detect.mjs'
-import { assertFontHost } from './generate.mjs'
+import { assertFontHost } from './font-host.mjs'
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -109,13 +109,28 @@ export function applyRecommendation(fam, rec) {
 
 /**
  * @param {string} url
+ * @param {{redirect?: 'follow'|'error'|'manual'}} [o]
  * @returns {Promise<Response>}
  */
-async function get(url) {
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA },
-    signal: AbortSignal.timeout(60_000),
-  })
+async function get(url, { redirect = 'follow' } = {}) {
+  let res
+  try {
+    res = await fetch(url, {
+      headers: { 'user-agent': UA },
+      signal: AbortSignal.timeout(60_000),
+      redirect,
+    })
+  } catch (err) {
+    // A refused redirect surfaces as TypeError('fetch failed') with the reason only in
+    // err.cause — name the guard that tripped instead of leaking the generic message.
+    if (redirect === 'error' && /redirect/i.test(String(err?.cause?.message ?? ''))) {
+      throw new Error(
+        `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
+          `would hand the download to a different origin than the one just approved.`,
+      )
+    }
+    throw err
+  }
   if (!res.ok) throw new Error(`[tss-fonts] HTTP ${res.status} for ${url}`)
   return res
 }
@@ -189,7 +204,9 @@ export async function recommendOpszPin(
   assertFontHost(src, fam.name)
 
   log(`downloading ${src}`)
-  const woff2 = Buffer.from(await (await get(src)).arrayBuffer())
+  // A redirect changes the origin assertFontHost just approved, and these bytes feed
+  // fontkit's binary parsers — refuse it, exactly as the generator's download does.
+  const woff2 = Buffer.from(await (await get(src, { redirect: 'error' })).arrayBuffer())
 
   // fvar survives brotli, so detection works on the raw download.
   const { hasOpsz, opsz } = await detectAxes(woff2)

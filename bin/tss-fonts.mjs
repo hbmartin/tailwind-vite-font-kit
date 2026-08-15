@@ -12,7 +12,13 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { loadAndValidate, loadFontsConfig, validateFamilies } from '../src/config.mjs'
+import {
+  assertConfigShape,
+  loadAndValidate,
+  loadFontsConfig,
+  validateFamilies,
+} from '../src/config.mjs'
+import { hasOpszAxis, pinOpsz } from '../src/opsz.mjs'
 import {
   detectTailwindEntry,
   detectViteConfig,
@@ -20,7 +26,7 @@ import {
   buildFontPlan,
   GENERIC_STACK_RE,
 } from '../src/detect.mjs'
-import { insertFontsPlugin, mask } from '../src/codemod-vite.mjs'
+import { analyzeFontsPluginWiring, insertFontsPlugin, mask } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
 import { color, unifiedDiff } from '../src/diff.mjs'
 
@@ -52,11 +58,13 @@ const die = (m) => {
   process.exit(1)
 }
 
-/** Preserve an existing recovery copy instead of silently replacing it on a later run. */
+/** Preserve an existing recovery copy instead of silently replacing it on a later run.
+ *  Every name ends in `.bak` — numbered ones are `x.1.bak`, not `x.bak.1` — so one
+ *  conventional `*.bak` ignore rule covers all of them. */
 function backupFile(file) {
   let n = 0
   let backup = file + '.bak'
-  while (existsSync(backup)) backup = file + `.bak.${++n}`
+  while (existsSync(backup)) backup = file + `.${++n}.bak`
   copyFileSync(file, backup)
   return backup
 }
@@ -224,6 +232,19 @@ if (cmd === 'opsz') {
     if (fam.opszPin != null && fam.opszPin !== 'auto' && fam.opszPin !== rec.pin) {
       console.log(`  ${c.y('note')}          your config says opszPin: ${fam.opszPin}`)
     }
+    // A written pin cannot take effect while the axes spec fixes opsz by hand —
+    // hand-written tuple values win over `opszPin`. Say so at write time, not only
+    // when the next build warns about the conflict.
+    if (
+      fam.axes &&
+      hasOpszAxis(fam.axes) &&
+      pinOpsz(fam.axes, rec.pin) !== pinOpsz(fam.axes, rec.pin, { replaceFixed: true })
+    ) {
+      console.log(
+        `  ${c.y('note')}          your \`axes\` (${fam.axes}) fixes opsz by hand, which wins ` +
+          `over opszPin —\n                switch those values to a range for this pin to apply`,
+      )
+    }
     found.push({ name: fam.name, pin: rec.pin })
   }
 
@@ -303,7 +324,13 @@ if (existsSync(configPath) && !flag('from-css')) {
     die(`could not load fonts.config.mjs — ${err.message}`),
   )
   try {
-    families = validateFamilies(cfg.families, 'fonts.config.mjs')
+    // Shape-checked first: a config that default-exports the families array has no
+    // `.families`, and validateFamilies alone would report the misleading "expected a
+    // `families` array, got nothing" — on the one path that goes on to DELETE the CSS.
+    families = validateFamilies(
+      assertConfigShape(cfg, 'fonts.config.mjs').families,
+      'fonts.config.mjs',
+    )
   } catch (err) {
     die(`${err.message}\n\n  ${c.b('--from-css')}  ignore it and adopt what your CSS uses instead`)
   }
@@ -426,10 +453,48 @@ if (cmd === 'init') {
     console.log(`\n${c.y('!')} no vite.config.ts found — add the plugin yourself:\n${snippet()}`)
   } else {
     const vText = readFileSync(vite, 'utf8')
-    // Masked so a commented-out import does not count as "already has it" — the real
-    // specifier survives (mask keeps string content here), commented lines are blanked.
-    if (mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit')) {
+    // es-module-lexer distinguishes real imports from import-shaped strings and regexes.
+    // Wiring still needs BOTH halves: a callable binding from the root package and an
+    // invocation. When the binding already exists, insert only its call — never a second
+    // import. A package import with no callable binding (dynamic, side-effect or subpath)
+    // is ambiguous and falls back to the manual snippet.
+    const wiring = analyzeFontsPluginWiring(vText)
+    if (wiring.parseError) {
+      console.log(
+        `\n${c.y('!')} could not parse the imports in ${relative(root, vite)} — ` +
+          `nothing was inserted. Add the plugin by hand, BEFORE tailwindcss():\n${snippet()}`,
+      )
+    } else if (wiring.wired) {
       console.log(`\n${c.dim('vite.config already has the plugin (skipped)')}`)
+    } else if (wiring.bindings.length) {
+      const callee = wiring.bindings[0]
+      const out = insertFontsPlugin(vText, { addImport: false, callee })
+      if (out == null) {
+        console.log(
+          `\n${c.y('!')} found the ${callee} import but could not safely insert ` +
+            `\`${callee}()\` into ${relative(root, vite)} — add it by hand, BEFORE ` +
+            `tailwindcss():\n${snippet()}`,
+        )
+      } else {
+        edits.push([vite, vText, out])
+        console.log(`\n${c.b(relative(root, vite))}`)
+        console.log(`  ${c.g('•')} added ${callee}() before tailwindcss()`)
+        console.log(unifiedDiff(vText, out, relative(root, vite)))
+      }
+    } else if (wiring.packageImports) {
+      console.log(
+        `\n${c.y('!')} ${relative(root, vite)} imports tailwind-vite-font-kit, but not ` +
+          `a callable fonts binding — nothing was inserted. Add the Vite plugin by hand:\n${snippet()}`,
+      )
+    } else if (
+      vText.includes('tailwind-vite-font-kit') &&
+      !mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit')
+    ) {
+      console.log(
+        `\n${c.y('!')} ${relative(root, vite)} mentions tailwind-vite-font-kit only in ` +
+          `comments — it looks deliberately disabled, so nothing was inserted.\n` +
+          `  Uncomment your wiring, or add it fresh:\n${snippet()}`,
+      )
     } else {
       const out = insertFontsPlugin(vText)
       if (out == null) {
@@ -467,9 +532,24 @@ for (const [file, before, after] of edits) {
   if (before && before !== after) backups.push(relative(root, backupFile(file)))
   writeFileSync(file, after)
 }
+// Nothing here writes ignore rules, so "(gitignored)" is only true when the project's
+// own .gitignore covers *.bak (which every backupFile() name now ends in) — check
+// rather than assert, and otherwise say what to add.
+const bakIgnored = (() => {
+  try {
+    return /^\s*\*\.bak\s*$/m.test(readFileSync(join(root, '.gitignore'), 'utf8'))
+  } catch {
+    return false
+  }
+})()
 console.log(
   `\n${c.g('✓')} wrote ${edits.length} file(s). ` +
-    `Backups: ${backups.length ? backups.join(', ') : 'none'} ${c.dim('(gitignored)')}`,
+    `Backups: ${backups.length ? backups.join(', ') : 'none'}` +
+    (backups.length
+      ? c.dim(
+          bakIgnored ? ' (gitignored)' : " (add '*.bak' to .gitignore to keep them out of commits)",
+        )
+      : ''),
 )
 
 // `adopt` has just deleted the CSS that was applying these fonts, and unlike `init` it
@@ -478,15 +558,10 @@ console.log(
 if (cmd === 'adopt') {
   const vite = detectViteConfig(root)
   const vText = vite ? readFileSync(vite, 'utf8') : ''
-  // The package name alone is not wiring — an unused import matches it, and the app
-  // still has no fonts. Require an actual fonts() call too, and check both on masked
-  // text so a commented-out import or invocation (or either appearing inside some
-  // unrelated string) does not read as wiring. The import check keeps string content,
-  // because the specifier IS a string; the call check blanks strings too.
-  const wired =
-    vite &&
-    mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit') &&
-    /\bfonts\s*\(/.test(mask(vText))
+  // Wiring means a callable binding from an ACTIVE root-package import is invoked. The
+  // lexer ignores comments, ordinary strings, regexes and subpath/dynamic imports; the
+  // masked call check supports default, renamed and namespace bindings.
+  const wired = vite && analyzeFontsPluginWiring(vText).wired
   if (wired) {
     console.log(c.dim(`  ${relative(root, vite)} already has the plugin — you are done.`))
   } else {

@@ -104,6 +104,18 @@ export function validateFamilies(families, source) {
           `or 'auto'.`,
       )
     }
+    if (
+      fam.opszPin === 'auto' &&
+      fam.opszSizes !== undefined &&
+      (!Array.isArray(fam.opszSizes) ||
+        !fam.opszSizes.length ||
+        fam.opszSizes.some((size) => !Number.isFinite(size) || size <= 0))
+    ) {
+      fail(
+        `${at} uses \`opszPin: 'auto'\`, so \`opszSizes\` must be a non-empty array of ` +
+          `positive finite px sizes, e.g. [16, 24, 48, 96].`,
+      )
+    }
     if (fam.preloadWeights !== undefined && !Array.isArray(fam.preloadWeights)) {
       fail(`${at} has a \`preloadWeights\` that is not an array. Use [] to disable preloading.`)
     }

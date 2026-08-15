@@ -60,18 +60,11 @@ const targetVariant = (m, weight) => m.variants?.[weight >= 600 ? '700' : 'regul
  * @param {(message: string) => void} [log]
  * @param {(message: string) => void} [warn] for outcomes where the build succeeds but the
  *   result is wrong; must not be silenceable
- * @param {string} [unicodeRange] confines this fallback face to one Google CSS2 subset
  * @returns {{ css: string, names: string[] }} `names` go into the @theme stack, in order.
+ *   The rules carry no unicode-range — the caller scopes them, and merges subsets whose
+ *   metrics come out identical.
  */
-export function fallbackFaces(
-  METRICS,
-  family,
-  subset,
-  weights,
-  log = () => {},
-  warn = () => {},
-  unicodeRange,
-) {
+export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, warn = () => {}) {
   const m = METRICS[metricsKey(family)]
   if (!m) {
     // Not a log line. With no metrics there are no fallback faces, no size-adjust and no
@@ -105,7 +98,13 @@ export function fallbackFaces(
       const fbUpem = fb.unitsPerEm ?? fbFamily.unitsPerEm
       const sizeAdjust = xAvg / upem / (fbAvg / fbUpem)
       if (!Number.isFinite(sizeAdjust) || sizeAdjust <= 0) {
-        warn(`non-finite size-adjust for "${name}" weight ${weight} — that face was skipped`)
+        // Names the subset: faces are per-subset, and the caller dedupes identical
+        // messages — without the subset a real warning for a second subset would read
+        // as a repeat of the first and be dropped.
+        warn(
+          `non-finite size-adjust for "${name}" weight ${weight} (${subset} subset) — ` +
+            `that face was skipped`,
+        )
         continue
       }
       const ascent = v.ascent ?? m.ascent
@@ -123,7 +122,6 @@ export function fallbackFaces(
           `ascent-override:${pct(ascent / (upem * sizeAdjust))};` +
           `descent-override:${pct(Math.abs(descent) / (upem * sizeAdjust))};` +
           `line-gap-override:${pct(lineGap / (upem * sizeAdjust))}` +
-          (unicodeRange ? `;unicode-range:${unicodeRange}` : '') +
           `}`,
       )
     }
