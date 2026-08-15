@@ -34,7 +34,7 @@ export function assertFontHost(src, family) {
  * @param {unknown} err
  * @returns {Error | null}
  */
-export function refusedFontRedirect(url, err) {
+export function redirectRefusalError(url, err) {
   const cause = /** @type {{cause?: {message?: unknown}}} */ (err)?.cause
   if (!/redirect/i.test(String(cause?.message ?? ''))) return null
   return new Error(

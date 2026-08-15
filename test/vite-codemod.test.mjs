@@ -13,6 +13,17 @@ test('mask blanks a regex body instead of reading its quote as a string opener',
   assert.ok(!masked.includes(`['"]`), 'the regex body is blanked')
 })
 
+test('a statement-position regex cannot hide later plugin wiring', () => {
+  const src =
+    `import { fonts } from 'tailwind-vite-font-kit'\n` +
+    `if (enabled) /['"]/g.test(value)\n` +
+    `export default { plugins: [fonts(), tailwindcss()] }\n`
+  const masked = mask(src)
+  assert.equal(masked.length, src.length, 'masking must preserve length')
+  assert.match(masked, /fonts\(\)/, 'the raw newline must end the misclassified string')
+  assert.equal(analyzeFontsPluginWiring(src).wired, true)
+})
+
 test('mask keeps division as division', () => {
   const src = `const half = total / 2\nconst quarter = total / 2 / 2\n`
   assert.equal(mask(src), src)
@@ -53,6 +64,14 @@ test('active import detection follows default, renamed and namespace bindings', 
   assert.equal(dynamic.packageImports, 1)
   assert.deepEqual(dynamic.bindings, [])
   assert.equal(dynamic.wired, false)
+})
+
+test('a standalone binding is not called by a same-named member access', () => {
+  const source = `import { fonts } from 'tailwind-vite-font-kit'\n` + `somePlugin.fonts()\n`
+  const state = analyzeFontsPluginWiring(source)
+  assert.deepEqual(state.bindings, ['fonts'])
+  assert.deepEqual(state.calledBindings, [])
+  assert.equal(state.wired, false)
 })
 
 test('active wiring detection follows CommonJS destructured and namespace bindings', () => {

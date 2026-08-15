@@ -21,7 +21,7 @@ import { fallbackFaces } from './metrics.mjs'
 import { leadingUtilities } from './leading.mjs'
 import { googleUrl } from './opsz.mjs'
 import { weightsFromSpec } from './detect.mjs'
-import { assertFontHost, refusedFontRedirect } from './font-host.mjs'
+import { assertFontHost, redirectRefusalError } from './font-host.mjs'
 
 // Kept as an internal re-export for callers and tests that already import this guard from
 // generate.mjs. Its implementation lives in a dependency-free shared module.
@@ -111,7 +111,7 @@ async function fetchRetry(
       // with the reason only in err.cause. It is deterministic — retrying re-refuses
       // the same redirect — and it is the origin guard tripping, not a network hiccup,
       // so name it instead of pointing the user at CI caching.
-      const redirectError = redirect === 'error' ? refusedFontRedirect(url, err) : null
+      const redirectError = redirect === 'error' ? redirectRefusalError(url, err) : null
       if (redirectError) throw redirectError
       lastErr = err
       if (err.permanent || i === tries - 1) break

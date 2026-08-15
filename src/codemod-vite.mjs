@@ -54,13 +54,21 @@ function maskViews(src) {
     )
   }
 
-  /** `"` or `'` at i: scan to the closing quote. */
+  /** `"` or `'` at i: scan to the closing quote or an unescaped line break. */
   const scanString = (i) => {
     const q = src[i]
     let j = i + 1
-    while (j < src.length && src[j] !== q) j += src[j] === '\\' ? 2 : 1
+    while (j < src.length && src[j] !== q && src[j] !== '\n' && src[j] !== '\r') {
+      if (src[j] !== '\\') {
+        j++
+      } else {
+        // Escapes include line continuations. A CRLF continuation consumes both of its
+        // line-ending characters; every other escape consumes the following character.
+        j += src[j + 1] === '\r' && src[j + 2] === '\n' ? 3 : 2
+      }
+    }
     blank(active, i + 1, j) // keep the quotes: they delimit the import specifier
-    return j + 1
+    return src[j] === q ? j + 1 : j
   }
 
   /** '`' at i: template literal, with `${…}` scanned as code. */
@@ -283,7 +291,7 @@ export function analyzeFontsPluginWiring(source) {
   bindings.push(...commonJs.bindings.filter((binding) => !bindings.includes(binding)))
   const calledBindings = bindings.filter((binding) => {
     const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
-    return new RegExp(`(?<![\\w$])${expression}\\s*\\(`).test(active)
+    return new RegExp(`(?<![\\w$.])${expression}\\s*\\(`).test(active)
   })
   calledBindings.push(...commonJs.directCalls)
 
