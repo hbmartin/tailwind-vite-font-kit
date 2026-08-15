@@ -89,8 +89,8 @@
     "@capsizecss/unpack": "^4.0.1",
     "@types/node": "^22.20.1",
     "fontkit": "^2.0.4",
-    "oxfmt": "^0.62.0",
-    "oxlint": "^1.77.0",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
     "publint": "^0.3.23",
     "typescript": "^7.0.2",
     "wawoff2": "^2.0.1"

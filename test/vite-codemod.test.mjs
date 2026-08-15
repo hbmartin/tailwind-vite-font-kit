@@ -13,14 +13,13 @@ test('mask blanks a regex body instead of reading its quote as a string opener',
   assert.ok(!masked.includes(`['"]`), 'the regex body is blanked')
 })
 
-test('a statement-position regex cannot hide later plugin wiring', () => {
+test('a regex after a completed control condition cannot hide same-line plugin wiring', () => {
   const src =
     `import { fonts } from 'tailwind-vite-font-kit'\n` +
-    `if (enabled) /['"]/g.test(value)\n` +
-    `export default { plugins: [fonts(), tailwindcss()] }\n`
+    `if (enabled) /['"]/g.test(value); export default { plugins: [fonts(), tailwindcss()] }\n`
   const masked = mask(src)
   assert.equal(masked.length, src.length, 'masking must preserve length')
-  assert.match(masked, /fonts\(\)/, 'the raw newline must end the misclassified string')
+  assert.match(masked, /fonts\(\)/, 'the regex must not consume later code on the same line')
   assert.equal(analyzeFontsPluginWiring(src).wired, true)
 })
 
@@ -48,11 +47,20 @@ test('active import detection ignores import-shaped strings and regex literals',
   assert.equal(state.wired, false)
 })
 
+test('a regex-only package mention is not comment-only guidance', () => {
+  const state = analyzeFontsPluginWiring(`/tailwind-vite-font-kit/.test(note)\n`)
+  assert.equal(state.packageImports, 0)
+  assert.equal(state.wired, false)
+  assert.equal(state.commentOnlyMention, false)
+})
+
 test('active import detection follows default, renamed and namespace bindings', () => {
   for (const source of [
     `import fontPlugin from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
     `import { fonts as fontPlugin } from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
+    `import { default as fontPlugin } from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
     `import * as fontKit from 'tailwind-vite-font-kit'\nfontKit.fonts()\n`,
+    `import * as fontKit from 'tailwind-vite-font-kit'\nfontKit.default()\n`,
   ]) {
     assert.equal(analyzeFontsPluginWiring(source).wired, true, source)
   }

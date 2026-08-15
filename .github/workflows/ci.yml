@@ -117,7 +117,7 @@ jobs:
       - name: Build fixture
         working-directory: test/fixture
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --ignore-workspace --frozen-lockfile
           pnpm build
 
       - name: Collect metrics

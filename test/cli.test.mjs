@@ -70,6 +70,7 @@ function run(root, ...args) {
 }
 
 const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
+const initGit = (root) => execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'ignore' })
 
 // ---------------------------------------------------------------------------
 // init
@@ -140,15 +141,22 @@ test('adopt preserves an existing backup instead of overwriting the recovery cop
   assert.equal(read(root, 'src/styles.css.1.bak'), ENTRY)
 })
 
-// The CLI never writes ignore rules, so "(gitignored)" is a claim about the project's
-// own .gitignore — asserted unconditionally it sends people committing stale recovery
-// copies of their stylesheets.
-test('the backup note only claims (gitignored) when .gitignore actually covers *.bak', (t) => {
+// The CLI never writes ignore rules, so "(gitignored)" has to reflect Git's answer for
+// the actual backup path. Looking only for a root-level `*.bak` misses equivalent glob
+// forms, nested ignore files, repository excludes and global excludes.
+test('the backup note asks Git whether the actual backup path is ignored', (t) => {
   const bare = project(t)
+  initGit(bare)
   assert.match(run(bare, 'adopt').out, /add '\*\.bak' to \.gitignore/)
 
-  const ignored = project(t, { '.gitignore': 'node_modules\n*.bak\n' })
-  assert.match(run(ignored, 'adopt').out, /\(gitignored\)/)
+  for (const files of [
+    { '.gitignore': 'node_modules\n**/*.bak\n' },
+    { 'src/.gitignore': '*.bak\n' },
+  ]) {
+    const ignored = project(t, files)
+    initGit(ignored)
+    assert.match(run(ignored, 'adopt').out, /\(gitignored\)/)
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -353,6 +361,17 @@ test('adopt stays quiet when the plugin is already wired up', (t) => {
   const root = project(t, { 'vite.config.ts': wired })
   const { out } = run(root, 'adopt')
   assert.ok(!out.includes('has no fonts'), 'nothing is wrong, so nothing should be alarming')
+  assert.match(out, /already has the plugin/)
+})
+
+test('init leaves namespace-default wiring alone', (t) => {
+  const wired = VITE_CONFIG.replace(
+    "import tailwindcss from '@tailwindcss/vite'",
+    "import tailwindcss from '@tailwindcss/vite'\nimport * as fontKit from 'tailwind-vite-font-kit'",
+  ).replace('tailwindcss(),', 'fontKit.default(),\n    tailwindcss(),')
+  const root = project(t, { 'vite.config.ts': wired })
+  const { out } = run(root, 'init')
+  assert.equal(read(root, 'vite.config.ts'), wired)
   assert.match(out, /already has the plugin/)
 })
 
