@@ -1,0 +1,5 @@
+# Keep fixture installs independent from the repository workspace. Vite 7 uses esbuild,
+# whose platform-binary installer pnpm 11 blocks unless the dependency is explicitly
+# approved; Vite 8 uses rolldown and simply has no matching package to build.
+allowBuilds:
+  esbuild: true

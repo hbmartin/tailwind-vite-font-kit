@@ -464,9 +464,11 @@ export function fonts(userOptions = {}) {
       // the returned route rules are already built, so a mismatch cannot be repaired,
       // only reported: as a hard failure when self-hosted URLs are baked wrong, as a
       // warning when only route patterns can be off (CDN hrefs point at Google).
-      const finalIsServe = resolved.command ? resolved.command === 'serve' : isServe
+      const finalCommand = resolved.command ?? (isServe ? 'serve' : 'build')
+      const finalIsServe = finalCommand === 'serve'
       const finalIsSsrBuild =
-        resolved.build?.ssr !== undefined ? Boolean(resolved.build.ssr) : isSsrBuild
+        finalCommand === 'build' &&
+        (resolved.build?.ssr !== undefined ? Boolean(resolved.build.ssr) : isSsrBuild)
       const finalBase = viteBaseForCommand(resolved.base, {
         isServe: finalIsServe,
         isSsrBuild: finalIsSsrBuild,
@@ -485,7 +487,7 @@ export function fonts(userOptions = {}) {
         finalPaths.publicPath !== publicPath ||
         finalPaths.routePath !== routePath ||
         finalPaths.basePath !== generatedBasePath
-      if (finalBase !== generatedBase && pathsDiffer) {
+      if (pathsDiffer) {
         const msg =
           `Vite \`base\` resolved to ${JSON.stringify(resolved.base)}, but it was ` +
           `${JSON.stringify(assumedBase ?? '/')} in the config hook (resolved there as ` +

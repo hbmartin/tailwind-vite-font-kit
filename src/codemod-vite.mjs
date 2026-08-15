@@ -46,6 +46,10 @@ function maskViews(src) {
     commentRanges.push([from, to])
   }
 
+  const openParens = []
+  /** @type {{close: number, open: number} | null} */
+  let lastClosedParen = null
+
   // Whether a `/` at `i` can start a regex literal. The masked prefix is final by the
   // time this runs — the scan is strictly left-to-right — so already-blanked comment
   // and string bodies never fake an expression position.
@@ -55,8 +59,8 @@ function maskViews(src) {
     if (k < 0) return true
     if ('(,=:[!&|?{};+-*%<>~^'.includes(active[k])) return true
     if (active[k] === ')') {
-      const open = matchingParens.get(k)
-      if (open !== undefined) {
+      if (lastClosedParen?.close === k) {
+        const open = lastClosedParen.open
         let end = open - 1
         while (end >= 0 && /\s/.test(active[end])) end--
         let start = end
@@ -143,8 +147,6 @@ function maskViews(src) {
   }
 
   /** Scan code from `i`; with `stopAtBrace`, return at the matching unnested `}`. */
-  const openParens = []
-  const matchingParens = new Map()
   function scanCode(i, stopAtBrace = false) {
     let depth = 0
     while (i < src.length) {
@@ -171,7 +173,7 @@ function maskViews(src) {
         i++
       } else if (src[i] === ')') {
         const open = openParens.pop()
-        if (open !== undefined) matchingParens.set(i, open)
+        lastClosedParen = open === undefined ? null : { close: i, open }
         i++
       } else if (stopAtBrace && src[i] === '{') {
         depth++

@@ -16,6 +16,8 @@ the published release rather than on the tag alone.
 - CLI backup reporting asks Git about every backup in one invocation and only claims the
   files are ignored when all of them are covered. Its real-Git tests no longer inherit
   developer or system excludes.
+- A malformed css2 response can no longer make the plugin emit or serve a non-WOFF2 file
+  while labeling it as `font/woff2`.
 
 ### Internal
 

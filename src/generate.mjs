@@ -341,7 +341,13 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       // Validated for BOTH strategies: 'cdn' writes this URL straight into the emitted
       // CSS, so an off-host src is just as much a poisoned css2 response there as it is
       // on the self-host download path.
-      assertFontHost(src, fam.name)
+      const fontUrl = assertFontHost(src, fam.name)
+      if (!fontUrl.pathname.toLowerCase().endsWith('.woff2')) {
+        throw new Error(
+          `[tss-fonts] ${fam.name}: css2 returned a non-WOFF2 font URL: ${src}. ` +
+            `Expected the browser-targeted stylesheet to contain only .woff2 sources.`,
+        )
+      }
       const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
       if (!rangesBySubset.has(subset)) rangesBySubset.set(subset, range)
 
@@ -351,7 +357,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
         if (!file) {
           // Google's own filenames already carry a content hash, so a fixed name is
           // safe to serve `immutable`.
-          file = `${slug(fam.name)}-${src.split('/').pop()}`
+          file = `${slug(fam.name)}-${fontUrl.pathname.split('/').pop()}`
           // A redirect changes the origin the host check above approved. gstatic does
           // not need one, so reject it instead of following bytes from another host.
           const buf = Buffer.from(

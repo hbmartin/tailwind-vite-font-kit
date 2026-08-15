@@ -117,7 +117,7 @@ jobs:
       - name: Build fixture
         working-directory: test/fixture
         run: |
-          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm install --frozen-lockfile
           pnpm build
 
       - name: Collect metrics
@@ -202,15 +202,12 @@ jobs:
         env:
           VITE_VERSION: ${{ matrix.vite }}
         run: |
-          # Vite 7 bundles with esbuild, whose postinstall pnpm 11 blocks by default, and
-          # an unapproved build script makes pnpm exit non-zero. Without esbuild's
-          # platform binary the build fails outright, so approve and reinstall. Vite 8
-          # uses rolldown and needs none of this; there the approval is a no-op.
-          pnpm add --ignore-workspace -D "vite@$VITE_VERSION" || true
-          pnpm approve-builds --ignore-workspace --all || true
-          pnpm install --ignore-workspace
-          # The `|| true` above must not let a leg quietly test whatever Vite was already
-          # there — that would make this job worse than useless.
+          # test/fixture/pnpm-workspace.yaml makes this directory its own workspace and
+          # explicitly allows esbuild's install script. Vite 7 needs the resulting
+          # platform binary; Vite 8 uses rolldown and does not install esbuild.
+          pnpm add --save-exact -D "vite@$VITE_VERSION"
+          # Keep an explicit assertion so a future pnpm resolution change cannot make a
+          # matrix leg quietly test the fixture's pre-existing Vite instead.
           node -e "
             const want = process.env.VITE_VERSION;
             const got = require('vite/package.json').version;

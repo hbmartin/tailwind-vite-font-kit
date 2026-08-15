@@ -342,6 +342,16 @@ test('an unparseable @font-face block fails with the family and the URL', async 
   )
 })
 
+test('a non-WOFF2 css2 source is rejected before it can be emitted or served', async (t) => {
+  const css = CSS2.replace('abc123.woff2', 'abc123.woff')
+  const { outDir, calls } = sandbox(t, () => new Response(css, { status: 200 }))
+  await assert.rejects(
+    () => generate(optsFor('Manrope'), outDir),
+    /Manrope: css2 returned a non-WOFF2 font URL: .*abc123\.woff/,
+  )
+  assert.equal(calls.length, 1, 'the invalid font URL must not be fetched')
+})
+
 test('a subset with no blocks says which subsets were available', async (t) => {
   const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
   await assert.rejects(
