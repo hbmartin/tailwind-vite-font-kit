@@ -116,21 +116,31 @@ export function validateFamilies(families, source) {
 }
 
 /**
- * Load a config file and validate the families it declares.
- * @param {string} path
- * @param {string} [label] how to refer to the file in errors; defaults to the path
+ * Throw unless a config module's default export has the `{ families: [...] }` object
+ * shape. A config that default-exports the families array directly (or a string, or a
+ * function) has no `.families` to read — name the mistake instead of reporting the
+ * misleading "expected a `families` array, got nothing".
+ * @param {unknown} cfg
+ * @param {string} label how to refer to the file in errors
+ * @returns {Record<string, unknown>}
  */
-export async function loadAndValidate(path, label = path) {
-  const cfg = await loadFontsConfig(path)
-  // A config that default-exports the families array directly (or a string, or a
-  // function) has no `.families` to read — name the mistake instead of reporting the
-  // misleading "expected a `families` array, got nothing".
+export function assertConfigShape(cfg, label) {
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
     throw new Error(
       `[tss-fonts] ${label}: the default export must be an object shaped like ` +
         `{ families: [...] }, got ${Array.isArray(cfg) ? 'an array' : typeof cfg}.`,
     )
   }
+  return /** @type {Record<string, unknown>} */ (cfg)
+}
+
+/**
+ * Load a config file and validate the families it declares.
+ * @param {string} path
+ * @param {string} [label] how to refer to the file in errors; defaults to the path
+ */
+export async function loadAndValidate(path, label = path) {
+  const cfg = assertConfigShape(await loadFontsConfig(path), label)
   validateFamilies(cfg.families, label)
   return cfg
 }

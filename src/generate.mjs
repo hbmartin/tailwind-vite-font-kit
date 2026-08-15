@@ -78,18 +78,23 @@ const FONT_HOSTS = new Set(['fonts.gstatic.com'])
  * @param {string} family for the error message
  */
 export function assertFontHost(src, family) {
-  let host
+  let url
   try {
-    host = new URL(src).host
+    url = new URL(src)
   } catch {
     throw new Error(`[tss-fonts] ${family}: css2 returned an unparseable font URL: ${src}`)
   }
-  if (!FONT_HOSTS.has(host)) {
+  // The host is only half the origin. An `http:` URL has the same host but downgrades
+  // the download's transport security (and becomes mixed content in `strategy: 'cdn'`).
+  // A custom port is likewise not Google's font origin. css2 URLs are untrusted network
+  // input, so pin the complete origin rather than accepting a familiar hostname alone.
+  if (url.protocol !== 'https:' || url.port || !FONT_HOSTS.has(url.hostname)) {
     throw new Error(
-      `[tss-fonts] ${family}: refusing to download a font from ${host} — ` +
-        `expected ${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
+      `[tss-fonts] ${family}: refusing to download a font from ${url.origin} — ` +
+        `expected https://${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
     )
   }
+  return url
 }
 
 /**
@@ -97,11 +102,12 @@ export function assertFontHost(src, family) {
  * during testing with no recovery; a cold first contact was measured at 61s.
  * @param {string} url
  * @param {{tries?: number, baseDelay?: number, timeout?: number,
+ *          redirect?: 'follow'|'error'|'manual',
  *          log?: (message: string) => void}} [o]
  */
 async function fetchRetry(
   url,
-  { tries = 3, baseDelay = 500, timeout = 60_000, log = () => {} } = {},
+  { tries = 3, baseDelay = 500, timeout = 60_000, redirect = 'follow', log = () => {} } = {},
 ) {
   let lastErr
   for (let i = 0; i < tries; i++) {
@@ -111,6 +117,7 @@ async function fetchRetry(
       const res = await fetch(url, {
         headers: { 'user-agent': UA },
         signal: AbortSignal.timeout(timeout),
+        redirect,
       })
       if (!res.ok) {
         const err = /** @type {Error & {permanent?: boolean}} */ (new Error(`HTTP ${res.status}`))
@@ -362,7 +369,11 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
           // Google's own filenames already carry a content hash, so a fixed name is
           // safe to serve `immutable`.
           file = `${slug(fam.name)}-${src.split('/').pop()}`
-          const buf = Buffer.from(await (await fetchRetry(src, { log })).arrayBuffer())
+          // A redirect changes the origin the host check above approved. gstatic does
+          // not need one, so reject it instead of following bytes from another host.
+          const buf = Buffer.from(
+            await (await fetchRetry(src, { log, redirect: 'error' })).arrayBuffer(),
+          )
           writeAtomic(join(filesDir, file), buf)
           seenSrc.set(src, file)
           files.push(file)
@@ -403,15 +414,37 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       }
     }
 
-    const { css: fbCss, names } = fallbackFaces(
-      METRICS,
-      fam.name,
-      opts.subsets[0],
-      famWeights,
-      log,
-      warn,
-    )
-    if (fbCss) fallbackCss.push(fbCss)
+    // A fallback's size-adjust is subset-dependent: Arial's Thai average is 68% wider
+    // than its Latin one. A single fallback face calculated from opts.subsets[0] makes
+    // every other selected script reflow on swap. Mirror Google's unicode-range split
+    // so the browser selects the matching metric face for each script.
+    const rangesBySubset = new Map()
+    for (const [, subset, block] of wanted) {
+      const range = /unicode-range:\s*([^;}]+)/.exec(block)?.[1].trim()
+      if (!range && opts.subsets.length > 1) {
+        throw new Error(
+          `[tss-fonts] could not parse unicode-range for ${fam.name}'s ${subset} subset; ` +
+            `multiple subsets need separate metric fallbacks.`,
+        )
+      }
+      if (!rangesBySubset.has(subset)) rangesBySubset.set(subset, range)
+    }
+    /** @type {string[]} */
+    let names = []
+    for (const [subset, range] of rangesBySubset) {
+      const result = fallbackFaces(
+        METRICS,
+        fam.name,
+        subset,
+        famWeights,
+        log,
+        // Missing metrics are one family-level problem, not one warning per subset.
+        names.length ? () => {} : warn,
+        range,
+      )
+      if (result.css) fallbackCss.push(result.css)
+      if (!names.length) names = result.names
+    }
 
     // Plain `@theme`, NEVER `@theme inline`. Under `inline` Tailwind bakes the literal
     // value into `.font-*` utilities and into `--default-font-family`, so nothing

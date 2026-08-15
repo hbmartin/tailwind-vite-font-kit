@@ -6,8 +6,12 @@
 // can only hide an anchor, never move one, so every failure mode ends at `null` and
 // the CLI prints the manual snippet instead of writing a broken config.
 
-/** Blank comment bodies and string contents in place, preserving length and newlines. */
-function mask(src) {
+/**
+ * Blank comment bodies and string contents in place, preserving length and newlines.
+ * `keepStrings` blanks only the comments — for callers that need to read string content
+ * (an import specifier) while still ignoring commented-out code.
+ */
+export function mask(src, { keepStrings = false } = {}) {
   const out = src.split('')
   const blank = (from, to) => {
     for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
@@ -29,7 +33,7 @@ function mask(src) {
       const q = src[i]
       let j = i + 1
       while (j < src.length && src[j] !== q) j += src[j] === '\\' ? 2 : 1
-      blank(i + 1, j) // keep the quotes: they delimit the import specifier
+      if (!keepStrings) blank(i + 1, j) // keep the quotes: they delimit the import specifier
       i = j + 1
     } else {
       i++

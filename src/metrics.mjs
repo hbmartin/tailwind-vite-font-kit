@@ -60,9 +60,18 @@ const targetVariant = (m, weight) => m.variants?.[weight >= 600 ? '700' : 'regul
  * @param {(message: string) => void} [log]
  * @param {(message: string) => void} [warn] for outcomes where the build succeeds but the
  *   result is wrong; must not be silenceable
+ * @param {string} [unicodeRange] confines this fallback face to one Google CSS2 subset
  * @returns {{ css: string, names: string[] }} `names` go into the @theme stack, in order.
  */
-export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, warn = () => {}) {
+export function fallbackFaces(
+  METRICS,
+  family,
+  subset,
+  weights,
+  log = () => {},
+  warn = () => {},
+  unicodeRange,
+) {
   const m = METRICS[metricsKey(family)]
   if (!m) {
     // Not a log line. With no metrics there are no fallback faces, no size-adjust and no
@@ -113,7 +122,9 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, 
           `size-adjust:${pct(sizeAdjust)};` +
           `ascent-override:${pct(ascent / (upem * sizeAdjust))};` +
           `descent-override:${pct(Math.abs(descent) / (upem * sizeAdjust))};` +
-          `line-gap-override:${pct(lineGap / (upem * sizeAdjust))}}`,
+          `line-gap-override:${pct(lineGap / (upem * sizeAdjust))}` +
+          (unicodeRange ? `;unicode-range:${unicodeRange}` : '') +
+          `}`,
       )
     }
   }

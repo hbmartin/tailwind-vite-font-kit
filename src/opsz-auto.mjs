@@ -231,12 +231,14 @@ export async function recommendOpszPin(
     // A family that already spells out its axes keeps them: pin opsz in place and leave
     // every other axis (wdth, ital, the declared weight tuples) exactly as configured —
     // rebuilding from scratch here used to silently drop them. (The early return above
-    // guarantees fam.axes carries opsz when it exists at all.)
+    // guarantees fam.axes carries opsz when it exists at all.) `replaceFixed` because the
+    // measured pin must land in every tuple: fixed values like '12,400;72,700' would
+    // otherwise survive, keeping the axis on the wire and discarding the measurement.
     //
     // The rebuilt spec is only opsz and wght: extra axes a family may carry (Fraunces has
     // SOFT and WONK) would keep the file variable along them for no benefit here.
     pinnedAxes: fam.axes
-      ? pinOpsz(fam.axes, pin)
+      ? pinOpsz(fam.axes, pin, { replaceFixed: true })
       : `opsz,wght@${weights.map((w) => `${pin},${w}`).join(';')}`,
     pin,
   }

@@ -34,10 +34,12 @@ export function hasOpszAxis(axes) {
 /**
  * Rewrite a css2 axis tuple spec so `opsz` is pinned to a single value.
  *   'opsz,wght@9..144,500;9..144,700'  ->  'opsz,wght@48,500;48,700'
- * Only ranges (`a..b`) in the opsz position are replaced; an already-pinned spec is
- * returned unchanged.
+ * By default only ranges (`a..b`) in the opsz position are replaced, so a spec the user
+ * pinned by hand is returned unchanged. `replaceFixed` overrides fixed values too — for
+ * a measured pin that must land in EVERY tuple: mixed fixed values ('12,400;72,700')
+ * keep the axis alive on the wire, which is exactly what pinning exists to remove.
  */
-export function pinOpsz(axes, pin) {
+export function pinOpsz(axes, pin, { replaceFixed = false } = {}) {
   const at = axes.indexOf('@')
   if (at === -1) return axes
   // Axis tags are alphabetical in css2, so opsz is NOT always first — 'ital,opsz,wght'
@@ -49,7 +51,9 @@ export function pinOpsz(axes, pin) {
     .split(';')
     .map((t) => {
       const parts = t.split(',')
-      if (parts[oi]?.includes('..')) parts[oi] = String(pin)
+      if (parts[oi] !== undefined && (replaceFixed || parts[oi].includes('..'))) {
+        parts[oi] = String(pin)
+      }
       return parts.join(',')
     })
   return axes.slice(0, at) + '@' + tuples.join(';')
@@ -72,7 +76,11 @@ export function googleUrl(fam, log = () => {}) {
   let axes = fam.axes ?? `wght@${[...(fam.weights ?? [])].sort((a, b) => a - b).join(';')}`
   if (hasOpszAxis(axes)) {
     const pin = fam.opszPin ?? 16
-    axes = pinOpsz(axes, pin)
+    // An explicit numeric opszPin is the named control for this axis, so it overrides
+    // even fixed tuple values — it is how the pin `opszPin: 'auto'` measured (and the CLI
+    // wrote back) reaches the wire on a spec like 'opsz,wght@12,400;72,700'. The default
+    // only fills ranges: a spec the user pinned by hand stays theirs.
+    axes = pinOpsz(axes, pin, { replaceFixed: typeof fam.opszPin === 'number' })
     log(`  opsz axis detected -> pinned at ${pin} (removes the axis, ~45% smaller file)`)
   }
   return `https://fonts.googleapis.com/css2?family=${fam.name.replace(/\s+/g, '+')}:${axes}&display=swap`

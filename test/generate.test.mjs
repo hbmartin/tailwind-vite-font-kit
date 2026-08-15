@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { generate } from '../src/generate.mjs'
+import { assertFontHost, generate } from '../src/generate.mjs'
 
 const CSS2 = `/* latin */
 @font-face {
@@ -17,6 +17,12 @@ const CSS2 = `/* latin */
   unicode-range: U+0000-00FF;
 }
 `
+
+const MULTI_SUBSET_CSS2 =
+  CSS2 +
+  CSS2.replace('/* latin */', '/* thai */')
+    .replace('abc123.woff2', 'thai456.woff2')
+    .replace('U+0000-00FF', 'U+0E00-0E7F')
 
 /** A css2 response naming an arbitrary family, so two configs can be told apart. */
 const css2For = (family) => CSS2.replace('Fakefam', family)
@@ -36,15 +42,17 @@ function sandbox(t, respond) {
   const outDir = mkdtempSync(join(tmpdir(), 'tss-fonts-test-'))
   const realFetch = globalThis.fetch
   const calls = []
+  const requests = []
   globalThis.fetch = async (url, init) => {
     calls.push(String(url))
+    requests.push({ url: String(url), init })
     return respond(String(url), init)
   }
   t.after(() => {
     globalThis.fetch = realFetch
     rmSync(outDir, { recursive: true, force: true })
   })
-  return { outDir, calls }
+  return { outDir, calls, requests }
 }
 
 test('preloadWeights match a variable font-weight range like "100 900"', async (t) => {
@@ -219,6 +227,34 @@ test('a font URL pointing somewhere other than gstatic is refused', async (t) =>
   await assert.rejects(() => generate(selfHosted, outDir), /refusing to download a font from/)
 })
 
+test('font URLs must use HTTPS on the approved gstatic origin', () => {
+  assert.throws(
+    () => assertFontHost('http://fonts.gstatic.com/s/fake/v1/abc123.woff2', 'Fakefam'),
+    /expected https:\/\/fonts\.gstatic\.com/,
+  )
+  assert.throws(
+    () => assertFontHost('https://fonts.gstatic.com:444/s/fake/v1/abc123.woff2', 'Fakefam'),
+    /expected https:\/\/fonts\.gstatic\.com/,
+  )
+})
+
+test('self-hosted font downloads reject redirects away from the approved origin', async (t) => {
+  const { outDir, requests } = sandbox(t, (url) =>
+    url.endsWith('.woff2')
+      ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 })
+      : new Response(CSS2, { status: 200 }),
+  )
+  await generate(
+    {
+      ...optsFor('Manrope'),
+      families: [{ ...optsFor('Manrope').families[0], strategy: 'self-host' }],
+    },
+    outDir,
+  )
+  const fontRequest = requests.find((r) => r.url.endsWith('.woff2'))
+  assert.equal(fontRequest?.init?.redirect, 'error')
+})
+
 test('no temp files survive a successful generate', async (t) => {
   const { outDir } = sandbox(t, (url) =>
     url.endsWith('.woff2')
@@ -303,6 +339,28 @@ test('a subset with no blocks says which subsets were available', async (t) => {
   await assert.rejects(
     () => generate({ ...optsFor('Manrope'), subsets: ['cyrillic'] }, outDir),
     /no cyrillic blocks for Manrope\. Available: latin/,
+  )
+})
+
+// A fallback's average width is script-dependent (Arial's Thai average is much wider
+// than its Latin one). The fallback faces must therefore mirror Google's unicode-range
+// split instead of calculating one face from subsets[0] and applying it everywhere.
+test('each selected subset gets a unicode-scoped fallback with its own metrics', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(MULTI_SUBSET_CSS2, { status: 200 }))
+  const gen = await generate({ ...optsFor('Poppins'), subsets: ['latin', 'thai'] }, outDir)
+  const css = readFileSync(gen.cssPath, 'utf8')
+  const arial = [
+    ...css.matchAll(/@font-face\{([^}]*font-family:"Poppins Fallback: Arial"[^}]*)\}/g),
+  ].map((m) => m[1])
+
+  assert.equal(arial.length, 2, 'one Arial fallback face per selected subset')
+  assert.ok(arial.some((face) => face.includes('unicode-range:U+0000-00FF')))
+  assert.ok(arial.some((face) => face.includes('unicode-range:U+0E00-0E7F')))
+  const sizeAdjust = (face) => /size-adjust:([^;}]+)/.exec(face)[1]
+  assert.notEqual(
+    sizeAdjust(arial[0]),
+    sizeAdjust(arial[1]),
+    'Latin metrics must not be reused for Thai fallback glyphs',
   )
 })
 
