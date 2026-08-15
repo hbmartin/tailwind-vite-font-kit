@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.1
+
+Patch release for Vite integration, CLI reliability, and CI consistency. To release, tag
+`v0.2.1` on `main` after this merges and publish a GitHub release; `release.yml` runs on
+the published release rather than on the tag alone.
+
+### Fixed
+
+- A later plugin enabling SSR no longer causes a false base-mismatch failure when Vite's
+  `./` and `/` forms produce the same generated font paths. Base warnings now use the final
+  resolved build configuration.
+- The peer-range CI fixture now installs outside the parent pnpm workspace, so every leg
+  resolves dependencies from the fixture lockfile just like the integration build.
+- CLI backup reporting asks Git about every backup in one invocation and only claims the
+  files are ignored when all of them are covered. Its real-Git tests no longer inherit
+  developer or system excludes.
+
+### Internal
+
+- Vite-config masking records comment spans without allocating a third full source copy
+  and tracks matching parentheses during the forward scan, keeping regex detection linear.
+- Removed redundant font-request and optical-size work, restored coverage of the exact
+  `*.bak` recommendation, and kept local review-tool artifacts out of the project ignore
+  file.
+
 ## 0.2.0
 
 Two breaking changes, five bug fixes. The version is already bumped in `package.json`; to

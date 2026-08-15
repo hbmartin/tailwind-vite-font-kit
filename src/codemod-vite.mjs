@@ -19,8 +19,9 @@ const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
  * Blank comment bodies, string contents and regex-literal bodies in place, preserving
  * length and newlines. `keepStrings` blanks only comments and regex bodies — for callers
  * that need to read string content (an import specifier) while still ignoring
- * commented-out code. A third internal view blanks only comments so mentions inside
- * regex literals can be distinguished from comment-only guidance.
+ * commented-out code. Comment spans are recorded separately so mentions inside regex
+ * literals can be distinguished from comment-only guidance without another source-sized
+ * character array.
  *
  * A lexer, not a parser — but it tracks the two constructs that can swallow real code
  * when mis-lexed. A template `${…}` re-enters code, so a quote inside an interpolation
@@ -32,7 +33,7 @@ const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
 function maskViews(src) {
   const active = src.split('')
   const withStrings = src.split('')
-  const withoutComments = src.split('')
+  const commentRanges = []
   const blank = (out, from, to) => {
     for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
   }
@@ -42,7 +43,7 @@ function maskViews(src) {
   }
   const blankComment = (from, to) => {
     blankNonCode(from, to)
-    blank(withoutComments, from, to)
+    commentRanges.push([from, to])
   }
 
   // Whether a `/` at `i` can start a regex literal. The masked prefix is final by the
@@ -54,13 +55,8 @@ function maskViews(src) {
     if (k < 0) return true
     if ('(,=:[!&|?{};+-*%<>~^'.includes(active[k])) return true
     if (active[k] === ')') {
-      let depth = 1
-      let open = k - 1
-      for (; open >= 0; open--) {
-        if (active[open] === ')') depth++
-        else if (active[open] === '(' && --depth === 0) break
-      }
-      if (open >= 0) {
+      const open = matchingParens.get(k)
+      if (open !== undefined) {
         let end = open - 1
         while (end >= 0 && /\s/.test(active[end])) end--
         let start = end
@@ -147,6 +143,8 @@ function maskViews(src) {
   }
 
   /** Scan code from `i`; with `stopAtBrace`, return at the matching unnested `}`. */
+  const openParens = []
+  const matchingParens = new Map()
   function scanCode(i, stopAtBrace = false) {
     let depth = 0
     while (i < src.length) {
@@ -168,6 +166,13 @@ function maskViews(src) {
       } else if (src[i] === '/' && regexCanStart(i)) {
         const j = scanRegex(i)
         i = j === -1 ? i + 1 : j
+      } else if (src[i] === '(') {
+        openParens.push(i)
+        i++
+      } else if (src[i] === ')') {
+        const open = openParens.pop()
+        if (open !== undefined) matchingParens.set(i, open)
+        i++
       } else if (stopAtBrace && src[i] === '{') {
         depth++
         i++
@@ -186,7 +191,7 @@ function maskViews(src) {
   return {
     active: active.join(''),
     withStrings: withStrings.join(''),
-    withoutComments: withoutComments.join(''),
+    commentRanges,
   }
 }
 
@@ -287,9 +292,21 @@ function commonJsWiring(source, active) {
  *            calledBindings: string[], wired: boolean, commentOnlyMention: boolean}}
  */
 export function analyzeFontsPluginWiring(source) {
-  const { active, withStrings, withoutComments } = maskViews(source)
-  const commentOnlyMention =
-    source.includes(PACKAGE_SPECIFIER) && !withoutComments.includes(PACKAGE_SPECIFIER)
+  const { active, withStrings, commentRanges } = maskViews(source)
+  let mention = source.indexOf(PACKAGE_SPECIFIER)
+  const hasMention = mention !== -1
+  let range = 0
+  let mentionOutsideComment = false
+  while (mention !== -1) {
+    while (range < commentRanges.length && commentRanges[range][1] <= mention) range++
+    const span = commentRanges[range]
+    if (!span || mention + PACKAGE_SPECIFIER.length <= span[0]) {
+      mentionOutsideComment = true
+      break
+    }
+    mention = source.indexOf(PACKAGE_SPECIFIER, mention + PACKAGE_SPECIFIER.length)
+  }
+  const commentOnlyMention = hasMention && !mentionOutsideComment
   let imports
   try {
     ;[imports] = parse(source)

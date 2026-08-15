@@ -220,10 +220,22 @@ test("a relative base ('./') builds; self-hosting warns, CDN-only stays quiet", 
   const root = sandbox(t)
   const cdn = fonts({ families: [FAMILY], silent: true })
   await cdn.config({ root, base: './' }, { command: 'build' })
+  cdn.configResolved({
+    base: './',
+    build: { ssr: false },
+    command: 'build',
+    plugins: [{ name: 'vite:nitro' }],
+  })
   assert.deepEqual(warned, [], 'nothing is self-hosted, so nothing is wrong')
 
   const selfHost = fonts({ families: [{ ...FAMILY, strategy: 'self-host' }], silent: true })
   await selfHost.config({ root, base: './' }, { command: 'build' })
+  selfHost.configResolved({
+    base: './',
+    build: { ssr: false },
+    command: 'build',
+    plugins: [{ name: 'vite:nitro' }],
+  })
   assert.match(warned.join('\n'), /`base` is relative/)
 })
 
@@ -313,6 +325,27 @@ test("Vite's SSR-build resolution of '' and './' stays root-absolute", async (t)
     )
     assert.match(plugin.load('\0virtual:fonts'), /href":"\/fonts\/manrope-/)
   }
+  assert.deepEqual(warned, [])
+})
+
+test('an SSR flag injected by a later plugin accepts equivalent generated paths', async (t) => {
+  const warned = captureWarnings(t)
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+  })
+  await plugin.config({ root, base: '' }, { command: 'build' })
+
+  assert.doesNotThrow(() =>
+    plugin.configResolved({
+      base: '/',
+      build: { ssr: true },
+      command: 'build',
+      plugins: [{ name: 'vite:nitro' }],
+    }),
+  )
+  assert.match(plugin.load('\0virtual:fonts'), /href":"\/fonts\/manrope-/)
   assert.deepEqual(warned, [])
 })
 

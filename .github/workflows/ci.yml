@@ -206,9 +206,9 @@ jobs:
           # an unapproved build script makes pnpm exit non-zero. Without esbuild's
           # platform binary the build fails outright, so approve and reinstall. Vite 8
           # uses rolldown and needs none of this; there the approval is a no-op.
-          pnpm add -D "vite@$VITE_VERSION" || true
-          pnpm approve-builds --all || true
-          pnpm install
+          pnpm add --ignore-workspace -D "vite@$VITE_VERSION" || true
+          pnpm approve-builds --ignore-workspace --all || true
+          pnpm install --ignore-workspace
           # The `|| true` above must not let a leg quietly test whatever Vite was already
           # there — that would make this job worse than useless.
           node -e "

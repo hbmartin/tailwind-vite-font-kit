@@ -9,11 +9,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const CLI = fileURLToPath(new URL('../bin/tss-fonts.mjs', import.meta.url))
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_NOSYSTEM: '1',
+}
 
 const ENTRY = `@import 'tailwindcss';
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
@@ -61,7 +66,7 @@ function run(root, ...args) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       // NO_COLOR keeps the assertions about message text free of escape sequences.
-      env: { ...process.env, NO_COLOR: '1' },
+      env: { ...GIT_ENV, NO_COLOR: '1' },
     })
     return { status: 0, out }
   } catch (err) {
@@ -70,7 +75,8 @@ function run(root, ...args) {
 }
 
 const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
-const initGit = (root) => execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'ignore' })
+const initGit = (root) =>
+  execFileSync('git', ['init', '--quiet'], { cwd: root, env: GIT_ENV, stdio: 'ignore' })
 
 // ---------------------------------------------------------------------------
 // init
@@ -150,6 +156,7 @@ test('the backup note asks Git whether the actual backup path is ignored', (t) =
   assert.match(run(bare, 'adopt').out, /add '\*\.bak' to \.gitignore/)
 
   for (const files of [
+    { '.gitignore': 'node_modules\n*.bak\n' },
     { '.gitignore': 'node_modules\n**/*.bak\n' },
     { 'src/.gitignore': '*.bak\n' },
   ]) {
@@ -157,6 +164,15 @@ test('the backup note asks Git whether the actual backup path is ignored', (t) =
     initGit(ignored)
     assert.match(run(ignored, 'adopt').out, /\(gitignored\)/)
   }
+})
+
+test('the backup note requires every backup path to be ignored', (t) => {
+  const root = project(t, {
+    '.gitignore': 'src/*.bak\n',
+    'vite.config.ts': VITE_CONFIG,
+  })
+  initGit(root)
+  assert.match(run(root, 'init').out, /add '\*\.bak' to \.gitignore/)
 })
 
 // ---------------------------------------------------------------------------
