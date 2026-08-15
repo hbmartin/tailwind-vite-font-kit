@@ -246,7 +246,7 @@ test('font URLs must use HTTPS on the approved gstatic origin', () => {
   )
 })
 
-test('self-hosted font downloads reject redirects away from the approved origin', async (t) => {
+test('self-hosted font downloads disable redirect following', async (t) => {
   const { outDir, requests } = sandbox(t, (url) =>
     url.endsWith('.woff2')
       ? new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 })
@@ -449,7 +449,7 @@ test('a refused redirect is not retried and the error names the redirect', async
   }
   await assert.rejects(
     () => generate(selfHosted, outDir),
-    /answered with a redirect, which was refused/,
+    /answered with a redirect, which was refused — validated font downloads do not follow redirects/,
   )
   assert.equal(woff2Attempts, 1, 'a deterministic refusal must not be retried')
 })

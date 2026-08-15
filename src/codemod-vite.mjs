@@ -19,7 +19,8 @@ const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
  * Blank comment bodies, string contents and regex-literal bodies in place, preserving
  * length and newlines. `keepStrings` blanks only comments and regex bodies — for callers
  * that need to read string content (an import specifier) while still ignoring
- * commented-out code.
+ * commented-out code. A third internal view blanks only comments so mentions inside
+ * regex literals can be distinguished from comment-only guidance.
  *
  * A lexer, not a parser — but it tracks the two constructs that can swallow real code
  * when mis-lexed. A template `${…}` re-enters code, so a quote inside an interpolation
@@ -31,12 +32,17 @@ const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
 function maskViews(src) {
   const active = src.split('')
   const withStrings = src.split('')
+  const withoutComments = src.split('')
   const blank = (out, from, to) => {
     for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
   }
-  const blankBoth = (from, to) => {
+  const blankNonCode = (from, to) => {
     blank(active, from, to)
     blank(withStrings, from, to)
+  }
+  const blankComment = (from, to) => {
+    blankNonCode(from, to)
+    blank(withoutComments, from, to)
   }
 
   // Whether a `/` at `i` can start a regex literal. The masked prefix is final by the
@@ -47,6 +53,23 @@ function maskViews(src) {
     while (k >= 0 && /\s/.test(active[k])) k--
     if (k < 0) return true
     if ('(,=:[!&|?{};+-*%<>~^'.includes(active[k])) return true
+    if (active[k] === ')') {
+      let depth = 1
+      let open = k - 1
+      for (; open >= 0; open--) {
+        if (active[open] === ')') depth++
+        else if (active[open] === '(' && --depth === 0) break
+      }
+      if (open >= 0) {
+        let end = open - 1
+        while (end >= 0 && /\s/.test(active[end])) end--
+        let start = end
+        while (start >= 0 && /[\w$]/.test(active[start])) start--
+        const keyword = src.slice(start + 1, end + 1)
+        const isKeywordBoundary = start < 0 || !/[\w$.]/.test(active[start])
+        if (isKeywordBoundary && /^(?:if|while|for|with)$/.test(keyword)) return true
+      }
+    }
     let w = k
     while (w >= 0 && /[\w$]/.test(active[w])) w--
     return /^(?:return|typeof|instanceof|case|delete|void|throw|new|in|of|do|else|yield|await)$/.test(
@@ -113,7 +136,7 @@ function maskViews(src) {
       } else if (src[j] === '[') {
         inClass = true
       } else if (src[j] === '/') {
-        blankBoth(i + 1, j) // a package name inside a regex is never wiring
+        blankNonCode(i + 1, j) // a package name inside a regex is never wiring
         j++
         while (j < src.length && /[a-z]/i.test(src[j])) j++ // flags
         return j
@@ -131,12 +154,12 @@ function maskViews(src) {
       if (two === '//') {
         const end = src.indexOf('\n', i)
         const stop = end === -1 ? src.length : end
-        blankBoth(i, stop)
+        blankComment(i, stop)
         i = stop
       } else if (two === '/*') {
         const end = src.indexOf('*/', i + 2)
         const stop = end === -1 ? src.length : end + 2
-        blankBoth(i, stop)
+        blankComment(i, stop)
         i = stop
       } else if (src[i] === '"' || src[i] === "'") {
         i = scanString(i)
@@ -160,7 +183,11 @@ function maskViews(src) {
   }
 
   scanCode(0)
-  return { active: active.join(''), withStrings: withStrings.join('') }
+  return {
+    active: active.join(''),
+    withStrings: withStrings.join(''),
+    withoutComments: withoutComments.join(''),
+  }
 }
 
 export function mask(src, { keepStrings = false } = {}) {
@@ -255,9 +282,9 @@ function commonJsWiring(source, active) {
  *            calledBindings: string[], wired: boolean, commentOnlyMention: boolean}}
  */
 export function analyzeFontsPluginWiring(source) {
-  const { active, withStrings } = maskViews(source)
+  const { active, withStrings, withoutComments } = maskViews(source)
   const commentOnlyMention =
-    source.includes(PACKAGE_SPECIFIER) && !withStrings.includes(PACKAGE_SPECIFIER)
+    source.includes(PACKAGE_SPECIFIER) && !withoutComments.includes(PACKAGE_SPECIFIER)
   let imports
   try {
     ;[imports] = parse(source)

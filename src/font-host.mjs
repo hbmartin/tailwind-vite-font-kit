@@ -38,8 +38,8 @@ export function redirectRefusalError(url, err) {
   const cause = /** @type {{cause?: {message?: unknown}}} */ (err)?.cause
   if (!/redirect/i.test(String(cause?.message ?? ''))) return null
   return new Error(
-    `[tss-fonts] ${url} answered with a redirect, which was refused — following it ` +
-      `would hand the download to a different origin than the one just approved. ` +
+    `[tss-fonts] ${url} answered with a redirect, which was refused — validated font ` +
+      `downloads do not follow redirects. ` +
       `Check for an intercepting proxy or captive portal.`,
   )
 }
