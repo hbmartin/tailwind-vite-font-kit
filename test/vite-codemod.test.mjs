@@ -55,6 +55,33 @@ test('active import detection follows default, renamed and namespace bindings', 
   assert.equal(dynamic.wired, false)
 })
 
+test('active wiring detection follows CommonJS destructured and namespace bindings', () => {
+  for (const source of [
+    `const { fonts } = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fonts()] }\n`,
+    `const { fonts: fontPlugin } = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fontPlugin()] }\n`,
+    `const fontKit = require('tailwind-vite-font-kit')\nmodule.exports = { plugins: [fontKit.fonts()] }\n`,
+    `module.exports = { plugins: [require('tailwind-vite-font-kit').fonts()] }\n`,
+  ]) {
+    assert.equal(analyzeFontsPluginWiring(source).wired, true, source)
+  }
+})
+
+test('CommonJS-shaped strings and comments are not wiring', () => {
+  const stringOnly = analyzeFontsPluginWiring(
+    `const note = "require('tailwind-vite-font-kit').fonts()"\n`,
+  )
+  assert.equal(stringOnly.packageImports, 0)
+  assert.equal(stringOnly.wired, false)
+  assert.equal(stringOnly.commentOnlyMention, false)
+
+  const commentOnly = analyzeFontsPluginWiring(
+    `// const { fonts } = require('tailwind-vite-font-kit')\n// fonts()\n`,
+  )
+  assert.equal(commentOnly.packageImports, 0)
+  assert.equal(commentOnly.wired, false)
+  assert.equal(commentOnly.commentOnlyMention, true)
+})
+
 const HEADER = `import { defineConfig } from 'vite'\nimport tailwindcss from '@tailwindcss/vite'\n\n`
 const IMPORT = `import { fonts } from 'tailwind-vite-font-kit'`
 const count = (s, sub) => s.split(sub).length - 1
@@ -113,6 +140,15 @@ test('can insert only the call when a callable import already exists', () => {
   const out = insertFontsPlugin(src, { addImport: false, callee: 'fontPlugin' })
   assert.equal(count(out, "from 'tailwind-vite-font-kit'"), 1)
   assert.match(out, /plugins: \[fontPlugin\(\), tailwindcss\(\)\]/)
+})
+
+test('can insert a missing CommonJS-bound call into module.exports', () => {
+  const src =
+    `const tailwindcss = require('@tailwindcss/vite')\n` +
+    `const { fonts: fontPlugin } = require('tailwind-vite-font-kit')\n\n` +
+    `module.exports = { plugins: [tailwindcss()] }\n`
+  const out = insertFontsPlugin(src, { addImport: false, callee: 'fontPlugin' })
+  assert.match(out, /module\.exports = \{ plugins: \[fontPlugin\(\), tailwindcss\(\)\] \}/)
 })
 
 test('leaves a multiline final import intact', () => {

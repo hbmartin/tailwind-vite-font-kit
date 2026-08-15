@@ -35,6 +35,12 @@ export default defineConfig({
 })
 `
 
+const CJS_VITE_CONFIG = `const tailwindcss = require('@tailwindcss/vite')
+const { fonts } = require('tailwind-vite-font-kit')
+
+module.exports = { plugins: [fonts(), tailwindcss()] }
+`
+
 /** A scratch project with a Tailwind entry, plus whatever extra files a test needs. */
 function project(t, files = {}) {
   const root = mkdtempSync(join(tmpdir(), 'tss-cli-'))
@@ -294,6 +300,14 @@ test('init leaves an already-wired vite config alone', (t) => {
   assert.equal(read(root, 'vite.config.ts'), wired)
 })
 
+test('init recognizes an already-wired CommonJS vite config', (t) => {
+  const root = project(t, { 'vite.config.js': CJS_VITE_CONFIG })
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.match(out, /already has the plugin/)
+  assert.equal(read(root, 'vite.config.js'), CJS_VITE_CONFIG)
+})
+
 test('init completes an existing import by inserting its missing call', (t) => {
   const imported = VITE_CONFIG.replace(
     "import tailwindcss from '@tailwindcss/vite'",
@@ -339,6 +353,13 @@ test('adopt stays quiet when the plugin is already wired up', (t) => {
   const root = project(t, { 'vite.config.ts': wired })
   const { out } = run(root, 'adopt')
   assert.ok(!out.includes('has no fonts'), 'nothing is wrong, so nothing should be alarming')
+  assert.match(out, /already has the plugin/)
+})
+
+test('adopt recognizes CommonJS wiring after removing the old font CSS', (t) => {
+  const root = project(t, { 'vite.config.js': CJS_VITE_CONFIG })
+  const { out } = run(root, 'adopt')
+  assert.ok(!out.includes('has no fonts'), 'the require() wiring is active')
   assert.match(out, /already has the plugin/)
 })
 

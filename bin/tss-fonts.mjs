@@ -26,7 +26,7 @@ import {
   buildFontPlan,
   GENERIC_STACK_RE,
 } from '../src/detect.mjs'
-import { analyzeFontsPluginWiring, insertFontsPlugin, mask } from '../src/codemod-vite.mjs'
+import { analyzeFontsPluginWiring, insertFontsPlugin } from '../src/codemod-vite.mjs'
 import { codemodCss } from '../src/codemod-css.mjs'
 import { color, unifiedDiff } from '../src/diff.mjs'
 
@@ -486,10 +486,7 @@ if (cmd === 'init') {
         `\n${c.y('!')} ${relative(root, vite)} imports tailwind-vite-font-kit, but not ` +
           `a callable fonts binding — nothing was inserted. Add the Vite plugin by hand:\n${snippet()}`,
       )
-    } else if (
-      vText.includes('tailwind-vite-font-kit') &&
-      !mask(vText, { keepStrings: true }).includes('tailwind-vite-font-kit')
-    ) {
+    } else if (wiring.commentOnlyMention) {
       console.log(
         `\n${c.y('!')} ${relative(root, vite)} mentions tailwind-vite-font-kit only in ` +
           `comments — it looks deliberately disabled, so nothing was inserted.\n` +

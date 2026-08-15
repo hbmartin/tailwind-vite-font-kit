@@ -118,6 +118,28 @@ test('Vite base prefixes font URLs but not emitted asset filenames', async (t) =
   assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/)
 })
 
+test('the preload exclusion follows Vite build.assetsDir', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  const returned = await plugin.config(
+    { root, base: '/docs/', build: { assetsDir: 'static/build' } },
+    { command: 'build' },
+  )
+  const rules = returned.nitro.routeRules
+  assert.equal(rules['/docs/static/build/**'].headers.link, '')
+  assert.equal(rules['/docs/assets/**'], undefined)
+})
+
+test('an empty build.assetsDir does not exclude the document namespace', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  const returned = await plugin.config(
+    { root, base: '/docs/', build: { assetsDir: '' } },
+    { command: 'build' },
+  )
+  assert.equal(returned.nitro.routeRules['/docs/**'], undefined)
+})
+
 // Vite documents a full URL base for CDN deploys and './' for embedded ones; both built
 // fine before base handling existed, so neither may hard-fail now — least of all for
 // pure-CDN configs that self-host nothing.
@@ -141,6 +163,21 @@ test('a full-URL base puts the origin in font URLs and keeps route rules on path
     emitFile: (a) => emitted.push(a),
   })
   assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/, 'the base stays out of Rollup')
+})
+
+test('config is idempotent on a shared plugin instance with a full-URL base', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+    publicPath: '/fonts',
+  })
+  const config = { root, base: 'https://cdn.example.com/app/' }
+  await plugin.config(config, { command: 'build' })
+  await plugin.config(config, { command: 'build' })
+  const virtual = plugin.load('\0virtual:fonts')
+  assert.match(virtual, /href":"https:\/\/cdn\.example\.com\/app\/fonts\/manrope-/)
+  assert.ok(!virtual.includes('/https:'), 'the second run must not resolve an already-resolved URL')
 })
 
 test('a full-URL base with a CDN-only config builds', async (t) => {
