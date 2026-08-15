@@ -65,8 +65,9 @@ export function pinOpsz(axes, pin, { replaceFixed = false } = {}) {
  * (or whatever your display size is) for a display face.
  * @param {import('../index.d.ts').FontFamily} fam
  * @param {(message: string) => void} [log]
+ * @param {(message: string) => void} [warn] surfaced even under `silent`
  */
-export function googleUrl(fam, log = () => {}) {
+export function googleUrl(fam, log = () => {}, warn = log) {
   // `weights` is optional when `axes` supplies a wght axis. With neither there is no URL
   // to build — generate() rejects this earlier with the same complaint, but an empty
   // `wght@` is a silently malformed request, so refuse it here too.
@@ -76,11 +77,22 @@ export function googleUrl(fam, log = () => {}) {
   let axes = fam.axes ?? `wght@${[...(fam.weights ?? [])].sort((a, b) => a - b).join(';')}`
   if (hasOpszAxis(axes)) {
     const pin = fam.opszPin ?? 16
-    // An explicit numeric opszPin is the named control for this axis, so it overrides
-    // even fixed tuple values — it is how the pin `opszPin: 'auto'` measured (and the CLI
-    // wrote back) reaches the wire on a spec like 'opsz,wght@12,400;72,700'. The default
-    // only fills ranges: a spec the user pinned by hand stays theirs.
-    axes = pinOpsz(axes, pin, { replaceFixed: typeof fam.opszPin === 'number' })
+    // Only ranges are filled with the pin. A value the user fixed by hand stays theirs:
+    // an explicit '28,700' tuple is more specific than one family-wide number, and
+    // configs written before opszPin existed rely on it winning — silently replacing it
+    // changes which optical-size masters a site downloads. (`opszPin: 'auto'` is not
+    // affected: applyRecommendation() hands over an axes spec with the measured pin
+    // already in every tuple.) When both are present and disagree, the config is
+    // ambiguous — say so instead of silently serving either interpretation.
+    const pinned = pinOpsz(axes, pin)
+    if (typeof fam.opszPin === 'number' && pinned !== pinOpsz(axes, pin, { replaceFixed: true })) {
+      warn(
+        `"${fam.name}": \`axes\` fixes opsz by hand while \`opszPin: ${fam.opszPin}\` is ` +
+          `also set — the hand-written values win. Remove \`opszPin\`, or switch the spec ` +
+          `to a range (e.g. 'opsz,wght@9..144,400') if the pin should apply.`,
+      )
+    }
+    axes = pinned
     log(`  opsz axis detected -> pinned at ${pin} (removes the axis, ~45% smaller file)`)
   }
   return `https://fonts.googleapis.com/css2?family=${fam.name.replace(/\s+/g, '+')}:${axes}&display=swap`

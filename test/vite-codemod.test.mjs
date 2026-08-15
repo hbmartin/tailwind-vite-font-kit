@@ -1,6 +1,59 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { insertFontsPlugin } from '../src/codemod-vite.mjs'
+import { analyzeFontsPluginWiring, insertFontsPlugin, mask } from '../src/codemod-vite.mjs'
+
+// mask() once had no notion of regex literals: the quote inside /['"]/g flipped the
+// scanner into string mode, which consumed the real code after it — including, in a
+// vite.config with an inline transform, the fonts() call the CLI was looking for.
+test('mask blanks a regex body instead of reading its quote as a string opener', () => {
+  const src = `const clean = (s) => s.replace(/['"]/g, '-')\nconst real = fonts()\n`
+  const masked = mask(src)
+  assert.equal(masked.length, src.length, 'masking must preserve length')
+  assert.match(masked, /fonts\(\)/, 'code after the regex must stay live')
+  assert.ok(!masked.includes(`['"]`), 'the regex body is blanked')
+})
+
+test('mask keeps division as division', () => {
+  const src = `const half = total / 2\nconst quarter = total / 2 / 2\n`
+  assert.equal(mask(src), src)
+})
+
+test('mask re-enters code inside template interpolations', () => {
+  const src = 'const p = `pre${fonts()}post`\nconst q = `a${"deep"}b`\n'
+  const masked = mask(src)
+  assert.equal(masked.length, src.length)
+  assert.match(masked, /fonts\(\)/, 'interpolation code is code, not string content')
+  assert.ok(!masked.includes('pre'), 'the literal chunks are blanked')
+  assert.ok(!masked.includes('deep'), 'a string inside an interpolation is still a string')
+})
+
+test('active import detection ignores import-shaped strings and regex literals', () => {
+  const source =
+    `const note = "from 'tailwind-vite-font-kit'"\n` +
+    `if (enabled) /from 'tailwind-vite-font-kit'/.test(note)\n`
+  const state = analyzeFontsPluginWiring(source)
+  assert.equal(state.parseError, null)
+  assert.equal(state.packageImports, 0)
+  assert.equal(state.wired, false)
+})
+
+test('active import detection follows default, renamed and namespace bindings', () => {
+  for (const source of [
+    `import fontPlugin from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
+    `import { fonts as fontPlugin } from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
+    `import * as fontKit from 'tailwind-vite-font-kit'\nfontKit.fonts()\n`,
+  ]) {
+    assert.equal(analyzeFontsPluginWiring(source).wired, true, source)
+  }
+  const importedOnly = analyzeFontsPluginWiring(`import { fonts } from 'tailwind-vite-font-kit'\n`)
+  assert.deepEqual(importedOnly.bindings, ['fonts'])
+  assert.equal(importedOnly.wired, false)
+
+  const dynamic = analyzeFontsPluginWiring(`import('tailwind-vite-font-kit')\n`)
+  assert.equal(dynamic.packageImports, 1)
+  assert.deepEqual(dynamic.bindings, [])
+  assert.equal(dynamic.wired, false)
+})
 
 const HEADER = `import { defineConfig } from 'vite'\nimport tailwindcss from '@tailwindcss/vite'\n\n`
 const IMPORT = `import { fonts } from 'tailwind-vite-font-kit'`
@@ -49,6 +102,17 @@ test('the import and the entry are each emitted exactly once', () => {
   const out = insertFontsPlugin(src)
   assert.equal(count(out, IMPORT), 1)
   assert.equal(count(out, 'fonts(),'), 1)
+})
+
+test('can insert only the call when a callable import already exists', () => {
+  const src =
+    HEADER.replace(
+      "import tailwindcss from '@tailwindcss/vite'",
+      "import tailwindcss from '@tailwindcss/vite'\nimport { fonts as fontPlugin } from 'tailwind-vite-font-kit'",
+    ) + `export default defineConfig({ plugins: [tailwindcss()] })\n`
+  const out = insertFontsPlugin(src, { addImport: false, callee: 'fontPlugin' })
+  assert.equal(count(out, "from 'tailwind-vite-font-kit'"), 1)
+  assert.match(out, /plugins: \[fontPlugin\(\), tailwindcss\(\)\]/)
 })
 
 test('leaves a multiline final import intact', () => {

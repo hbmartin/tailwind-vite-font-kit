@@ -79,7 +79,8 @@ export interface FontsOptions {
   /**
    * Directory URL path for emitted fonts, relative to Vite's absolute path `base`. Default `'/fonts'`.
    * With `base: '/docs/'`, these are served from `'/docs/fonts/'`; trailing slashes are
-   * normalized. The path must name a directory rather than the site root.
+   * normalized. `'/'` is allowed and puts the fonts at the bundle root; because that
+   * namespace also contains documents, font-scoped Nitro route rules are then disabled.
    */
   publicPath?: string
   /**

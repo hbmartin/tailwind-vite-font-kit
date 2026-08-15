@@ -60,11 +60,32 @@ test('googleUrl honours an explicit opszPin', () => {
   assert.match(url, /opsz,wght@48,500;48,700/)
 })
 
-// This is how the pin `opszPin: 'auto'` measured (and the CLI wrote back into the
-// config) reaches the wire when the family's axes spec carries fixed opsz values.
-test('googleUrl: an explicit opszPin overrides fixed opsz values in every tuple', () => {
-  const url = googleUrl({ name: 'Fraunces', axes: 'opsz,wght@12,500;72,700', opszPin: 48 })
+// A hand-fixed tuple value is more specific than one family-wide number, and configs
+// written before opszPin existed rely on it winning — silently replacing it changes
+// which optical-size masters a site downloads. The conflict is reported, not resolved
+// silently in either direction. (`opszPin: 'auto'` still reaches the wire: it hands
+// googleUrl an axes spec with the measured pin already in every tuple.)
+test('googleUrl: hand-fixed opsz values win over a conflicting opszPin, loudly', () => {
+  const warned = []
+  const url = googleUrl(
+    { name: 'Fraunces', axes: 'opsz,wght@12,500;72,700', opszPin: 48 },
+    () => {},
+    (m) => warned.push(m),
+  )
+  assert.match(url, /opsz,wght@12,500;72,700/, 'the hand-written values must survive')
+  assert.match(warned.join(' '), /opszPin: 48/)
+  assert.match(warned.join(' '), /hand-written values win/)
+})
+
+test('googleUrl: a numeric opszPin fills ranges without any conflict warning', () => {
+  const warned = []
+  const url = googleUrl(
+    { name: 'Fraunces', axes: 'opsz,wght@9..144,500;9..144,700', opszPin: 48 },
+    () => {},
+    (m) => warned.push(m),
+  )
   assert.match(url, /opsz,wght@48,500;48,700/)
+  assert.deepEqual(warned, [])
 })
 
 test('googleUrl leaves hand-pinned opsz values alone when no opszPin is set', () => {

@@ -102,9 +102,16 @@ You can also pass the same object inline: `fonts({ families: [...] })`. Inline o
 
 **Vite 7 or 8**, and **Tailwind v4** — v3 has no `@theme`. Node ≥22.
 
-**Vite path-based `base` is respected.** Leave `publicPath` as `'/fonts'` when deploying under a
+**Vite `base` is respected.** Leave `publicPath` as `'/fonts'` when deploying under a
 subpath: with `base: '/docs/'`, emitted files live at `fonts/*` and are requested from
-`/docs/fonts/*`. A trailing slash in `publicPath` is normalized.
+`/docs/fonts/*`. A full-URL base (`base: 'https://cdn.example.com/app/'`) puts the origin
+into the font URLs in the build; a relative base (`'./'`) cannot be followed by
+plugin-written URLs, so those stay root-absolute and the plugin says so when fonts are
+self-hosted. A base set by *another plugin's* `config()` hook is detected after the fact
+and reported — set `base` directly in your Vite config. A trailing slash in `publicPath`
+is normalized, and `publicPath: '/'` serves fonts from the bundle root. At the bundle root
+the fonts share a namespace with documents, so the plugin deliberately omits its font-scoped
+Nitro caching/CORS rule and font-response preload exclusion rather than matching the whole app.
 
 **Nitro is what delivers the preloads.** The `Link:` header and the `immutable` caching on
 `/fonts/**` both ship as Nitro route rules, which is what makes this zero-app-edit. On

@@ -25,6 +25,21 @@ test("opszPin accepts a positive number or 'auto', and nothing else", () => {
   }
 })
 
+test("opszSizes is validated when opszPin is 'auto'", () => {
+  assert.doesNotThrow(() => validateFamilies(fam({ opszPin: 'auto' }), 'test'))
+  assert.doesNotThrow(() =>
+    validateFamilies(fam({ opszPin: 'auto', opszSizes: [12, 16, 48] }), 'test'),
+  )
+  for (const bad of [[], [0, 16], [-1, 16], [Number.NaN], [Number.POSITIVE_INFINITY], '16,48']) {
+    assert.throws(
+      () => validateFamilies(fam({ opszPin: 'auto', opszSizes: bad }), 'test'),
+      /opszSizes.*non-empty array of positive finite/s,
+    )
+  }
+  // The option is documented as ignored for a numeric pin, so irrelevant data remains ignored.
+  assert.doesNotThrow(() => validateFamilies(fam({ opszPin: 16, opszSizes: [] }), 'test'))
+})
+
 test('an axes spec may carry the weights, but only through a wght axis', () => {
   assert.doesNotThrow(() =>
     validateFamilies(fam({ weights: undefined, axes: 'opsz,wght@9..144,400' }), 'test'),

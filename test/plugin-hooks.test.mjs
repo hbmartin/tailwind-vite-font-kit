@@ -104,12 +104,177 @@ test('Vite base prefixes font URLs but not emitted asset filenames', async (t) =
   assert.equal(returned.nitro.routeRules['/docs/fonts//**'], undefined)
   assert.match(plugin.load('\0virtual:fonts'), /href":"\/docs\/fonts\/manrope-/)
 
+  // The other default exclusion is a request path too: hashed build output is requested
+  // at /docs/assets/**, so an unprefixed '/assets/**' would match none of it and every
+  // chunk would regain the preload header the exclusion exists to strip.
+  assert.equal(returned.nitro.routeRules['/docs/assets/**'].headers.link, '')
+  assert.equal(returned.nitro.routeRules['/assets/**'], undefined)
+
   const emitted = []
   plugin.buildStart.call({
     environment: { config: { consumer: 'client' } },
     emitFile: (asset) => emitted.push(asset),
   })
   assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/)
+})
+
+// Vite documents a full URL base for CDN deploys and './' for embedded ones; both built
+// fine before base handling existed, so neither may hard-fail now — least of all for
+// pure-CDN configs that self-host nothing.
+test('a full-URL base puts the origin in font URLs and keeps route rules on paths', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [{ ...FAMILY, strategy: 'self-host' }], silent: true })
+  const returned = await plugin.config(
+    { root, base: 'https://cdn.example.com/app/' },
+    { command: 'build' },
+  )
+  assert.match(
+    plugin.load('\0virtual:fonts'),
+    /href":"https:\/\/cdn\.example\.com\/app\/fonts\/manrope-/,
+  )
+  // Route rules stay path-keyed: an origin-pull CDN forwards /app/fonts/* to this server,
+  // and no route pattern could ever match an origin anyway.
+  assert.ok(returned.nitro.routeRules['/app/fonts/**'])
+  const emitted = []
+  plugin.buildStart.call({
+    environment: { config: { consumer: 'client' } },
+    emitFile: (a) => emitted.push(a),
+  })
+  assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/, 'the base stays out of Rollup')
+})
+
+test('a full-URL base with a CDN-only config builds', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  const returned = await plugin.config(
+    { root, base: 'https://cdn.example.com/assets/' },
+    { command: 'build' },
+  )
+  assert.ok(returned.nitro.routeRules['/**'].headers.link, 'generation ran to completion')
+})
+
+test("a relative base ('./') builds; self-hosting warns, CDN-only stays quiet", async (t) => {
+  const warned = captureWarnings(t)
+  const root = sandbox(t)
+  const cdn = fonts({ families: [FAMILY], silent: true })
+  await cdn.config({ root, base: './' }, { command: 'build' })
+  assert.deepEqual(warned, [], 'nothing is self-hosted, so nothing is wrong')
+
+  const selfHost = fonts({ families: [{ ...FAMILY, strategy: 'self-host' }], silent: true })
+  await selfHost.config({ root, base: './' }, { command: 'build' })
+  assert.match(warned.join('\n'), /`base` is relative/)
+})
+
+// publicPath '/' served fonts from the bundle root long before base handling existed.
+// No pattern can scope the root, so there is no immutable rule and no fonts exclusion —
+// which is what pre-base versions actually did too (their pattern was '//**').
+test("publicPath '/' builds and serves fonts from the bundle root", async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+    publicPath: '/',
+  })
+  const returned = await plugin.config({ root }, { command: 'build' })
+  assert.equal(returned.nitro.routeRules['//**'], undefined)
+  assert.match(plugin.load('\0virtual:fonts'), /href":"\/manrope-/)
+  assert.ok(returned.nitro.routeRules['/**'].headers.link)
+  assert.equal(returned.nitro.routeRules['/assets/**'].headers.link, '')
+  const emitted = []
+  plugin.buildStart.call({
+    environment: { config: { consumer: 'client' } },
+    emitFile: (a) => emitted.push(a),
+  })
+  assert.match(emitted[0].fileName, /^manrope-.*\.woff2$/, 'no directory prefix at the root')
+})
+
+test('bundle-root fonts never apply font rules to a non-root base namespace', async (t) => {
+  for (const publicPath of ['/', '/docs/']) {
+    const root = sandbox(t)
+    const plugin = fonts({
+      families: [{ ...FAMILY, strategy: 'self-host' }],
+      silent: true,
+      publicPath,
+    })
+    const returned = await plugin.config({ root, base: '/docs/' }, { command: 'build' })
+    const rules = returned.nitro.routeRules
+    assert.equal(rules['/docs/**'], undefined, `${publicPath} must not make HTML immutable`)
+    assert.equal(rules['/docs//**'], undefined, `${publicPath} must not emit a dead rule either`)
+    assert.match(plugin.load('\0virtual:fonts'), /href":"\/docs\/manrope-/)
+    assert.ok(rules['/**'].headers.link, 'documents keep their preload header')
+    assert.equal(rules['/docs/assets/**'].headers.link, '')
+  }
+})
+
+test("a full-URL base plus publicPath '/' also skips the shared app namespace", async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+    publicPath: '/',
+  })
+  const returned = await plugin.config(
+    { root, base: 'https://cdn.example.com/app/' },
+    { command: 'build' },
+  )
+  assert.equal(returned.nitro.routeRules['/app/**'], undefined)
+  assert.equal(returned.nitro.routeRules['/app//**'], undefined)
+  assert.match(plugin.load('\0virtual:fonts'), /href":"https:\/\/cdn\.example\.com\/app\/manrope-/)
+})
+
+test("Vite's serve-time resolution of '' and './' does not look like a later base change", async (t) => {
+  for (const base of ['', './']) {
+    const root = sandbox(t)
+    const plugin = fonts({
+      families: [{ ...FAMILY, strategy: 'self-host' }],
+      silent: true,
+    })
+    await plugin.config({ root, base }, { command: 'serve' })
+    assert.doesNotThrow(() =>
+      plugin.configResolved({ base: '/', plugins: [{ name: 'vite:nitro' }] }),
+    )
+    assert.match(plugin.load('\0virtual:fonts'), /href":"\/fonts\/manrope-/)
+  }
+})
+
+test("Vite-normalized slashless and full-URL dev bases generate against Vite's paths", async (t) => {
+  for (const [base, resolvedBase] of [
+    ['docs/', '/docs/'],
+    ['https://cdn.example.com/app/', '/app/'],
+  ]) {
+    const root = sandbox(t)
+    const plugin = fonts({
+      families: [{ ...FAMILY, strategy: 'self-host' }],
+      silent: true,
+    })
+    const returned = await plugin.config({ root, base }, { command: 'serve' })
+    assert.ok(returned.nitro.routeRules[`${resolvedBase}fonts/**`])
+    assert.match(plugin.load('\0virtual:fonts'), new RegExp(`href":"${resolvedBase}fonts/manrope-`))
+    assert.doesNotThrow(() =>
+      plugin.configResolved({ base: resolvedBase, plugins: [{ name: 'vite:nitro' }] }),
+    )
+  }
+})
+
+// This plugin's config() runs before every other plugin's (enforce:'pre'), so a base a
+// framework plugin injects from its own config hook is invisible until configResolved —
+// by which point the CSS hrefs and route rules are baked. Self-hosted URLs are then
+// wrong: hard failure. CDN hrefs point at Google: a warning about the patterns.
+test('a base injected by a later plugin fails a self-hosting build loudly', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [{ ...FAMILY, strategy: 'self-host' }], silent: true })
+  await plugin.config({ root }, { command: 'build' })
+  assert.throws(
+    () => plugin.configResolved({ base: '/docs/', plugins: [{ name: 'vite:nitro' }] }),
+    /resolved to "\/docs\/"/,
+  )
+})
+
+test('a base injected by a later plugin only warns when nothing is self-hosted', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ base: '/docs/', plugins: [{ name: 'vite:nitro' }] })
+  assert.match(warned.join('\n'), /Set `base` directly/)
 })
 
 test('preloadHeader.exclude replaces the default exclusion list', async (t) => {

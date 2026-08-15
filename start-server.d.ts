@@ -9,7 +9,9 @@ export interface FontsServerEntryOptions {
    * fast route it buys nothing over the plugin's `Link:` header.
    *
    * Requires HTTP/2+ for Chrome to act on it, and a Node runtime for `writeEarlyHints`.
-   * Under workerd or Deno it silently degrades to the `Link:` header.
+   * Under workerd or Deno no 103 is sent; the Vite plugin's Nitro `Link:` header remains
+   * the fallback. If you disabled that with `preloadHeader: false`, set `linkHeader: true`
+   * here to provide the fallback yourself.
    */
   earlyHints?: boolean
   /**

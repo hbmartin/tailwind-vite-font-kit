@@ -6,40 +6,227 @@
 // can only hide an anchor, never move one, so every failure mode ends at `null` and
 // the CLI prints the manual snippet instead of writing a broken config.
 
+import { init, parse } from 'es-module-lexer'
+
+// One initialization for the process. Unlike the hand-written masking below, this lexer
+// understands the complete import grammar and never mistakes import-shaped string or regex
+// contents for module wiring.
+await init
+
+const PACKAGE_SPECIFIER = 'tailwind-vite-font-kit'
+
 /**
- * Blank comment bodies and string contents in place, preserving length and newlines.
- * `keepStrings` blanks only the comments — for callers that need to read string content
- * (an import specifier) while still ignoring commented-out code.
+ * Blank comment bodies, string contents and regex-literal bodies in place, preserving
+ * length and newlines. `keepStrings` blanks only comments and regex bodies — for callers
+ * that need to read string content (an import specifier) while still ignoring
+ * commented-out code.
+ *
+ * A lexer, not a parser — but it tracks the two constructs that can swallow real code
+ * when mis-lexed. A template `${…}` re-enters code, so a quote inside an interpolation
+ * cannot desync the scan. A `/` counts as a regex literal only where an expression can
+ * start (after `(`, `,`, `=`, a keyword like `return`, …), never after a value — so a
+ * quote inside `/['"]/g` no longer flips the scanner into string mode, and division
+ * stays division.
  */
 export function mask(src, { keepStrings = false } = {}) {
   const out = src.split('')
   const blank = (from, to) => {
     for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
   }
-  let i = 0
-  while (i < src.length) {
-    const two = src.slice(i, i + 2)
-    if (two === '//') {
-      const end = src.indexOf('\n', i)
-      const stop = end === -1 ? src.length : end
-      blank(i, stop)
-      i = stop
-    } else if (two === '/*') {
-      const end = src.indexOf('*/', i + 2)
-      const stop = end === -1 ? src.length : end + 2
-      blank(i, stop)
-      i = stop
-    } else if (src[i] === '"' || src[i] === "'" || src[i] === '`') {
-      const q = src[i]
-      let j = i + 1
-      while (j < src.length && src[j] !== q) j += src[j] === '\\' ? 2 : 1
-      if (!keepStrings) blank(i + 1, j) // keep the quotes: they delimit the import specifier
-      i = j + 1
-    } else {
-      i++
+
+  // Whether a `/` at `i` can start a regex literal. The masked prefix is final by the
+  // time this runs — the scan is strictly left-to-right — so already-blanked comment
+  // and string bodies never fake an expression position.
+  const regexCanStart = (i) => {
+    let k = i - 1
+    while (k >= 0 && /\s/.test(out[k])) k--
+    if (k < 0) return true
+    if ('(,=:[!&|?{};+-*%<>~^'.includes(out[k])) return true
+    let w = k
+    while (w >= 0 && /[\w$]/.test(out[w])) w--
+    return /^(?:return|typeof|instanceof|case|delete|void|throw|new|in|of|do|else|yield|await)$/.test(
+      src.slice(w + 1, k + 1),
+    )
+  }
+
+  /** `"` or `'` at i: scan to the closing quote. */
+  const scanString = (i) => {
+    const q = src[i]
+    let j = i + 1
+    while (j < src.length && src[j] !== q) j += src[j] === '\\' ? 2 : 1
+    if (!keepStrings) blank(i + 1, j) // keep the quotes: they delimit the import specifier
+    return j + 1
+  }
+
+  /** '`' at i: template literal, with `${…}` scanned as code. */
+  const scanTemplate = (i) => {
+    let j = i + 1
+    let seg = j
+    while (j < src.length) {
+      if (src[j] === '\\') {
+        j += 2
+        continue
+      }
+      if (src[j] === '`') {
+        if (!keepStrings) blank(seg, j)
+        return j + 1
+      }
+      if (src[j] === '$' && src[j + 1] === '{') {
+        if (!keepStrings) blank(seg, j)
+        j = scanCode(j + 2, true)
+        if (j < src.length) j++ // step over the closing '}'
+        seg = j
+        continue
+      }
+      j++
+    }
+    if (!keepStrings) blank(seg, j)
+    return j
+  }
+
+  /** `/` at i known to be in expression position: scan to the closing `/`, honouring
+   *  character classes. Returns -1 when no closer exists on the line — division after
+   *  all, so the caller advances one char and the body stays live. */
+  const scanRegex = (i) => {
+    let j = i + 1
+    let inClass = false
+    while (j < src.length && src[j] !== '\n') {
+      if (src[j] === '\\') {
+        j += 2
+        continue
+      }
+      if (inClass) {
+        if (src[j] === ']') inClass = false
+      } else if (src[j] === '[') {
+        inClass = true
+      } else if (src[j] === '/') {
+        blank(i + 1, j) // always: a package name inside a regex is never wiring
+        j++
+        while (j < src.length && /[a-z]/i.test(src[j])) j++ // flags
+        return j
+      }
+      j++
+    }
+    return -1
+  }
+
+  /** Scan code from `i`; with `stopAtBrace`, return at the matching unnested `}`. */
+  function scanCode(i, stopAtBrace = false) {
+    let depth = 0
+    while (i < src.length) {
+      const two = src.slice(i, i + 2)
+      if (two === '//') {
+        const end = src.indexOf('\n', i)
+        const stop = end === -1 ? src.length : end
+        blank(i, stop)
+        i = stop
+      } else if (two === '/*') {
+        const end = src.indexOf('*/', i + 2)
+        const stop = end === -1 ? src.length : end + 2
+        blank(i, stop)
+        i = stop
+      } else if (src[i] === '"' || src[i] === "'") {
+        i = scanString(i)
+      } else if (src[i] === '`') {
+        i = scanTemplate(i)
+      } else if (src[i] === '/' && regexCanStart(i)) {
+        const j = scanRegex(i)
+        i = j === -1 ? i + 1 : j
+      } else if (stopAtBrace && src[i] === '{') {
+        depth++
+        i++
+      } else if (stopAtBrace && src[i] === '}') {
+        if (depth === 0) return i
+        depth--
+        i++
+      } else {
+        i++
+      }
+    }
+    return i
+  }
+
+  scanCode(0)
+  return out.join('')
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Callable local expressions introduced by one static root-package import statement. */
+function callableBindings(statement) {
+  const kept = mask(statement, { keepStrings: true })
+  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(kept)
+  if (!match || /^type\b/.test(match[1].trim())) return []
+
+  const clause = match[1].trim()
+  const bindings = []
+
+  // The package's default export is fonts(), so any default binding is callable.
+  const defaultBinding = /^([\w$]+)(?:\s*,|$)/.exec(clause)?.[1]
+  if (defaultBinding) bindings.push(defaultBinding)
+
+  const named = /\{([\s\S]*?)\}/.exec(clause)?.[1]
+  if (named) {
+    for (const raw of named.split(',')) {
+      const part = raw.trim()
+      if (!part || /^type\b/.test(part)) continue
+      const imported = /^fonts(?:\s+as\s+([\w$]+))?$/.exec(part)
+      if (imported) bindings.push(imported[1] ?? 'fonts')
     }
   }
-  return out.join('')
+
+  // A namespace import is not itself callable, but its `.fonts` export is.
+  const namespace = /\*\s+as\s+([\w$]+)/.exec(clause)?.[1]
+  if (namespace) bindings.push(`${namespace}.fonts`)
+
+  return bindings
+}
+
+/**
+ * Inspect active imports with es-module-lexer, then use the masked source only to see
+ * whether a callable binding is invoked. Package imports from subpaths and dynamic or
+ * side-effect imports count as mentions, but not as Vite-plugin wiring.
+ *
+ * @param {string} source
+ * @returns {{parseError: unknown, packageImports: number, bindings: string[],
+ *            calledBindings: string[], wired: boolean}}
+ */
+export function analyzeFontsPluginWiring(source) {
+  let imports
+  try {
+    ;[imports] = parse(source)
+  } catch (parseError) {
+    return { parseError, packageImports: 0, bindings: [], calledBindings: [], wired: false }
+  }
+
+  const packageImports = imports.filter(
+    (entry) =>
+      typeof entry.n === 'string' &&
+      (entry.n === PACKAGE_SPECIFIER || entry.n.startsWith(`${PACKAGE_SPECIFIER}/`)),
+  )
+  const bindings = [
+    ...new Set(
+      packageImports.flatMap((entry) => {
+        if (entry.n !== PACKAGE_SPECIFIER || entry.d !== -1) return []
+        const statement = source.slice(entry.ss, entry.se)
+        if (!/^\s*import\b/.test(statement)) return []
+        return callableBindings(statement)
+      }),
+    ),
+  ]
+  const active = mask(source)
+  const calledBindings = bindings.filter((binding) => {
+    const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
+    return new RegExp(`(?<![\\w$])${expression}\\s*\\(`).test(active)
+  })
+
+  return {
+    parseError: null,
+    packageImports: packageImports.length,
+    bindings,
+    calledBindings,
+    wired: calledBindings.length > 0,
+  }
 }
 
 /**
@@ -136,9 +323,10 @@ function rootedInConfig(masked, ancestors) {
 
 /**
  * @param {string} source  vite.config.* text
+ * @param {{addImport?: boolean, callee?: string}} [options]
  * @returns {string|null}  the edited text, or null when the edit cannot be made safely
  */
-export function insertFontsPlugin(source) {
+export function insertFontsPlugin(source, { addImport = true, callee = 'fonts' } = {}) {
   const masked = mask(source)
 
   // Exactly one call, or there is no telling which one is the plugins entry.
@@ -158,16 +346,16 @@ export function insertFontsPlugin(source) {
 
   // fonts() without its import is a ReferenceError, so a config whose imports cannot be
   // located falls back to the manual instructions instead of getting a half-edit.
-  const impEnd = lastImportEnd(masked)
-  if (impEnd === -1) return null
+  const impEnd = addImport ? lastImportEnd(masked) : -1
+  if (addImport && impEnd === -1) return null
 
   const indent = source.slice(source.lastIndexOf('\n', at - 1) + 1, at)
-  const entry = /^[ \t]*$/.test(indent) ? `fonts(),\n${indent}` : 'fonts(), '
+  const entry = /^[ \t]*$/.test(indent) ? `${callee}(),\n${indent}` : `${callee}(), `
 
   // Descending, so the earlier splice does not shift the later one's index.
   const edits = [
     [at, entry],
-    [impEnd, `\nimport { fonts } from 'tailwind-vite-font-kit'`],
+    ...(addImport ? [[impEnd, `\nimport { fonts } from 'tailwind-vite-font-kit'`]] : []),
   ].sort((a, b) => b[0] - a[0])
   let out = source
   for (const [i, text] of edits) out = out.slice(0, i) + text + out.slice(i)
