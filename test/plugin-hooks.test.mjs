@@ -165,6 +165,31 @@ test('a full-URL base puts the origin in font URLs and keeps route rules on path
   assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/, 'the base stays out of Rollup')
 })
 
+test('a full-URL base does not duplicate a path already present in publicPath', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    silent: true,
+    publicPath: '/app/fonts/',
+  })
+  const returned = await plugin.config(
+    { root, base: 'https://cdn.example.com/app/' },
+    { command: 'build' },
+  )
+  assert.ok(returned.nitro.routeRules['/app/fonts/**'])
+  assert.equal(returned.nitro.routeRules['/app/app/fonts/**'], undefined)
+  assert.match(
+    plugin.load('\0virtual:fonts'),
+    /href":"https:\/\/cdn\.example\.com\/app\/fonts\/manrope-/,
+  )
+  const emitted = []
+  plugin.buildStart.call({
+    environment: { config: { consumer: 'client' } },
+    emitFile: (asset) => emitted.push(asset),
+  })
+  assert.match(emitted[0].fileName, /^fonts\/manrope-.*\.woff2$/)
+})
+
 test('config is idempotent on a shared plugin instance with a full-URL base', async (t) => {
   const root = sandbox(t)
   const plugin = fonts({
@@ -272,6 +297,46 @@ test("Vite's serve-time resolution of '' and './' does not look like a later bas
     )
     assert.match(plugin.load('\0virtual:fonts'), /href":"\/fonts\/manrope-/)
   }
+})
+
+test("Vite's SSR-build resolution of '' and './' stays root-absolute", async (t) => {
+  const warned = captureWarnings(t)
+  for (const base of ['', './']) {
+    const root = sandbox(t)
+    const plugin = fonts({
+      families: [{ ...FAMILY, strategy: 'self-host' }],
+      silent: true,
+    })
+    await plugin.config({ root, base, build: { ssr: true } }, { command: 'build' })
+    assert.doesNotThrow(() =>
+      plugin.configResolved({ base: '/', plugins: [{ name: 'vite:nitro' }] }),
+    )
+    assert.match(plugin.load('\0virtual:fonts'), /href":"\/fonts\/manrope-/)
+  }
+  assert.deepEqual(warned, [])
+})
+
+test('full-URL dev generation leaves committed build artifacts untouched', async (t) => {
+  const root = sandbox(t)
+  const options = {
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+    output: 'commit',
+    silent: true,
+  }
+  const base = 'https://cdn.example.com/app/'
+  await fonts(options).config({ root, base }, { command: 'build' })
+  const committedDir = join(root, '.tss-fonts')
+  const committed = readdirSync(committedDir).sort()
+
+  await fonts(options).config({ root, base }, { command: 'serve' })
+
+  assert.deepEqual(readdirSync(committedDir).sort(), committed)
+  assert.ok(
+    readdirSync(join(root, 'node_modules', '.cache', 'tss-fonts')).some((name) =>
+      name.endsWith('.gen.css'),
+    ),
+    'serve-only CSS should use the disposable cache',
+  )
 })
 
 test("Vite-normalized slashless and full-URL dev bases generate against Vite's paths", async (t) => {
@@ -468,7 +533,9 @@ async function devServer(t, options) {
 
   // The virtual module is the plugin's own record of what it emitted, so it is the honest
   // source for "a filename this server should recognise".
-  const [, fontFile] = /\/fonts\/([^"]+\.woff2)/.exec(plugin.load('\0virtual:fonts'))
+  const [, fontHref, fontFile] = /"href":"([^"]*\/([^/"]+\.woff2))/.exec(
+    plugin.load('\0virtual:fonts'),
+  )
 
   /** @param {string} url */
   const request = (url) => {
@@ -482,7 +549,7 @@ async function devServer(t, options) {
     )
     return { headers, body, nexted }
   }
-  return { request, fontFile }
+  return { request, fontFile, fontPath: new URL(fontHref, 'http://vite.dev').pathname }
 }
 
 test('the dev middleware serves a known font with caching and CORS headers', async (t) => {
@@ -505,6 +572,13 @@ test('the dev middleware passes through anything it does not own', async (t) => 
   assert.equal(request('/fonts/not-a-real-file.woff2').nexted, true)
   assert.equal(request('/fonts/not-a-real-file.woff2').body, null)
   assert.equal(request('/assets/index.js').nexted, true, 'paths outside publicPath')
+})
+
+test('the bundle-root dev middleware serves only generated woff2 requests', async (t) => {
+  const { request, fontPath } = await devServer(t, { publicPath: '/' })
+  assert.equal(request(fontPath).nexted, false)
+  assert.equal(request('/assets/index.js').nexted, true)
+  assert.equal(request('/not-a-generated-font.woff2').nexted, true)
 })
 
 // ---------------------------------------------------------------------------

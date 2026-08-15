@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { googleUrl, hasOpszAxis, pinOpsz } from '../src/opsz.mjs'
+import { googleUrl, hasOpszAxis, opszPinIsOverridden, pinOpsz } from '../src/opsz.mjs'
 
 test('detects an opsz axis from the css2 spec, without downloading anything', () => {
   assert.ok(hasOpszAxis('opsz,wght@9..144,500;9..144,700'))
@@ -17,6 +17,13 @@ test('pinOpsz replaces the range in every weight tuple', () => {
 
 test('pinOpsz leaves an already-pinned spec alone', () => {
   assert.equal(pinOpsz('opsz,wght@48,500;48,700', 16), 'opsz,wght@48,500;48,700')
+})
+
+test('detects when hand-fixed axes override a family-wide opsz pin', () => {
+  assert.equal(opszPinIsOverridden('opsz,wght@12,400;72,700', 48), true)
+  assert.equal(opszPinIsOverridden('opsz,wght@48,400;48,700', 48), false)
+  assert.equal(opszPinIsOverridden('opsz,wght@9..144,400;9..144,700', 48), false)
+  assert.equal(opszPinIsOverridden('wght@400;700', 48), false)
 })
 
 // A measured pin has to land in EVERY tuple: mixed fixed values keep the opsz axis on

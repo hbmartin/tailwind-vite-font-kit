@@ -27,6 +27,7 @@ import { assertConfigShape, loadFontsConfig, validateFamilies } from './config.m
 
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
+const FULL_URL_BASE_RE = /^(?:https?:)?\/\//
 
 /** Turn a user-facing URL prefix into one absolute directory path. `'/'` is legal —
  *  fonts then live at the bundle root, which worked before base handling existed. */
@@ -39,12 +40,12 @@ function normalizePublicPath(value, label = 'publicPath') {
 
 /** Mirror the parts of Vite's base resolution that affect generated URLs. Config hooks
  * see the raw user value, while configResolved sees this command-specific form. */
-function viteBaseForCommand(base, { isServe = false } = {}) {
+function viteBaseForCommand(base, { isServe = false, isSsrBuild = false } = {}) {
   if (base == null) return '/'
-  if (base === '' || base === './') return isServe ? '/' : './'
+  if (base === '' || base === './') return isServe || isSsrBuild ? '/' : './'
   if (base.startsWith('.')) return '/'
 
-  const external = /^(?:https?:)?\/\//.test(base)
+  const external = FULL_URL_BASE_RE.test(base)
   if (!isServe && external) return base.replace(/\/+$/, '') + '/'
 
   try {
@@ -72,14 +73,9 @@ function viteBaseForCommand(base, { isServe = false } = {}) {
  *   basePath    the base's path portion, for prefixing other route patterns ('' at root)
  * @param {string | undefined} base
  * @param {string} publicPath
- * @param {{isServe?: boolean, selfHost?: boolean,
- *          warn?: (message: string) => void}} [context]
+ * @param {{selfHost?: boolean, warn?: (message: string) => void}} [context]
  */
-function publicPathsForVite(
-  base,
-  publicPath,
-  { isServe = false, selfHost = true, warn = () => {} } = {},
-) {
+function publicPathsForVite(base, publicPath, { selfHost = true, warn = () => {} } = {}) {
   const assetPath = normalizePublicPath(publicPath)
   if (!base || base === '/') {
     return { assetPath, publicPath: assetPath, routePath: assetPath, basePath: '' }
@@ -87,7 +83,7 @@ function publicPathsForVite(
   // A full-URL base (CDN deploy). Only hrefs carry the origin, and only in the build —
   // dev serves off the local server, where just the path portion applies. The path
   // portion stays in the route patterns: an origin-pull CDN forwards it to this server.
-  if (/^(?:https?:)?\/\//.test(base)) {
+  if (FULL_URL_BASE_RE.test(base)) {
     let url
     try {
       url = new URL(base.startsWith('//') ? `https:${base}` : base)
@@ -96,10 +92,21 @@ function publicPathsForVite(
       return { assetPath, publicPath: assetPath, routePath: assetPath, basePath: '' }
     }
     const basePath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+    // Match the path-base compatibility behavior below: before base support existed,
+    // users sometimes included the deployment path in publicPath themselves.
+    if (basePath && (assetPath === basePath || assetPath.startsWith(`${basePath}/`))) {
+      const stripped = assetPath.slice(basePath.length) || '/'
+      return {
+        assetPath: stripped,
+        publicPath: url.origin + assetPath,
+        routePath: assetPath,
+        basePath,
+      }
+    }
     const routePath = assetPath === '/' ? basePath || '/' : posix.join(basePath || '/', assetPath)
     return {
       assetPath,
-      publicPath: isServe ? routePath : url.origin + routePath,
+      publicPath: url.origin + routePath,
       routePath,
       basePath,
     }
@@ -210,6 +217,7 @@ export function fonts(userOptions = {}) {
 
   let root = process.cwd()
   let isServe = false
+  let isSsrBuild = false
   // The URL in generated CSS includes Vite's base; emitted Rollup filenames must not.
   let assetPath = '/fonts'
   // The server-side request path for fonts — Nitro patterns and the dev middleware use
@@ -234,10 +242,8 @@ export function fonts(userOptions = {}) {
   /** @type {string | null} */
   let configFile = null
 
-  const outDirFor = (r) =>
-    opts.output === 'commit'
-      ? resolve(r, '.tss-fonts')
-      : join(r, 'node_modules', '.cache', 'tss-fonts')
+  const outDirFor = (r, output = opts.output) =>
+    output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
 
   return {
     name: 'tailwind-vite-font-kit',
@@ -248,13 +254,13 @@ export function fonts(userOptions = {}) {
 
     async config(config, env) {
       isServe = env.command === 'serve'
+      isSsrBuild = env.command === 'build' && Boolean(config.build?.ssr)
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
       assumedBase = config.base
-      generatedBase = viteBaseForCommand(config.base, { isServe })
+      generatedBase = viteBaseForCommand(config.base, { isServe, isSsrBuild })
       selfHosts = opts.families.some((f) => (f.strategy ?? 'self-host') === 'self-host')
       const paths = publicPathsForVite(generatedBase, opts.publicPath, {
-        isServe,
         selfHost: selfHosts,
         warn,
       })
@@ -293,11 +299,18 @@ export function fonts(userOptions = {}) {
       if (opts.output !== 'cache' && opts.output !== 'commit') {
         throw new Error(`[tss-fonts] \`output\` must be 'cache' or 'commit', got '${opts.output}'`)
       }
-      const outDir = outDirFor(root)
+      // A full-URL base intentionally uses local hrefs in dev and CDN hrefs in builds.
+      // Keep that serve-only CSS in the disposable cache so `vite dev` cannot prune or
+      // dirty the hermetic build artifacts committed in .tss-fonts/.
+      const generationOutput =
+        isServe && opts.output === 'commit' && FULL_URL_BASE_RE.test(config.base ?? '')
+          ? 'cache'
+          : opts.output
+      const outDir = outDirFor(root, generationOutput)
       mkdirSync(outDir, { recursive: true })
 
       const t0 = Date.now()
-      gen = await generate({ ...opts, publicPath }, outDir, log, warn)
+      gen = await generate({ ...opts, publicPath, output: generationOutput }, outDir, log, warn)
       if (!gen.fromCache) log(`generation took ${Date.now() - t0}ms`)
 
       // If the user asked for real files on disk, write them HERE, not in buildStart.
@@ -448,7 +461,7 @@ export function fonts(userOptions = {}) {
       // the returned route rules are already built, so a mismatch cannot be repaired,
       // only reported: as a hard failure when self-hosted URLs are baked wrong, as a
       // warning when only route patterns can be off (CDN hrefs point at Google).
-      const finalBase = viteBaseForCommand(resolved.base, { isServe })
+      const finalBase = viteBaseForCommand(resolved.base, { isServe, isSsrBuild })
       if (finalBase !== generatedBase) {
         const msg =
           `Vite \`base\` resolved to ${JSON.stringify(resolved.base)}, but it was ` +
@@ -487,11 +500,12 @@ export function fonts(userOptions = {}) {
       // routePath, not publicPath: dev requests hit this server's paths, and under a
       // full-URL base publicPath would carry an origin no req.url ever starts with.
       const prefix = routePath.replace(/\/$/, '') + '/'
+      const generatedFiles = new Set(gen.files)
       server.middlewares.use((req, res, next) => {
         const url = (req.url || '').split('?')[0]
-        if (!url.startsWith(prefix)) return next()
+        if (!url.endsWith('.woff2') || !url.startsWith(prefix)) return next()
         const name = url.slice(prefix.length)
-        if (!gen.files.includes(name)) return next()
+        if (!generatedFiles.has(name)) return next()
         res.setHeader('content-type', 'font/woff2')
         res.setHeader('access-control-allow-origin', '*')
         res.setHeader('cache-control', 'public, max-age=31536000, immutable')

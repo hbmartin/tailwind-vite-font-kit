@@ -59,6 +59,11 @@ export function pinOpsz(axes, pin, { replaceFixed = false } = {}) {
   return axes.slice(0, at) + '@' + tuples.join(';')
 }
 
+/** Whether hand-fixed tuple values prevent a family-wide pin from taking effect. */
+export function opszPinIsOverridden(axes, pin) {
+  return hasOpszAxis(axes) && pinOpsz(axes, pin) !== pinOpsz(axes, pin, { replaceFixed: true })
+}
+
 /**
  * Build the css2 URL for a family, pinning `opsz` if present.
  * Default pin is 16 — near the median size body text renders at. Pass `opszPin: 48`
@@ -85,7 +90,7 @@ export function googleUrl(fam, log = () => {}, warn = log) {
     // already in every tuple.) When both are present and disagree, the config is
     // ambiguous — say so instead of silently serving either interpretation.
     const pinned = pinOpsz(axes, pin)
-    if (typeof fam.opszPin === 'number' && pinned !== pinOpsz(axes, pin, { replaceFixed: true })) {
+    if (typeof fam.opszPin === 'number' && opszPinIsOverridden(axes, pin)) {
       warn(
         `"${fam.name}": \`axes\` fixes opsz by hand while \`opszPin: ${fam.opszPin}\` is ` +
           `also set — the hand-written values win. Remove \`opszPin\`, or switch the spec ` +

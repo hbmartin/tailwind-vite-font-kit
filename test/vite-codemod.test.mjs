@@ -58,7 +58,9 @@ test('active import detection follows default, renamed and namespace bindings', 
   for (const source of [
     `import fontPlugin from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
     `import { fonts as fontPlugin } from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
+    `import { default as fontPlugin } from 'tailwind-vite-font-kit'\nfontPlugin()\n`,
     `import * as fontKit from 'tailwind-vite-font-kit'\nfontKit.fonts()\n`,
+    `import * as fontKit from 'tailwind-vite-font-kit'\nfontKit.default()\n`,
   ]) {
     assert.equal(analyzeFontsPluginWiring(source).wired, true, source)
   }

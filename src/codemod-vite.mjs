@@ -215,13 +215,18 @@ function callableBindings(statement) {
       const part = raw.trim()
       if (!part || /^type\b/.test(part)) continue
       const imported = /^fonts(?:\s+as\s+([\w$]+))?$/.exec(part)
-      if (imported) bindings.push(imported[1] ?? 'fonts')
+      if (imported) {
+        bindings.push(imported[1] ?? 'fonts')
+        continue
+      }
+      const importedDefault = /^default\s+as\s+([\w$]+)$/.exec(part)
+      if (importedDefault) bindings.push(importedDefault[1])
     }
   }
 
-  // A namespace import is not itself callable, but its `.fonts` export is.
+  // A namespace import is not itself callable, but both names point at fonts().
   const namespace = /\*\s+as\s+([\w$]+)/.exec(clause)?.[1]
-  if (namespace) bindings.push(`${namespace}.fonts`)
+  if (namespace) bindings.push(`${namespace}.fonts`, `${namespace}.default`)
 
   return bindings
 }

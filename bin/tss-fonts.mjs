@@ -10,6 +10,7 @@
 // header from the plugin, so there is nothing to splice into head().links — which is
 // what the tested codemods were most brittle at (4 of 12 root-route shapes bailed).
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import {
@@ -18,7 +19,7 @@ import {
   loadFontsConfig,
   validateFamilies,
 } from '../src/config.mjs'
-import { hasOpszAxis, pinOpsz } from '../src/opsz.mjs'
+import { opszPinIsOverridden } from '../src/opsz.mjs'
 import {
   detectTailwindEntry,
   detectViteConfig,
@@ -202,7 +203,7 @@ if (cmd === 'opsz') {
   }
 
   const { recommendOpszPin } = await import('../src/opsz-auto.mjs')
-  /** @type {{name: string, pin: number}[]} */
+  /** @type {{name: string, pin: number, writable: boolean}[]} */
   const found = []
 
   for (const fam of targets) {
@@ -235,26 +236,28 @@ if (cmd === 'opsz') {
     // A written pin cannot take effect while the axes spec fixes opsz by hand —
     // hand-written tuple values win over `opszPin`. Say so at write time, not only
     // when the next build warns about the conflict.
-    if (
-      fam.axes &&
-      hasOpszAxis(fam.axes) &&
-      pinOpsz(fam.axes, rec.pin) !== pinOpsz(fam.axes, rec.pin, { replaceFixed: true })
-    ) {
+    const overridden = Boolean(fam.axes && opszPinIsOverridden(fam.axes, rec.pin))
+    if (overridden) {
       console.log(
         `  ${c.y('note')}          your \`axes\` (${fam.axes}) fixes opsz by hand, which wins ` +
-          `over opszPin —\n                switch those values to a range for this pin to apply`,
+          `over opszPin, so --write will skip it —\n                switch those values to a range ` +
+          `for this pin to apply`,
       )
     }
-    found.push({ name: fam.name, pin: rec.pin })
+    found.push({ name: fam.name, pin: rec.pin, writable: !overridden })
   }
 
   if (flag('write')) {
     if (!found.length) die('nothing to write — no family had an opsz axis.')
+    const writable = found.filter((recommendation) => recommendation.writable)
+    if (!writable.length) {
+      die('nothing to write — every recommended pin is overridden by hand-fixed axes.')
+    }
     if (!existsSync(cfgPath)) die(`no fonts.config.mjs in ${root} to write to.`)
     let text = readFileSync(cfgPath, 'utf8')
     const before = text
     // Rewrite descending, so an earlier edit never shifts a later entry's offsets.
-    for (const { name, pin } of [...found].reverse()) {
+    for (const { name, pin } of [...writable].reverse()) {
       const edited = setOpszPin(text, name, pin)
       if (edited == null) {
         console.log(
@@ -274,7 +277,7 @@ if (cmd === 'opsz') {
       writeFileSync(cfgPath, text)
       console.log(`\n${c.g('✓')} wrote fonts.config.mjs (backup: ${relative(root, backup)})`)
     }
-  } else if (found.length) {
+  } else if (found.some((recommendation) => recommendation.writable)) {
     console.log(
       `\n${c.dim("Pass --write to put this in fonts.config.mjs, or set opszPin: 'auto'.")}`,
     )
@@ -529,16 +532,18 @@ for (const [file, before, after] of edits) {
   if (before && before !== after) backups.push(relative(root, backupFile(file)))
   writeFileSync(file, after)
 }
-// Nothing here writes ignore rules, so "(gitignored)" is only true when the project's
-// own .gitignore covers *.bak (which every backupFile() name now ends in) — check
-// rather than assert, and otherwise say what to add.
-const bakIgnored = (() => {
-  try {
-    return /^\s*\*\.bak\s*$/m.test(readFileSync(join(root, '.gitignore'), 'utf8'))
-  } catch {
-    return false
-  }
-})()
+// Ask Git about the actual backup paths so nested .gitignore files, path-specific rules,
+// .git/info/exclude and global excludes all count. A non-repository or missing Git simply
+// falls back to the actionable suggestion below.
+const bakIgnored = backups.every((file) => {
+  const gitPath = file.split(/[\\/]/).join('/')
+  return (
+    spawnSync('git', ['check-ignore', '--no-index', '--quiet', '--', gitPath], {
+      cwd: root,
+      stdio: 'ignore',
+    }).status === 0
+  )
+})
 console.log(
   `\n${c.g('✓')} wrote ${edits.length} file(s). ` +
     `Backups: ${backups.length ? backups.join(', ') : 'none'}` +
