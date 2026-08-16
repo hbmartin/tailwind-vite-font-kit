@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,8 +10,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const run = (command, args, cwd, env = process.env) =>
   execFileSync(command, args, { cwd, env, encoding: 'utf8' })
 
-test('write-note keeps metrics and CLS histories on separate refs', () => {
+test('write-note keeps metrics and CLS histories on separate refs', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'font-kit-notes-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const origin = join(dir, 'origin.git')
   const work = join(dir, 'work')
   run('git', ['init', '--bare', origin], dir)
@@ -50,8 +51,9 @@ test('write-note keeps metrics and CLS histories on separate refs', () => {
   assert.equal(invalid.status, 2)
 })
 
-test('check-cls enforces the exact six probes, three runs, and loaded fallbacks', () => {
+test('check-cls enforces the exact six probes, three runs, and loaded fallbacks', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'font-kit-cls-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const keys = [
     ['desktop', 'hero'],
     ['desktop', 'tailwind'],
