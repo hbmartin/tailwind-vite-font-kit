@@ -535,15 +535,19 @@ for (const [file, before, after] of edits) {
 // Ask Git about the actual backup paths so nested .gitignore files, path-specific rules,
 // .git/info/exclude and global excludes all count. A non-repository or missing Git simply
 // falls back to the actionable suggestion below.
-const bakIgnored = backups.every((file) => {
-  const gitPath = file.split(/[\\/]/).join('/')
-  return (
-    spawnSync('git', ['check-ignore', '--no-index', '--quiet', '--', gitPath], {
+const gitPaths = backups.map((file) => file.split(/[\\/]/).join('/'))
+const ignoredCheck = gitPaths.length
+  ? spawnSync('git', ['check-ignore', '--no-index', '--stdin', '-z'], {
       cwd: root,
-      stdio: 'ignore',
-    }).status === 0
-  )
-})
+      input: gitPaths.join('\0') + '\0',
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    })
+  : null
+const ignoredPaths = new Set(
+  ignoredCheck?.status === 0 ? ignoredCheck.stdout.split('\0').filter(Boolean) : [],
+)
+const bakIgnored = gitPaths.length > 0 && gitPaths.every((file) => ignoredPaths.has(file))
 console.log(
   `\n${c.g('✓')} wrote ${edits.length} file(s). ` +
     `Backups: ${backups.length ? backups.join(', ') : 'none'}` +

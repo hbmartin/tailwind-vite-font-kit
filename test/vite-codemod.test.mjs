@@ -107,6 +107,11 @@ test('CommonJS-shaped strings and comments are not wiring', () => {
   assert.equal(commentOnly.packageImports, 0)
   assert.equal(commentOnly.wired, false)
   assert.equal(commentOnly.commentOnlyMention, true)
+
+  const stringAndComment = analyzeFontsPluginWiring(
+    `// try tailwind-vite-font-kit\nconst note = 'tailwind-vite-font-kit'\n`,
+  )
+  assert.equal(stringAndComment.commentOnlyMention, false)
 })
 
 const HEADER = `import { defineConfig } from 'vite'\nimport tailwindcss from '@tailwindcss/vite'\n\n`

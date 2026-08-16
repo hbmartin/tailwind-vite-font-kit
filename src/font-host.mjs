@@ -7,6 +7,7 @@ const FONT_HOSTS = new Set(['fonts.gstatic.com'])
 /**
  * @param {string} src the `src: url(...)` taken from a css2 response
  * @param {string} family for the error message
+ * @returns {URL} the parsed, validated URL
  */
 export function assertFontHost(src, family) {
   let url
@@ -25,6 +26,7 @@ export function assertFontHost(src, family) {
         `expected https://${[...FONT_HOSTS].join(' or ')}. The css2 response was not what it should be.`,
     )
   }
+  return url
 }
 
 /**

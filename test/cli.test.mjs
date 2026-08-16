@@ -5,15 +5,28 @@
 // it calls are well covered (test/codemod.test.mjs, test/vite-codemod.test.mjs); what was
 // not covered is the orchestration around them — which is where the destructive decisions
 // are made. Everything here is offline: no command exercised below touches the network.
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const CLI = fileURLToPath(new URL('../bin/tss-fonts.mjs', import.meta.url))
+const GIT_SANDBOX = mkdtempSync(join(tmpdir(), 'tss-cli-git-'))
+const GIT_XDG_CONFIG_HOME = join(GIT_SANDBOX, 'xdg')
+mkdirSync(GIT_XDG_CONFIG_HOME)
+after(() => rmSync(GIT_SANDBOX, { recursive: true, force: true }))
+
+const isolatedGitEnv = (base = process.env) => ({
+  ...base,
+  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_NOSYSTEM: '1',
+  // Git reads this default excludes file even when global and system config are disabled.
+  XDG_CONFIG_HOME: GIT_XDG_CONFIG_HOME,
+})
+const GIT_ENV = isolatedGitEnv()
 
 const ENTRY = `@import 'tailwindcss';
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
@@ -61,7 +74,7 @@ function run(root, ...args) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       // NO_COLOR keeps the assertions about message text free of escape sequences.
-      env: { ...process.env, NO_COLOR: '1' },
+      env: { ...GIT_ENV, NO_COLOR: '1' },
     })
     return { status: 0, out }
   } catch (err) {
@@ -70,7 +83,8 @@ function run(root, ...args) {
 }
 
 const read = (root, rel) => readFileSync(join(root, rel), 'utf8')
-const initGit = (root) => execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'ignore' })
+const initGit = (root) =>
+  execFileSync('git', ['init', '--quiet'], { cwd: root, env: GIT_ENV, stdio: 'ignore' })
 
 // ---------------------------------------------------------------------------
 // init
@@ -150,6 +164,7 @@ test('the backup note asks Git whether the actual backup path is ignored', (t) =
   assert.match(run(bare, 'adopt').out, /add '\*\.bak' to \.gitignore/)
 
   for (const files of [
+    { '.gitignore': 'node_modules\n*.bak\n' },
     { '.gitignore': 'node_modules\n**/*.bak\n' },
     { 'src/.gitignore': '*.bak\n' },
   ]) {
@@ -157,6 +172,47 @@ test('the backup note asks Git whether the actual backup path is ignored', (t) =
     initGit(ignored)
     assert.match(run(ignored, 'adopt').out, /\(gitignored\)/)
   }
+})
+
+test("real-Git tests do not inherit XDG's default excludes file", (t) => {
+  const developerXdg = mkdtempSync(join(tmpdir(), 'tss-cli-xdg-'))
+  mkdirSync(join(developerXdg, 'git'))
+  writeFileSync(join(developerXdg, 'git', 'ignore'), '*.bak\n')
+  t.after(() => rmSync(developerXdg, { recursive: true, force: true }))
+
+  const root = project(t)
+  initGit(root)
+  writeFileSync(join(root, 'recovery.bak'), 'recovery\n')
+
+  const inherited = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_NOSYSTEM: '1',
+    XDG_CONFIG_HOME: developerXdg,
+  }
+  assert.doesNotThrow(() =>
+    execFileSync('git', ['check-ignore', '--no-index', '--quiet', '--', 'recovery.bak'], {
+      cwd: root,
+      env: inherited,
+    }),
+  )
+  assert.throws(() =>
+    execFileSync('git', ['check-ignore', '--no-index', '--quiet', '--', 'recovery.bak'], {
+      cwd: root,
+      env: isolatedGitEnv(inherited),
+    }),
+  )
+})
+
+test('the backup note requires every backup path to be ignored', (t) => {
+  const root = project(t, {
+    '.gitignore': 'src/*.bak\n',
+    'vite.config.ts': VITE_CONFIG,
+  })
+  initGit(root)
+  const { status, out } = run(root, 'init')
+  assert.equal(status, 0)
+  assert.match(out, /add '\*\.bak' to \.gitignore/)
 })
 
 // ---------------------------------------------------------------------------

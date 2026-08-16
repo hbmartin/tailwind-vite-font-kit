@@ -90,7 +90,7 @@ export function googleUrl(fam, log = () => {}, warn = log) {
     // already in every tuple.) When both are present and disagree, the config is
     // ambiguous — say so instead of silently serving either interpretation.
     const pinned = pinOpsz(axes, pin)
-    if (typeof fam.opszPin === 'number' && opszPinIsOverridden(axes, pin)) {
+    if (typeof fam.opszPin === 'number' && pinned !== pinOpsz(axes, pin, { replaceFixed: true })) {
       warn(
         `"${fam.name}": \`axes\` fixes opsz by hand while \`opszPin: ${fam.opszPin}\` is ` +
           `also set — the hand-written values win. Remove \`opszPin\`, or switch the spec ` +

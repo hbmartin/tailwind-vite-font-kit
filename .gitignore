@@ -6,8 +6,6 @@ cls-metrics.json
 coverage
 *.tgz
 *.tsbuildinfo
-reviews_triage/
-triage_decisions.db
 
 # tss-fonts writes these before editing your files
 *.bak

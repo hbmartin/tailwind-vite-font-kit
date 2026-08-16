@@ -234,6 +234,9 @@ export function fonts(userOptions = {}) {
   let assumedBase
   // Vite's command-specific resolution of assumedBase, used for generation and comparison.
   let generatedBase = '/'
+  // The base portion used by preload exclusions; unlike routePath, this can differ even
+  // when the final public href is unchanged because publicPath already contained the base.
+  let generatedBasePath = ''
   // Assigned in config(), which is the earliest async hook; every other hook runs after.
   /** @type {Awaited<ReturnType<typeof generate>>} */
   let gen
@@ -262,11 +265,11 @@ export function fonts(userOptions = {}) {
       selfHosts = opts.families.some((f) => (f.strategy ?? 'self-host') === 'self-host')
       const paths = publicPathsForVite(generatedBase, opts.publicPath, {
         selfHost: selfHosts,
-        warn,
       })
       assetPath = paths.assetPath
       routePath = paths.routePath
       publicPath = paths.publicPath
+      generatedBasePath = paths.basePath
       // When assets emit at the bundle root, font filenames and documents share one
       // namespace. No route pattern can select only the fonts without also selecting HTML.
       const fontsShareDocumentNamespace = paths.assetPath === '/'
@@ -461,8 +464,30 @@ export function fonts(userOptions = {}) {
       // the returned route rules are already built, so a mismatch cannot be repaired,
       // only reported: as a hard failure when self-hosted URLs are baked wrong, as a
       // warning when only route patterns can be off (CDN hrefs point at Google).
-      const finalBase = viteBaseForCommand(resolved.base, { isServe, isSsrBuild })
-      if (finalBase !== generatedBase) {
+      const finalCommand = resolved.command ?? (isServe ? 'serve' : 'build')
+      const finalIsServe = finalCommand === 'serve'
+      const finalIsSsrBuild =
+        finalCommand === 'build' &&
+        (resolved.build?.ssr !== undefined ? Boolean(resolved.build.ssr) : isSsrBuild)
+      const finalBase = viteBaseForCommand(resolved.base, {
+        isServe: finalIsServe,
+        isSsrBuild: finalIsSsrBuild,
+      })
+      // Compare what the base actually changes, not its spelling. Vite normalizes '' and
+      // './' to '/' for an SSR build; when a later plugin enables SSR, config() may have
+      // generated against './', but both forms still produce the same root-absolute font
+      // hrefs, emitted paths and route rules. Treating that as a mismatch hard-failed a
+      // correct build even though none of the generated output differed.
+      const finalPaths = publicPathsForVite(finalBase, opts.publicPath, {
+        selfHost: selfHosts,
+        warn,
+      })
+      const pathsDiffer =
+        finalPaths.assetPath !== assetPath ||
+        finalPaths.publicPath !== publicPath ||
+        finalPaths.routePath !== routePath ||
+        finalPaths.basePath !== generatedBasePath
+      if (pathsDiffer) {
         const msg =
           `Vite \`base\` resolved to ${JSON.stringify(resolved.base)}, but it was ` +
           `${JSON.stringify(assumedBase ?? '/')} in the config hook (resolved there as ` +
@@ -503,7 +528,7 @@ export function fonts(userOptions = {}) {
       const generatedFiles = new Set(gen.files)
       server.middlewares.use((req, res, next) => {
         const url = (req.url || '').split('?')[0]
-        if (!url.endsWith('.woff2') || !url.startsWith(prefix)) return next()
+        if (!url.startsWith(prefix)) return next()
         const name = url.slice(prefix.length)
         if (!generatedFiles.has(name)) return next()
         res.setHeader('content-type', 'font/woff2')
