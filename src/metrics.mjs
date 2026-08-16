@@ -10,12 +10,14 @@
 // third-party CSS, `not-prose` islands, and anything that opts out of the pin.
 
 /**
- * One generated face per local() target, each with a DISTINCT family name.
+ * One generated face per metric target, each with a DISTINCT family name.
  *
- * A single `local("Arial")` face is a silent no-op on Android and most Linux, where
- * Arial isn't installed — the face fails to load and the stack falls through to an
- * unadjusted family. Distinct names let each platform pick the one it has; identical
- * names carrying conflicting descriptors would let the last loadable one win silently.
+ * A single `local("Arial")` face is a silent no-op on most Linux, where Arial isn't
+ * installed — the face fails to load and the stack falls through to an unadjusted
+ * family. Metric-compatible Liberation aliases keep the same descriptors useful on the
+ * Ubuntu runner without adding another fallback family or changing stack precedence.
+ * Distinct names still let each platform pick the first target it has; identical names
+ * carrying conflicting descriptors would let the last loadable one win silently.
  *
  * `BlinkMacSystemFont` is deliberately absent: it is a CSS keyword, not an installed
  * face, and resolves to `status: "error"` in Chrome on macOS. fontaine lists it first.
@@ -27,16 +29,16 @@
  */
 export const FALLBACK_TARGETS = {
   'sans-serif': [
-    ['Arial', 'arial'],
+    ['Arial', 'arial', ['Liberation Sans']],
     ['Helvetica Neue', 'helveticaNeue'],
     ['Segoe UI', 'segoeUI'],
     ['Roboto', 'roboto'],
   ],
   serif: [
     ['Georgia', 'georgia'],
-    ['Times New Roman', 'timesNewRoman'],
+    ['Times New Roman', 'timesNewRoman', ['Liberation Serif']],
   ],
-  monospace: [['Courier New', 'courierNew']],
+  monospace: [['Courier New', 'courierNew', ['Liberation Mono']]],
 }
 
 export const pct = (n) => `${+(n * 100).toFixed(4)}%`
@@ -81,11 +83,12 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, 
   const out = []
   const names = []
 
-  for (const [localName, key] of FALLBACK_TARGETS[cat]) {
+  for (const [localName, key, aliases = []] of FALLBACK_TARGETS[cat]) {
     const fbFamily = METRICS[key]
     if (!fbFamily) continue
     const name = `${family} Fallback: ${localName}`
     names.push(name)
+    const sources = [localName, ...aliases].map((source) => `local("${source}")`).join(',')
 
     for (const weight of weights) {
       const v = variantOf(m, weight)
@@ -117,7 +120,7 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, 
       // frequency-weighted average width, next/font an unweighted one) — so do NOT
       // write tests asserting parity with next/font's numbers.
       out.push(
-        `@font-face{font-family:"${name}";font-weight:${weight};src:local("${localName}");` +
+        `@font-face{font-family:"${name}";font-weight:${weight};src:${sources};` +
           `size-adjust:${pct(sizeAdjust)};` +
           `ascent-override:${pct(ascent / (upem * sizeAdjust))};` +
           `descent-override:${pct(Math.abs(descent) / (upem * sizeAdjust))};` +

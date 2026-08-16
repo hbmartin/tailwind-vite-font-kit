@@ -158,6 +158,10 @@ test('the generator feeds fallbackFaces metrics that carry per-weight variants',
   const css = readFileSync(gen.cssPath, 'utf8')
   const arial = [...css.matchAll(/@font-face\{([^}]*local\("Arial"\)[^}]*)\}/g)].map((m) => m[1])
   assert.equal(arial.length, 2, 'one Arial fallback face per declared weight')
+  assert.ok(
+    arial.every((face) => face.includes('local("Arial"),local("Liberation Sans")')),
+    'the Linux alias must share the Arial face and descriptors',
+  )
   const sizeAdjust = (decls) => /size-adjust:([^;}]+)/.exec(decls)[1]
   assert.notEqual(
     sizeAdjust(arial[0]),

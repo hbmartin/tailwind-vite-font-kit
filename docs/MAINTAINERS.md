@@ -144,9 +144,13 @@ Three workflows:
   matches `package.json`, runs `release:check`, and publishes with npm trusted publishing
   (OIDC) and `--provenance`. There is no `NPM_TOKEN`: the trust relationship is configured in
   the package settings on npmjs.com, and the workflow will fail until that is done.
-- **`cls-weekly.yml`** — Mondays. Clones the reference app, points it at this commit, builds, runs
-  the puppeteer sweep, appends CLS to the same note, and opens (or comments on) an issue labelled
-  `cls-regression` if the worst median CLS exceeds the threshold (default `0.02`) or the job fails.
+- **`cls-weekly.yml`** — Mondays on `ubuntu-24.04`. Clones the floating reference-app HEAD, points it
+  at this commit, and records both SHAs plus the runner, Puppeteer, and browser versions. The gate is
+  exactly three finite runs of `hero`, `tailwind`, and `normal` at desktop and mobile sizes, with a
+  default worst-median threshold of `0.02`. It also requires Manrope and Fraunces fallback faces to
+  report `loaded` before the delayed web fonts arrive. The `/probe/hero` width sweep is diagnostic,
+  not gating. Failures open or update the exact `Weekly CLS sweep failed` issue; one fully passing
+  weekly run comments on and closes matching open issues.
 
 Reading the metrics:
 
@@ -154,16 +158,23 @@ Reading the metrics:
 git fetch origin 'refs/notes/*:refs/notes/*'
 git log --notes=metrics
 git notes --ref=metrics show <sha>
+
+# Weekly browser history is intentionally separate:
+git log --notes=cls
+git notes --ref=cls show <sha>
 ```
 
-`scripts/write-note.sh` fetches, appends, pushes, and retries on rejection — concurrent runs race on
-`refs/notes/metrics`. A failed note **warns rather than failing the build**; the numbers are also in
-the job summary.
+`scripts/write-note.sh` fetches, appends, pushes, and retries on rejection. It defaults to
+`refs/notes/metrics`; set `TSS_NOTES_NAMESPACE=cls` for the compact weekly NDJSON stream. Keeping the
+refs separate prevents noisy browser history from mixing with the static metrics. A failed note
+**warns rather than failing the build**; the numbers are also in the job summary and artifacts.
 
 The asserted invariants are each a bug that shipped or nearly shipped: `googleapisRefs: 0`,
 `gstaticRefs: 0`, `blinkMacSystemFontLocals: 0`, `leakedThemeAtRule: 0`,
 `defaultFontFamilyIsVar: 1`, `themeVarsWithFallback: 2`. If you change the fixture's font count,
-update the expected `themeVarsWithFallback`.
+update the expected `themeVarsWithFallback`. The integration jobs also require each Arial local
+source to have a Liberation Sans alias and each Times New Roman source to have a Liberation Serif
+alias.
 
 ## Releasing
 
@@ -219,6 +230,10 @@ Each of these cost real debugging time. None of them fails loudly.
   this is an app with no fonts at all.
 - **`local("BlinkMacSystemFont")` never resolves** — it is a CSS keyword, not a face. A unit test
   guards against it creeping back into `FALLBACK_TARGETS`.
+- **Arial and Times New Roman are usually absent on Linux.** Their metric faces carry Liberation
+  Sans and Liberation Serif as same-face source aliases. Do not give an alias its own family name or
+  different descriptors; that would change stack precedence instead of making the intended face
+  available.
 - **`crossorigin` is mandatory on font preloads even same-origin.** Without it the font is fetched
   twice and lands *later* than with no preload at all.
 - **pnpm copies `file:` dependencies.** Use `link:` while developing.

@@ -143,6 +143,17 @@ jobs:
               console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
               process.exit(1);
             }
+            const aliases = [
+              ['Arial', m.arialLocals, 'Liberation Sans', m.liberationSansLocals],
+              ['Times New Roman', m.timesNewRomanLocals, 'Liberation Serif', m.liberationSerifLocals],
+            ];
+            const missingAliases = aliases.filter(([, primary, , alias]) => primary === 0 || primary !== alias);
+            if (missingAliases.length) {
+              for (const [name, primary, aliasName, alias] of missingAliases) {
+                console.error(\`::error::\${name} local() count \${primary}, \${aliasName} count \${alias}\`);
+              }
+              process.exit(1);
+            }
             console.log('invariants ok');
           "
 
@@ -236,6 +247,17 @@ jobs:
             }
             if (m.fontFaceWithSizeAdjust < 8) {
               console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
+              process.exit(1);
+            }
+            const aliases = [
+              ['Arial', m.arialLocals, 'Liberation Sans', m.liberationSansLocals],
+              ['Times New Roman', m.timesNewRomanLocals, 'Liberation Serif', m.liberationSerifLocals],
+            ];
+            const missingAliases = aliases.filter(([, primary, , alias]) => primary === 0 || primary !== alias);
+            if (missingAliases.length) {
+              for (const [name, primary, aliasName, alias] of missingAliases) {
+                console.error(\`::error::\${name} local() count \${primary}, \${aliasName} count \${alias}\`);
+              }
               process.exit(1);
             }
             console.log('invariants ok on vite ${{ matrix.vite }}');

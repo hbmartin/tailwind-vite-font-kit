@@ -66,6 +66,10 @@ const RUNTIME_AUDIT = `(() => {
   }
   const h = document.querySelector('h1');
   return { fontFaces: faces, unreadableSheets,
+    captured: 'before-delayed-web-fonts',
+    fontFaceSet: [...document.fonts].map(f => ({
+      family: (f.family||'').replace(/["']/g,'').trim(), weight: f.weight,
+      style: f.style, status: f.status })),
     computedBody: getComputedStyle(document.body).fontFamily,
     computedH1: h ? getComputedStyle(h).fontFamily : null,
     cssVarFontSans: getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim(),
@@ -76,7 +80,13 @@ const RUNTIME_AUDIT = `(() => {
 // Follow the served HTML -> stylesheets -> @import chain in Node so we can read
 // cross-origin CSS the page itself cannot introspect.
 async function staticAudit(url) {
-  const html = await fetch(url).then((r) => r.text())
+  const response = await fetch(url)
+  const html = await response.text()
+  const navigationLinkHeader = response.headers.get('link') || ''
+  const headerPreloadFontLinks = navigationLinkHeader
+    .split(/,(?=\s*<)/)
+    .filter((link) => /\brel\s*=\s*["']?preload/i.test(link) && /\bas\s*=\s*["']?font/i.test(link))
+    .map((link) => link.trim().slice(0, 300))
   const hrefs = [
     ...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/g),
   ].map((m) => m[1])
@@ -129,6 +139,8 @@ async function staticAudit(url) {
     headPreloadFontLinks: [...html.matchAll(/<link[^>]+rel=["']preload["'][^>]*>/g)]
       .filter((m) => /as=["']font/.test(m[0]))
       .map((m) => m[0].slice(0, 200)),
+    navigationLinkHeader: navigationLinkHeader.slice(0, 2000),
+    headerPreloadFontLinks,
   }
 }
 
@@ -156,12 +168,13 @@ async function runProbe(browser, probe, vp) {
     page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {})
     await new Promise((r) => setTimeout(r, Math.max(800, FONT_DELAY_MS - 900)))
     const snapBefore = await page.evaluate(SNAP).catch(() => null)
+    const preSwapAudit = i === 0 ? await page.evaluate(RUNTIME_AUDIT).catch(() => null) : null
     await new Promise((r) => setTimeout(r, FONT_DELAY_MS + 2500))
     const snapAfter = await page.evaluate(SNAP).catch(() => null)
     const shifts = await page.evaluate('window.__shifts')
     const paint = await page.evaluate('window.__paint')
     if (i === 0) {
-      audit = await page.evaluate(RUNTIME_AUDIT)
+      audit = preSwapAudit
       before = snapBefore
       after = snapAfter
     }
@@ -210,5 +223,5 @@ for (const r of results) {
   )
 }
 console.log(
-  `fallback @font-face w/ size-adjust: ${stat.facesWithSizeAdjust}/${stat.totalFontFaceBlocks}, local() srcs: ${stat.facesWithLocalSrc}, @supports guards: ${stat.supportsGuards}, font preloads: ${stat.headPreloadFontLinks.length}`,
+  `fallback @font-face w/ size-adjust: ${stat.facesWithSizeAdjust}/${stat.totalFontFaceBlocks}, local() srcs: ${stat.facesWithLocalSrc}, @supports guards: ${stat.supportsGuards}, font preloads: ${stat.headerPreloadFontLinks.length} header + ${stat.headPreloadFontLinks.length} HTML`,
 )

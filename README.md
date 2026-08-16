@@ -131,7 +131,8 @@ Every one of these fails **silently** if you get it wrong, which is the reason t
 | Plain **`@theme`**, never `@theme inline` | `inline` bakes literals into `.font-*` and `--default-font-family`, so nothing downstream reaches them. Verified: you get `--default-font-family:var(--font-sans)`. |
 | The `@theme` is **inside Tailwind's import graph** | One Tailwind never sees is shipped to the browser as an unknown at-rule and dropped, with zero warnings. |
 | **One fallback face per declared weight** | Arial 700 is 7.7% wider than Arial regular. One face per family is wrong for every weight but one. |
-| **Distinct family name per `local()` target** | Same-named faces with conflicting descriptors let the last loadable one win silently. Distinct names let each platform pick the one it has. |
+| **Distinct family name per metric target** | Same-named faces with conflicting descriptors let the last loadable one win silently. Compatible aliases such as Arial/Liberation Sans share one face; targets with different metrics do not. |
+| **Linux-compatible `local()` aliases** | Arial and Times New Roman are normally absent on Linux. Their faces also try Liberation Sans and Liberation Serif, which use the matching descriptors and are present on the monitored Ubuntu runner. |
 | **Never `local("BlinkMacSystemFont")`** | It is a CSS keyword, not an installed face — `status: "error"` in Chrome on macOS. fontaine lists it first. |
 | **`crossorigin` on every preload** | Even same-origin. Without it the font downloads **twice** (4 requests / 185 kB instead of 2 / 93 kB) and lands *later* than shipping no preload at all. No error, no warning. |
 | **`opsz` pinned in the request URL** | Otherwise `size-adjust` is off by up to +22% at display sizes. Pinning removes the axis and shrinks the file ~45%. |
@@ -243,3 +244,7 @@ It lives in the repo, not in the npm package — clone
 
 Use `clswidth.mjs` before believing any width-related result: a config that read 0.0001 at two
 viewports was shifting 51 px at 2 of 36 container widths.
+
+The weekly monitor gates three runs of `hero`, `tailwind`, and `normal` at desktop and mobile sizes
+on `ubuntu-24.04`. It also checks that the sans and serif fallback faces actually loaded before the
+delayed web fonts. The broader hero width sweep is reported for diagnosis but does not gate.

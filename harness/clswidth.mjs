@@ -59,18 +59,29 @@ const summarise = (rs, name) => {
   const cls = rs.map((r) => r.cls)
   const sorted = [...cls].sort((a, b) => a - b)
   const reflow = rs.filter((r) => r.dLines !== 0).length
+  const summary = {
+    name,
+    widths: rs.length,
+    median: sorted[Math.floor(sorted.length / 2)],
+    p90: sorted[Math.floor(sorted.length * 0.9)],
+    max: Math.max(...cls),
+    mean: cls.reduce((a, x) => a + x, 0) / cls.length,
+    nonzero: cls.filter((c) => c > 0.0005).length,
+    lineCountChanged: reflow,
+    maxDeltaY: Math.max(...rs.map((r) => Math.abs(r.dY ?? 0))),
+  }
   console.log(
-    `${name.padEnd(8)} widths=${rs.length}  CLS median=${sorted[Math.floor(sorted.length / 2)].toFixed(4)} p90=${sorted[Math.floor(sorted.length * 0.9)].toFixed(4)} max=${Math.max(...cls).toFixed(4)} mean=${(cls.reduce((a, x) => a + x, 0) / cls.length).toFixed(4)}  nonzero=${cls.filter((c) => c > 0.0005).length}/${cls.length}  lineCountChanged=${reflow}/${rs.length}  maxΔy=${Math.max(...rs.map((r) => Math.abs(r.dY ?? 0)))}px`,
+    `${name.padEnd(8)} widths=${summary.widths}  CLS median=${summary.median.toFixed(4)} p90=${summary.p90.toFixed(4)} max=${summary.max.toFixed(4)} mean=${summary.mean.toFixed(4)}  nonzero=${summary.nonzero}/${summary.widths}  lineCountChanged=${summary.lineCountChanged}/${summary.widths}  maxΔy=${summary.maxDeltaY}px`,
   )
+  return summary
 }
 console.log(`\n=== ${LABEL} ${PATHNAME} ===`)
-summarise(desk, '700-1060')
-summarise(mob, '360-680')
+const summaries = [summarise(desk, '700-1060'), summarise(mob, '360-680')]
 console.log(
   'per-width: ' +
     rows.map((r) => `${r.w}:${r.cls}${r.dLines ? '(' + r.dLines + 'L)' : ''}`).join(' '),
 )
 writeFileSync(
   process.env.OUT || `/tmp/clswidth-${LABEL}.json`,
-  JSON.stringify({ label: LABEL, rows }, null, 1),
+  JSON.stringify({ label: LABEL, base: BASE, probe: PATHNAME, summaries, rows }, null, 1),
 )

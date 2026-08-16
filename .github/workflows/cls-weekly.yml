@@ -1,8 +1,8 @@
 name: Weekly CLS
 
-# The browser sweep is slow (Chrome download + a real build + N page loads) and noisy,
-# so it does not gate pushes. It runs weekly against main, appends to the same git note,
-# and opens an issue if a threshold is missed or the job fails outright.
+# This intentionally follows the reference app's floating HEAD and the pinned Ubuntu image.
+# The recorded SHAs, runner image, browser, and package versions make every result attributable.
+# Only the six probe/viewport medians gate; the width sweep is diagnostic.
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       threshold:
-        description: 'Max median CLS on any probe'
+        description: 'Max median CLS on any gated probe'
         default: '0.02'
 
 permissions:
@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   measure:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       THRESHOLD: ${{ inputs.threshold || '0.02' }}
       REFERENCE_APP: https://github.com/hbmartin/tailwind-vite-font-kit-example
@@ -41,28 +41,50 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          # This job also installs the cloned reference app, with --no-frozen-lockfile
-          # and no lockfile of its own to hash, so its store is a superset of the one
-          # ci.yml's `checks` builds. Listing this workflow file alongside the root
-          # lockfile is a key salt, nothing more: it gives the job a private cache key
-          # so it stops clobbering `checks` and losing the reference app's deps on
-          # every run. It changes only when someone edits this file.
+          # The reference app has a floating install, so the workflow file salts this
+          # job's store independently from the hermetic fixture build in ci.yml.
           cache-dependency-path: |
             pnpm-lock.yaml
             .github/workflows/cls-weekly.yml
+
+      - name: Verify runner fallback fonts
+        run: |
+          for family in 'Liberation Sans' 'Liberation Serif'; do
+            match="$(fc-match -f '%{family}\n' "$family")"
+            echo "$family -> $match"
+            if [[ "$match" != *"$family"* ]]; then
+              echo "::error::ubuntu-24.04 does not provide $family; the CLS gate would not exercise the intended local fallback"
+              exit 1
+            fi
+          done
 
       - name: Install kit
         run: pnpm install --frozen-lockfile
 
       # The reference app is a real TanStack Start app, so this job also covers the
-      # Start-specific surface the fast fixture cannot: nitro route rules, the Link:
-      # preload header, and SSR.
+      # Start-specific surface the fast fixture cannot: route rules, the Link preload
+      # header, and SSR. Its HEAD and dependency graph deliberately remain floating.
       - name: Check out the reference app
         run: git clone --depth 1 "$REFERENCE_APP" reference-app
 
       - name: Point it at this commit of the kit
         working-directory: reference-app
-        run: pnpm install --no-frozen-lockfile && pnpm add -D "link:.."
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm add -D "link:.."
+
+      - name: Use this commit's measurement harness
+        working-directory: reference-app
+        run: |
+          cp ../harness/sweep.mjs harness/sweep.mjs
+          cp ../harness/clswidth.mjs harness/clswidth.mjs
+
+      - name: Install the reference app's browser
+        working-directory: reference-app
+        run: pnpm exec puppeteer browsers install chrome
+
+      - name: Capture environment
+        run: node scripts/collect-cls-environment.mjs reference-app cls-environment.json
 
       - name: Build and serve
         working-directory: reference-app
@@ -79,69 +101,115 @@ jobs:
             sleep 1
           done
 
-      - name: Sweep
+      - name: Sweep the six gated probes
         working-directory: reference-app
-        run: |
-          npx --yes puppeteer@23 browsers install chrome
-          node harness/sweep.mjs --label ci --base http://localhost:3210 --runs 3 --out ../cls.json
-          node harness/waterfall.mjs --base http://localhost:3210 --label ci --runs 9 || true
+        run: node harness/sweep.mjs --label ci --base http://localhost:3210 --runs 3 --out ../cls.json
 
-      - name: Check threshold
+      - name: Sweep hero widths (diagnostic only)
+        continue-on-error: true
+        working-directory: reference-app
+        env:
+          BASE: http://localhost:3210
+          PROBE: /probe/hero
+          OUT: ../cls-widths.json
+        run: node harness/clswidth.mjs ci
+
+      - name: Measure the waterfall (diagnostic only)
+        continue-on-error: true
+        working-directory: reference-app
+        run: node harness/waterfall.mjs --base http://localhost:3210 --label ci --runs 9
+
+      - name: Check the gated report
+        if: always() && hashFiles('cls.json') != ''
         id: check
-        run: |
-          node -e "
-            const d = require('./cls.json');
-            const rows = d.results.map(r => ({ k: r.viewport + '/' + r.probe, cls: r.clsMedian }));
-            if (!rows.length) {
-              console.error('::error::cls.json contains no measurements — the sweep produced nothing');
-              process.exit(1);
-            }
-            const worst = rows.reduce((a, b) => (b.cls > a.cls ? b : a));
-            const out = { measuredAt: new Date().toISOString(), worst, rows };
-            require('fs').writeFileSync('cls-metrics.json', JSON.stringify(out, null, 2));
-            for (const r of rows) console.log(r.k.padEnd(20), r.cls.toFixed(4));
-            const t = Number(process.env.THRESHOLD);
-            if (worst.cls > t) {
-              console.error('::error::' + worst.k + ' CLS ' + worst.cls.toFixed(4) + ' > ' + t);
-              process.exit(1);
-            }
-          "
+        run: node scripts/check-cls.mjs cls.json cls-environment.json cls-widths.json cls-metrics.json cls-note.ndjson
 
-      - name: Append CLS to the git note
+      - name: Append compact CLS history to its git note
         if: always() && hashFiles('cls-metrics.json') != ''
         env:
-          # Credentials reach the script here rather than at checkout, so the untrusted
-          # build and sweep steps above never run alongside a write-scoped token. The
-          # script passes it per-command, so it never lands in .git/config either — the
-          # issue-opening step below runs without it.
+          # Credentials reach only the note push, after the floating app's install and
+          # build. The script passes the token per command, never through .git/config.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/write-note.sh cls-metrics.json
+          TSS_NOTES_NAMESPACE: cls
+        run: ./scripts/write-note.sh cls-note.ndjson
 
-      - name: Open an issue on failure
+      - name: Write job summary
+        if: always()
+        run: node scripts/write-cls-summary.mjs cls-metrics.json cls-environment.json cls-widths.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CLS evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cls-evidence
+          path: |
+            cls.json
+            cls-metrics.json
+            cls-widths.json
+            cls-environment.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Open or update the regression issue
         if: failure()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          THRESHOLD: ${{ env.THRESHOLD }}
+        with:
+          script: |
+            const fs = require('fs')
+            const title = 'Weekly CLS sweep failed'
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const format = value => Number.isFinite(value) ? value.toFixed(4) : 'invalid'
+            let body = `The weekly CLS sweep failed on \`${context.sha.slice(0, 8)}\`.\n\n[Run](${runUrl})\n\n`
+            try {
+              const m = JSON.parse(fs.readFileSync('cls-metrics.json', 'utf8'))
+              if (m.worst) body += `Worst: **${m.worst.k} = ${format(m.worst.cls)}** (threshold ${m.threshold})\n\n`
+              body += '| probe | runs | median CLS |\n|---|---|---:|\n'
+              for (const r of m.rows) body += `| ${r.k} | ${(r.clsAll || []).map(format).join(', ')} | ${format(r.cls)} |\n`
+              if (m.gate.errors.length) body += `\nGate errors:\n${m.gate.errors.map(e => `- ${e}`).join('\n')}\n`
+            } catch {
+              body += 'The job failed before producing gated measurements. Inspect the checkout, build, and sweep steps.\n'
+            }
+            try {
+              const e = JSON.parse(fs.readFileSync('cls-environment.json', 'utf8'))
+              body += `\nEnvironment: reference app \`${e.referenceAppSha}\`, ${e.runner.imageOS || e.runner.os} ${e.runner.imageVersion || ''}, Node ${e.runtime.node}, Puppeteer ${e.runtime.puppeteer}, ${e.runtime.browser}.\n`
+            } catch {}
+            body += '\nCheck the dedicated CLS trend before treating a single breach as a regression:\n'
+            body += '```\ngit fetch origin "refs/notes/*:refs/notes/*" && git log --notes=cls\n```\n'
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', labels: 'cls-regression', per_page: 100,
+            })
+            const issue = open.find(item => !item.pull_request && item.title === title)
+            if (issue) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body })
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ['cls-regression'] })
+            }
+
+      - name: Close recovered regression issues
+        if: success() && steps.check.outcome == 'success'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require('fs')
-            let body = `The weekly CLS sweep failed on \`${context.sha.slice(0, 8)}\`.\n\n`
-            body += `[Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n\n`
-            try {
-              const m = JSON.parse(fs.readFileSync('cls-metrics.json', 'utf8'))
-              body += `Worst: **${m.worst.k} = ${m.worst.cls.toFixed(4)}** (threshold ${process.env.THRESHOLD})\n\n`
-              body += '| probe | median CLS |\n|---|---|\n'
-              for (const r of m.rows) body += `| ${r.k} | ${r.cls.toFixed(4)} |\n`
-            } catch {
-              body += 'The job failed before producing measurements — most likely the build or the reference app checkout.\n'
-            }
-            body += '\nCLS is noisy run to run. Check the trend in the notes before treating a single breach as a regression:\n'
-            body += '```\ngit fetch origin "refs/notes/*:refs/notes/*" && git log --notes=metrics\n```\n'
-
             const title = 'Weekly CLS sweep failed'
-            const { data: open } = await github.rest.issues.listForRepo({
-              ...context.repo, state: 'open', labels: 'cls-regression',
+            const m = JSON.parse(fs.readFileSync('cls-metrics.json', 'utf8'))
+            const e = JSON.parse(fs.readFileSync('cls-environment.json', 'utf8'))
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            let body = `Recovered after one fully passing weekly run on \`${context.sha.slice(0, 8)}\`.\n\n`
+            body += `Worst gated result: **${m.worst.k} = ${m.worst.cls.toFixed(4)}** (threshold ${m.threshold}).\n`
+            body += `Reference app: \`${e.referenceAppSha}\`; runner: ${e.runner.imageOS || e.runner.os} ${e.runner.imageVersion || ''}; browser: ${e.runtime.browser}.\n\n`
+            body += `[Passing run](${runUrl})`
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', labels: 'cls-regression', per_page: 100,
             })
-            if (open.length) {
-              await github.rest.issues.createComment({ ...context.repo, issue_number: open[0].number, body })
-            } else {
-              await github.rest.issues.create({ ...context.repo, title, body, labels: ['cls-regression'] })
+            const matches = open.filter(item => !item.pull_request && item.title === title)
+            for (const issue of matches) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body })
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number, state: 'closed', state_reason: 'completed',
+              })
             }
