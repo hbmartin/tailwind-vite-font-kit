@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Attach a metrics JSON blob to the current commit as a git note, and push it.
+# Attach a metrics blob to the current commit as a git note, and push it.
 #
 #   ./scripts/write-note.sh metrics.json [more.json ...]
+#   TSS_NOTES_NAMESPACE=cls ./scripts/write-note.sh cls.ndjson
 #
-# Notes live on refs/notes/metrics. Read them with:
+# Notes default to refs/notes/metrics. Read another namespace by replacing `metrics`:
 #   git fetch origin 'refs/notes/*:refs/notes/*'
 #   git log --notes=metrics
 #   git notes --ref=metrics show <sha>
 #
 # Concurrent runs race on the same ref, so this fetches and retries. Notes are merged
-# by concatenating the existing note with the new blob, so the weekly CLS job can
-# append to a note the CI job already wrote for that commit instead of clobbering it.
+# by concatenating the existing note with the new blob.
 set -euo pipefail
 
-REF=refs/notes/metrics
+NOTES_NAMESPACE="${TSS_NOTES_NAMESPACE:-metrics}"
+if [[ ! "$NOTES_NAMESPACE" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "invalid git-notes namespace: $NOTES_NAMESPACE" >&2
+  exit 2
+fi
+REF="refs/notes/$NOTES_NAMESPACE"
 SHA="${GITHUB_SHA:-$(git rev-parse HEAD)}"
 TRIES=5
 
@@ -39,15 +44,15 @@ for i in $(seq 1 "$TRIES"); do
   # Always start from the remote state; another job may have written since checkout.
   git_remote fetch -q origin "+$REF:$REF" 2>/dev/null || true
 
-  if git notes --ref=metrics show "$SHA" >/dev/null 2>&1; then
-    existing="$(git notes --ref=metrics show "$SHA")"
-    printf '%s\n%s\n' "$existing" "$body" | git notes --ref=metrics add -f -F - "$SHA"
+  if git notes --ref="$NOTES_NAMESPACE" show "$SHA" >/dev/null 2>&1; then
+    existing="$(git notes --ref="$NOTES_NAMESPACE" show "$SHA")"
+    printf '%s\n%s\n' "$existing" "$body" | git notes --ref="$NOTES_NAMESPACE" add -f -F - "$SHA"
   else
-    printf '%s\n' "$body" | git notes --ref=metrics add -F - "$SHA"
+    printf '%s\n' "$body" | git notes --ref="$NOTES_NAMESPACE" add -F - "$SHA"
   fi
 
   if git_remote push -q origin "$REF"; then
-    echo "wrote note on $SHA (attempt $i)"
+    echo "wrote $NOTES_NAMESPACE note on $SHA (attempt $i)"
     exit 0
   fi
 

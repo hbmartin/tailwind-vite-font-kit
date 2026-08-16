@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.2
+
+Patch release for Linux fallback coverage and a reproducible CLS regression monitor. The package
+version remains part of the generation cache key, so consumers regenerate the stylesheet once on
+upgrade.
+
+### Fixed
+
+- Arial- and Times-compatible fallback faces now include `local("Liberation Sans")` and
+  `local("Liberation Serif")` aliases respectively (`Courier New` also includes
+  `local("Liberation Mono")`). The aliases share the original face's metric descriptors and family
+  name, so they cover common Linux installations without adding a competing fallback to the stack.
+
+### Monitoring
+
+- The weekly CLS gate now runs on `ubuntu-24.04`, verifies the expected Liberation fonts before
+  measuring, and records the floating reference-app SHA, runner image, Puppeteer, and browser
+  versions with every run.
+- The gate validates exactly three finite runs for each of six probe/viewport pairs and proves that
+  both the sans and serif metric fallbacks loaded before the delayed web fonts. A hero width sweep is
+  reported separately as a non-gating diagnostic.
+- CLS history now uses `refs/notes/cls` as compact NDJSON, independently from static build metrics.
+  Evidence is uploaded on every run, and one fully passing weekly run comments on and closes any
+  matching open regression issue.
+
 ## 0.2.1
 
 Patch release for Vite integration, CLI reliability, and CI consistency. To release, tag

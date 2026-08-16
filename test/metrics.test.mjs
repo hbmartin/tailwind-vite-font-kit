@@ -33,10 +33,26 @@ test('pct trims trailing zeros so the output is stable', () => {
 test('never emits local("BlinkMacSystemFont") — it is a CSS keyword, not a face', () => {
   const all = Object.values(FALLBACK_TARGETS)
     .flat()
-    .map(([name]) => name)
+    .flatMap(([name, , aliases = []]) => [name, ...aliases])
   assert.ok(!all.includes('BlinkMacSystemFont'))
   // and it must not be reachable via the metrics key either
   assert.ok(!all.some((n) => /blink/i.test(n)))
+})
+
+test('metric-compatible Liberation aliases share the matching system-font face', () => {
+  const sans = parse(fallbackFaces(METRICS, 'Manrope', 'latin', [400]).css)
+  const serif = parse(fallbackFaces(METRICS, 'Fraunces', 'latin', [400]).css)
+
+  const arial = sans.find((face) => face.src.includes('local("Arial")'))
+  const times = serif.find((face) => face.src.includes('local("Times New Roman")'))
+
+  assert.equal(arial.src, 'local("Arial"),local("Liberation Sans")')
+  assert.equal(times.src, 'local("Times New Roman"),local("Liberation Serif")')
+  assert.equal(
+    sans.filter((face) => face.src.includes('Liberation Sans')).length,
+    1,
+    'the alias must not add a second fallback face',
+  )
 })
 
 test('one fallback face per (target x declared weight), with distinct family names', () => {
