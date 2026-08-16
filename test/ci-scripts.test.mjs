@@ -23,6 +23,10 @@ test('write-note keeps metrics and CLS histories on separate refs', () => {
   run('git', ['commit', '-m', 'seed'], work)
   run('git', ['remote', 'add', 'origin', origin], work)
 
+  const noteEnv = { ...process.env, GITHUB_SHA: run('git', ['rev-parse', 'HEAD'], work).trim() }
+  delete noteEnv.GITHUB_TOKEN
+  delete noteEnv.TSS_NOTES_NAMESPACE
+
   const script = join(root, 'scripts/write-note.sh')
   const metrics = join(dir, 'metrics.json')
   const clsOne = join(dir, 'cls-one.ndjson')
@@ -30,9 +34,9 @@ test('write-note keeps metrics and CLS histories on separate refs', () => {
   writeFileSync(metrics, '{"metric":1}\n')
   writeFileSync(clsOne, '{"cls":1}\n')
   writeFileSync(clsTwo, '{"cls":2}\n')
-  run('bash', [script, metrics], work)
-  run('bash', [script, clsOne], work, { ...process.env, TSS_NOTES_NAMESPACE: 'cls' })
-  run('bash', [script, clsTwo], work, { ...process.env, TSS_NOTES_NAMESPACE: 'cls' })
+  run('bash', [script, metrics], work, noteEnv)
+  run('bash', [script, clsOne], work, { ...noteEnv, TSS_NOTES_NAMESPACE: 'cls' })
+  run('bash', [script, clsTwo], work, { ...noteEnv, TSS_NOTES_NAMESPACE: 'cls' })
 
   assert.equal(run('git', ['notes', '--ref=metrics', 'show', 'HEAD'], work).trim(), '{"metric":1}')
   assert.deepEqual(run('git', ['notes', '--ref=cls', 'show', 'HEAD'], work).trim().split('\n'), [
@@ -41,7 +45,7 @@ test('write-note keeps metrics and CLS histories on separate refs', () => {
   ])
   const invalid = spawnSync('bash', [script, clsOne], {
     cwd: work,
-    env: { ...process.env, TSS_NOTES_NAMESPACE: '../bad' },
+    env: { ...noteEnv, TSS_NOTES_NAMESPACE: '../bad' },
   })
   assert.equal(invalid.status, 2)
 })
