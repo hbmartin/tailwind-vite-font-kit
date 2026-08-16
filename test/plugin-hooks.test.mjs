@@ -7,6 +7,7 @@
 // the tests that need real files on disk say so and mock the download too.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +51,25 @@ function sandbox(t) {
     rmSync(root, { recursive: true, force: true })
   })
   return root
+}
+
+/** A recursive filename-to-digest snapshot, including empty directories. */
+function directorySnapshot(dir, prefix = '') {
+  const snapshot = {}
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  )
+  for (const entry of entries) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      snapshot[`${relative}/`] = null
+      Object.assign(snapshot, directorySnapshot(path, relative))
+    } else {
+      snapshot[relative] = createHash('sha256').update(readFileSync(path)).digest('hex')
+    }
+  }
+  return snapshot
 }
 
 /** Run config() and hand back the nitro route rules it asked for. */
@@ -359,11 +379,15 @@ test('full-URL dev generation leaves committed build artifacts untouched', async
   const base = 'https://cdn.example.com/app/'
   await fonts(options).config({ root, base }, { command: 'build' })
   const committedDir = join(root, '.tss-fonts')
-  const committed = readdirSync(committedDir).sort()
+  const committed = directorySnapshot(committedDir)
 
   await fonts(options).config({ root, base }, { command: 'serve' })
 
-  assert.deepEqual(readdirSync(committedDir).sort(), committed)
+  assert.deepEqual(
+    directorySnapshot(committedDir),
+    committed,
+    'serve mode must not add, remove, or modify committed artifacts',
+  )
   assert.ok(
     readdirSync(join(root, 'node_modules', '.cache', 'tss-fonts')).some((name) =>
       name.endsWith('.gen.css'),
