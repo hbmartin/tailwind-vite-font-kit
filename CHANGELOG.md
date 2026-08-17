@@ -19,8 +19,13 @@ upgrade.
   measuring, and records the floating reference-app SHA, runner image, Puppeteer, and browser
   versions with every run.
 - The gate validates exactly three finite runs for each of six probe/viewport pairs and proves that
-  both the sans and serif metric fallbacks loaded before the delayed web fonts. A hero width sweep is
-  reported separately as a non-gating diagnostic.
+  every metric fallback the page declares loaded before the delayed web fonts — read off the page's
+  own CSS rather than a hardcoded family list, so the floating reference app can change its fonts
+  without failing this repo's gate. A hero width sweep is reported separately as a non-gating
+  diagnostic.
+- An audit the sweep could not take is reported as an audit failure instead of a missing fallback,
+  and the pre-swap audit is anchored to the first font request rather than a fixed sleep, so a cold
+  runner no longer files a font regression for an empty measurement.
 - CLS history now uses `refs/notes/cls` as compact NDJSON, independently from static build metrics.
   Evidence is uploaded on every run, and one fully passing weekly run comments on and closes any
   matching open regression issue.

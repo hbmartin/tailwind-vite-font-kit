@@ -169,12 +169,19 @@ git notes --ref=cls show <sha>
 refs separate prevents noisy browser history from mixing with the static metrics. A failed note
 **warns rather than failing the build**; the numbers are also in the job summary and artifacts.
 
-The asserted invariants are each a bug that shipped or nearly shipped: `googleapisRefs: 0`,
-`gstaticRefs: 0`, `blinkMacSystemFontLocals: 0`, `leakedThemeAtRule: 0`,
-`defaultFontFamilyIsVar: 1`, `themeVarsWithFallback: 2`. If you change the fixture's font count,
-update the expected `themeVarsWithFallback`. The integration jobs also require each Arial local
-source to have a Liberation Sans alias and each Times New Roman source to have a Liberation Serif
-alias.
+The asserted invariants live in `scripts/assert-invariants.mjs` — one file both the integration job
+and every Vite matrix leg run, so an invariant cannot be added to one and silently missed by the
+other. Each is a bug that shipped or nearly shipped: `googleapisRefs: 0`, `gstaticRefs: 0`,
+`blinkMacSystemFontLocals: 0`, `leakedThemeAtRule: 0`, `defaultFontFamilyIsVar: 1`,
+`themeVarsWithFallback: 3`. If you change the fixture's font count, update the expected
+`themeVarsWithFallback`.
+
+The alias invariants are derived from `FALLBACK_TARGETS` itself, so adding an alias there extends CI
+automatically. `aliasPairsMismatched` catches an alias that never reached the CSS;
+`aliasOrphanFaces` catches the subtler one — an alias emitted as its *own* `@font-face` rather than
+as a second source in its primary's face, which global `local()` counts cannot see because both
+totals still match. `aliasPairsPresent` requires the fixture to exercise all three pairs, which is
+why `test/fixture/fonts.config.mjs` carries a monospace family.
 
 ## Releasing
 
@@ -230,10 +237,12 @@ Each of these cost real debugging time. None of them fails loudly.
   this is an app with no fonts at all.
 - **`local("BlinkMacSystemFont")` never resolves** — it is a CSS keyword, not a face. A unit test
   guards against it creeping back into `FALLBACK_TARGETS`.
-- **Arial and Times New Roman are usually absent on Linux.** Their metric faces carry Liberation
-  Sans and Liberation Serif as same-face source aliases. Do not give an alias its own family name or
-  different descriptors; that would change stack precedence instead of making the intended face
-  available.
+- **Arial, Times New Roman and Courier New are usually absent on Linux.** Their metric faces carry
+  Liberation Sans, Liberation Serif and Liberation Mono as same-face source aliases. Do not give an
+  alias its own family name or different descriptors; that would change stack precedence instead of
+  making the intended face available — `aliasOrphanFaces` in CI fails the build if you do.
+  `src/metrics.mjs` exports `localSources` as the ONE place a face's `src` list is built, because
+  `buildFallbackCss` in `src/opsz-policy.mjs` emits faces too and had already drifted.
 - **`crossorigin` is mandatory on font preloads even same-origin.** Without it the font is fetched
   twice and lands *later* than with no preload at all.
 - **pnpm copies `file:` dependencies.** Use `link:` while developing.

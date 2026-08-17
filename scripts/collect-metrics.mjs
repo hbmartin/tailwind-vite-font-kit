@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { FALLBACK_TARGETS } from '../src/metrics.mjs'
 
 const app = process.argv[2]
 if (!app) {
@@ -41,6 +42,26 @@ const faces = [...css.matchAll(/@font-face\{[^}]*\}/g)].map((m) => m[0])
 const fontFiles = existsSync(fontsDir) ? readdirSync(fontsDir) : []
 const fontBytes = fontFiles.reduce((n, f) => n + statSync(join(fontsDir, f)).size, 0)
 
+// Read the alias pairs off the generator itself, so adding one to FALLBACK_TARGETS
+// extends the CI invariant automatically instead of needing a second, hand-kept list.
+const aliasPairs = Object.values(FALLBACK_TARGETS)
+  .flat()
+  .flatMap(([primary, , aliases = []]) => aliases.map((alias) => ({ primary, alias })))
+const localRe = (name) => new RegExp(`local\\(["']?${name.replace(/ /g, '\\s')}["']?\\)`, 'g')
+const countLocals = (text, name) => (text.match(localRe(name)) || []).length
+const aliasStats = aliasPairs.map(({ primary, alias }) => ({
+  primary,
+  alias,
+  primaryLocals: countLocals(css, primary),
+  aliasLocals: countLocals(css, alias),
+  // The regression MAINTAINERS.md warns about: the alias emitted as its OWN @font-face
+  // rather than as a second source in the primary's face. Global counts alone cannot see
+  // it — both totals still match — but the shipped stack precedence is wrong.
+  orphanFaces: faces.filter(
+    (face) => countLocals(face, alias) > 0 && countLocals(face, primary) === 0,
+  ).length,
+}))
+
 const metrics = {
   cssBytes: css.length,
   fontFaceTotal: faces.length,
@@ -54,10 +75,24 @@ const metrics = {
   googleapisRefs: (css.match(/googleapis/g) || []).length,
   gstaticRefs: (css.match(/gstatic/g) || []).length,
   blinkMacSystemFontLocals: (css.match(/local\(["']?BlinkMacSystemFont/g) || []).length,
-  arialLocals: (css.match(/local\(["']?Arial["']?\)/g) || []).length,
-  liberationSansLocals: (css.match(/local\(["']?Liberation Sans["']?\)/g) || []).length,
-  timesNewRomanLocals: (css.match(/local\(["']?Times New Roman["']?\)/g) || []).length,
-  liberationSerifLocals: (css.match(/local\(["']?Liberation Serif["']?\)/g) || []).length,
+  arialLocals: countLocals(css, 'Arial'),
+  liberationSansLocals: countLocals(css, 'Liberation Sans'),
+  timesNewRomanLocals: countLocals(css, 'Times New Roman'),
+  liberationSerifLocals: countLocals(css, 'Liberation Serif'),
+  courierNewLocals: countLocals(css, 'Courier New'),
+  liberationMonoLocals: countLocals(css, 'Liberation Mono'),
+
+  // Flat scalars, because metrics.json is also appended to a git note and rendered as a
+  // two-column table; `aliasSummary` keeps the detail human-readable in both.
+  aliasPairsDeclared: aliasStats.length,
+  aliasPairsPresent: aliasStats.filter((s) => s.primaryLocals > 0).length,
+  aliasPairsMismatched: aliasStats.filter(
+    (s) => s.primaryLocals > 0 && s.primaryLocals !== s.aliasLocals,
+  ).length,
+  aliasOrphanFaces: aliasStats.reduce((n, s) => n + s.orphanFaces, 0),
+  aliasSummary: aliasStats
+    .map((s) => `${s.primary}=${s.primaryLocals}/${s.alias}=${s.aliasLocals}`)
+    .join('; '),
   leakedThemeAtRule: /@theme/.test(css) ? 1 : 0,
   defaultFontFamilyIsVar: /--default-font-family:\s*var\(/.test(css) ? 1 : 0,
   themeVarsWithFallback: (css.match(/--font-[a-z-]+:[^;}]*Fallback:/g) || []).length,

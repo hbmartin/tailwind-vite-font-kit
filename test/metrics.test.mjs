@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { entireMetricsCollection as METRICS } from '@capsizecss/metrics/entireMetricsCollection'
-import { fallbackFaces, FALLBACK_TARGETS, metricsKey, pct } from '../src/metrics.mjs'
+import { fallbackFaces, FALLBACK_TARGETS, localSources, metricsKey, pct } from '../src/metrics.mjs'
 
 const parse = (css) =>
   [...css.matchAll(/@font-face\{([^}]*)\}/g)].map((m) =>
@@ -42,16 +42,61 @@ test('never emits local("BlinkMacSystemFont") — it is a CSS keyword, not a fac
 test('metric-compatible Liberation aliases share the matching system-font face', () => {
   const sans = parse(fallbackFaces(METRICS, 'Manrope', 'latin', [400]).css)
   const serif = parse(fallbackFaces(METRICS, 'Fraunces', 'latin', [400]).css)
+  // JetBrains Mono is capsize category `monospace`, so it selects the monospace targets.
+  const mono = parse(fallbackFaces(METRICS, 'JetBrains Mono', 'latin', [400]).css)
 
   const arial = sans.find((face) => face.src.includes('local("Arial")'))
   const times = serif.find((face) => face.src.includes('local("Times New Roman")'))
+  const courier = mono.find((face) => face.src.includes('local("Courier New")'))
 
   assert.equal(arial.src, 'local("Arial"),local("Liberation Sans")')
   assert.equal(times.src, 'local("Times New Roman"),local("Liberation Serif")')
+  assert.equal(courier.src, 'local("Courier New"),local("Liberation Mono")')
   assert.equal(
     sans.filter((face) => face.src.includes('Liberation Sans')).length,
     1,
     'the alias must not add a second fallback face',
+  )
+  assert.equal(
+    mono.filter((face) => face.src.includes('Liberation Mono')).length,
+    1,
+    'the alias must not add a second fallback face',
+  )
+})
+
+// Every alias declared in FALLBACK_TARGETS has to reach the CSS. The monospace pair had
+// no assertion at all for a while: the tuple could lose it and lint, the unit tests and
+// both CI invariant jobs would all still pass.
+test('every declared alias reaches the emitted face for its own category', () => {
+  const probes = {
+    'sans-serif': 'Manrope',
+    serif: 'Fraunces',
+    monospace: 'JetBrains Mono',
+  }
+  for (const [category, targets] of Object.entries(FALLBACK_TARGETS)) {
+    const faces = parse(fallbackFaces(METRICS, probes[category], 'latin', [400]).css)
+    assert.equal(faces.length > 0, true, `${category} emitted no faces`)
+    for (const [local, , aliases = []] of targets) {
+      const face = faces.find((f) => f.src.includes(`local("${local}")`))
+      if (!face) continue // a target with no capsize metrics is skipped by design
+      for (const alias of aliases) {
+        assert.ok(
+          face.src.includes(`local("${alias}")`),
+          `${category}: "${local}" lost its "${alias}" alias`,
+        )
+      }
+    }
+  }
+})
+
+// src/opsz-policy.mjs emits fallback faces too. When it built its own `src:local("X")`
+// the Linux aliases reached only one of the two emitters; both call this now.
+test('localSources is the single src builder, and appends aliases in order', () => {
+  assert.equal(localSources('Arial'), 'local("Arial")')
+  assert.equal(localSources('Arial', []), 'local("Arial")')
+  assert.equal(
+    localSources('Courier New', ['Liberation Mono']),
+    'local("Courier New"),local("Liberation Mono")',
   )
 })
 
