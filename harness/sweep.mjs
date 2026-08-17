@@ -27,6 +27,28 @@ const VIEWPORTS = [
 
 const FONT_BINARY_RE = /\.(woff2?|ttf|otf|eot)(\?|$)/i
 
+// The pre-swap snapshot and audit have to land between "the page has laid out on the
+// fallback" and "the intercepted fonts are released". The closing edge is FONT_DELAY_MS
+// after the page ASKS for a font, not after navigation starts, so a slow cold start moves
+// the whole window later rather than shortening it. Anchoring to the first font request
+// and polling for the state we care about is what keeps a first-navigation-on-a-cold-
+// runner from producing an empty audit that the CLS gate then reports as a font
+// regression.
+const PRE_SWAP_MARGIN_MS = 400
+const PRE_SWAP_GRACE_MS = 8000
+const PRE_SWAP_POLL_MS = 50
+
+const PRE_SWAP_READY = `(() => {
+  if (document.readyState === 'loading') return false;
+  const fallbacks = [...document.fonts].filter((f) => / Fallback: /.test(f.family || ''));
+  // 'unloaded' faces never settle on their own, and targets absent from this platform
+  // end at 'error' — neither can be waited for. What must not still be in flight is a
+  // face that IS resolving, and at least one has to have actually landed.
+  return fallbacks.length > 0 &&
+    fallbacks.every((f) => f.status !== 'loading') &&
+    fallbacks.some((f) => f.status === 'loaded');
+})()`
+
 const INIT = `
 window.__shifts = [];
 window.__paint = {};
@@ -144,6 +166,43 @@ async function staticAudit(url) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Poll until the page is worth auditing, or until the pre-swap window closes.
+ * @returns {Promise<{ready: boolean, reason: string | null}>} `reason` names why the
+ *   window was missed, so a failed gate can say "the audit did not run" instead of
+ *   inventing a missing fallback.
+ */
+async function waitForPreSwap(page, fontRequest, hardDeadline) {
+  let lastProbeError = null
+  while (Date.now() < hardDeadline) {
+    // Only meaningful once a font has been requested; until then the swap cannot happen.
+    if (
+      fontRequest.at !== null &&
+      Date.now() >= fontRequest.at + FONT_DELAY_MS - PRE_SWAP_MARGIN_MS
+    ) {
+      return { ready: false, reason: 'the pre-swap window closed before the fallbacks resolved' }
+    }
+    try {
+      if (await page.evaluate(PRE_SWAP_READY)) return { ready: true, reason: null }
+    } catch (error) {
+      // The execution context is destroyed as the navigation commits; that is expected
+      // here and must not be mistaken for a real failure, so it only surfaces if the
+      // whole window expires without a single successful probe.
+      lastProbeError = String(error?.message || error)
+    }
+    await sleep(PRE_SWAP_POLL_MS)
+  }
+  const waited = FONT_DELAY_MS + PRE_SWAP_GRACE_MS
+  return {
+    ready: false,
+    reason: lastProbeError
+      ? `the page was not auditable within ${waited}ms (last probe error: ${lastProbeError})`
+      : `the page was not auditable within ${waited}ms of navigation`,
+  }
+}
+
 async function runProbe(browser, probe, vp) {
   const url = `${BASE}/probe/${probe}`
   const runs = []
@@ -157,19 +216,41 @@ async function runProbe(browser, probe, vp) {
     await page.evaluateOnNewDocument(INIT)
     await page.setRequestInterception(true)
     const reqs = []
+    const fontRequest = { at: null }
     page.on('request', (req) => {
       reqs.push(req.url())
       if (req.resourceType() === 'font' || FONT_BINARY_RE.test(req.url())) {
+        if (fontRequest.at === null) fontRequest.at = Date.now()
         setTimeout(() => req.continue().catch(() => {}), FONT_DELAY_MS)
         return
       }
       req.continue().catch(() => {})
     })
+    const navigationStartedAt = Date.now()
     page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {})
-    await new Promise((r) => setTimeout(r, Math.max(800, FONT_DELAY_MS - 900)))
+    const preSwap = await waitForPreSwap(
+      page,
+      fontRequest,
+      navigationStartedAt + FONT_DELAY_MS + PRE_SWAP_GRACE_MS,
+    )
     const snapBefore = await page.evaluate(SNAP).catch(() => null)
-    const preSwapAudit = i === 0 ? await page.evaluate(RUNTIME_AUDIT).catch(() => null) : null
-    await new Promise((r) => setTimeout(r, FONT_DELAY_MS + 2500))
+    let preSwapAudit = null
+    if (i === 0) {
+      const captured = await page
+        .evaluate(RUNTIME_AUDIT)
+        .catch((error) => ({ auditError: String(error?.message || error) }))
+      const reason = captured.auditError
+        ? `the runtime audit threw: ${captured.auditError}`
+        : preSwap.reason
+      // A null (or empty) audit is indistinguishable downstream from "the fallbacks are
+      // missing", and check-cls.mjs gates on it. An audit that cannot be trusted carries
+      // the reason it cannot, so the gate reports the infrastructure failure it is.
+      preSwapAudit = reason ? { ...captured, unavailableReason: reason } : captured
+    }
+    // The swap is FONT_DELAY_MS after the request, so wait past that point rather than
+    // past a wall-clock guess that a late font request would have invalidated.
+    const swapAt = (fontRequest.at ?? Date.now()) + FONT_DELAY_MS
+    await sleep(Math.max(500, swapAt + 2500 - Date.now()))
     const snapAfter = await page.evaluate(SNAP).catch(() => null)
     const shifts = await page.evaluate('window.__shifts')
     const paint = await page.evaluate('window.__paint')

@@ -39,6 +39,7 @@
 // headings in every strategy below.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { localSources } from './metrics.mjs'
 import { WEIGHTINGS } from './weightings.mjs'
 
 // ── optional peers, imported on demand ───────────────────────────────────────
@@ -366,7 +367,10 @@ export async function planOpsz(buf, opts = {}) {
 /**
  * @param {Buffer | Uint8Array} buf
  * @param {OpszPlan} plan
- * @param {{family: string, targets: [string, string][], metrics: Record<string, any>}} opts
+ * `targets` takes FALLBACK_TARGETS entries verbatim — `[local, metricsKey, aliases?]`.
+ * Anything narrower would drop the Linux aliases on destructuring, which is exactly the
+ * silent no-op the aliases exist to remove.
+ * @param {{family: string, targets: [string, string, string[]?][], metrics: Record<string, any>}} opts
  */
 export async function buildFallbackCss(buf, plan, opts) {
   const { family, targets, metrics } = opts
@@ -377,7 +381,7 @@ export async function buildFallbackCss(buf, plan, opts) {
   for (const inst of plan.instances) {
     const v = Object.keys(inst.variations || {}).length ? font.getVariation(inst.variations) : font
     const x = xWidthAvg(v)
-    for (const [local, mk] of targets) {
+    for (const [local, mk, aliases = []] of targets) {
       const fb = metrics[mk]
       if (!fb) {
         throw new Error(
@@ -393,7 +397,7 @@ export async function buildFallbackCss(buf, plan, opts) {
       out.push(
         `@font-face{font-family:"${family}${inst.suffix || ' Fallback'}";` +
           (plan.perWeight && inst.weight ? `font-weight:${inst.weight};` : '') +
-          `src:local("${local}");size-adjust:${pct(sa)};` +
+          `src:${localSources(local, aliases)};size-adjust:${pct(sa)};` +
           `ascent-override:${pct(v.ascent / (v.unitsPerEm * sa))};` +
           `descent-override:${pct(Math.abs(v.descent) / (v.unitsPerEm * sa))};` +
           `line-gap-override:${pct(v.lineGap / (v.unitsPerEm * sa))}}`,

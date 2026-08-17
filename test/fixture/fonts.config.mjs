@@ -16,6 +16,16 @@ export default {
       stack: ['Georgia', 'serif'],
       preloadWeights: [],
     },
+    // A monospace family so the CI invariants actually exercise the third alias pair
+    // (Courier New / Liberation Mono). Without one, dropping it from FALLBACK_TARGETS
+    // passes every test and every invariant, and the Linux regression ships silently.
+    {
+      name: 'JetBrains Mono',
+      themeVar: '--font-mono',
+      weights: [400],
+      stack: ['ui-monospace', 'monospace'],
+      preloadWeights: [],
+    },
   ],
   assets: 'emit',
 }

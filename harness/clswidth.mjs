@@ -17,9 +17,13 @@ const WIDTHS = []
 for (let w = 360; w <= 1060; w += 20) WIDTHS.push(w)
 
 const INIT = `window.__s=[];new PerformanceObserver(l=>{for(const e of l.getEntries()){if(!e.hadRecentInput)window.__s.push(e.value)}}).observe({type:'layout-shift',buffered:true});`
-const SNAP = `(()=>{const h=document.querySelector('h1');const r=document.createRange();r.selectNodeContents(h);
+// PROBE is configurable, so the h1 this was written for may simply not be on the page.
+// Returning nulls rather than throwing keeps that from silently zeroing every row — an
+// unmeasurable line count has to stay distinguishable from a measured zero.
+const SNAP = `(()=>{const h=document.querySelector('h1');
  const pb=document.querySelector('[data-probe="b"]');
- return {lines:r.getClientRects().length,h:Math.round(h.getBoundingClientRect().height),
+ let lines=null; if(h){const r=document.createRange();r.selectNodeContents(h);lines=r.getClientRects().length}
+ return {lines,h:h?Math.round(h.getBoundingClientRect().height):null,
  by:pb?Math.round(pb.getBoundingClientRect().top+window.scrollY):null,doc:document.documentElement.scrollHeight}})()`
 
 const b = await puppeteer.launch({
@@ -47,7 +51,10 @@ for (const w of WIDTHS) {
   rows.push({
     w,
     cls: +cls.toFixed(4),
-    dLines: after && before ? after.lines - before.lines : null,
+    dLines:
+      after && before && after.lines != null && before.lines != null
+        ? after.lines - before.lines
+        : null,
     dY: after && before && after.by != null ? after.by - before.by : null,
   })
   await p.close()
@@ -58,7 +65,10 @@ const mob = rows.filter((r) => r.w < 700)
 const summarise = (rs, name) => {
   const cls = rs.map((r) => r.cls)
   const sorted = [...cls].sort((a, b) => a - b)
-  const reflow = rs.filter((r) => r.dLines !== 0).length
+  // A width whose line count could not be read is NOT a reflow. Counting `null` as one
+  // reported "every width reflowed" straight into the job summary next to a median of 0.
+  const measured = rs.filter((r) => r.dLines !== null)
+  const deltaY = rs.filter((r) => r.dY !== null).map((r) => Math.abs(r.dY))
   const summary = {
     name,
     widths: rs.length,
@@ -67,11 +77,12 @@ const summarise = (rs, name) => {
     max: Math.max(...cls),
     mean: cls.reduce((a, x) => a + x, 0) / cls.length,
     nonzero: cls.filter((c) => c > 0.0005).length,
-    lineCountChanged: reflow,
-    maxDeltaY: Math.max(...rs.map((r) => Math.abs(r.dY ?? 0))),
+    lineCountMeasured: measured.length,
+    lineCountChanged: measured.filter((r) => r.dLines !== 0).length,
+    maxDeltaY: deltaY.length ? Math.max(...deltaY) : null,
   }
   console.log(
-    `${name.padEnd(8)} widths=${summary.widths}  CLS median=${summary.median.toFixed(4)} p90=${summary.p90.toFixed(4)} max=${summary.max.toFixed(4)} mean=${summary.mean.toFixed(4)}  nonzero=${summary.nonzero}/${summary.widths}  lineCountChanged=${summary.lineCountChanged}/${summary.widths}  maxΔy=${summary.maxDeltaY}px`,
+    `${name.padEnd(8)} widths=${summary.widths}  CLS median=${summary.median.toFixed(4)} p90=${summary.p90.toFixed(4)} max=${summary.max.toFixed(4)} mean=${summary.mean.toFixed(4)}  nonzero=${summary.nonzero}/${summary.widths}  lineCountChanged=${summary.lineCountChanged}/${summary.lineCountMeasured}  maxΔy=${summary.maxDeltaY ?? 'n/a'}px`,
   )
   return summary
 }

@@ -11,9 +11,13 @@ const EXPECTED_KEYS = [
   'mobile/tailwind',
   'mobile/normal',
 ]
-const REQUIRED_FALLBACKS = ['Manrope Fallback:', 'Fraunces Fallback:']
+// The families are NOT hardcoded: the reference app's HEAD floats, so naming its fonts
+// here would turn any font swap in that repo into a weekly false regression. Every
+// `<Family> Fallback: <Target>` face the page actually declares is required to have
+// resolved instead, which is both drift-proof and stricter.
+const FALLBACK_FAMILY_RE = /^(.+?) Fallback: .+$/
 
-const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
+const DEFAULT_THRESHOLD = 0.02
 const finiteNonnegative = (value) => Number.isFinite(value) && value >= 0
 
 const [
@@ -23,13 +27,30 @@ const [
 ] = process.argv.slice(2)
 const outputPath = process.argv[5] || 'cls-metrics.json'
 const notePath = process.argv[6]
-const threshold = Number(process.env.THRESHOLD ?? '0.02')
-const report = readJson(reportPath)
-const context = existsSync(environmentPath) ? readJson(environmentPath) : null
-const widthSweep = existsSync(widthPath) ? readJson(widthPath) : null
 const errors = []
 
-if (!finiteNonnegative(threshold)) errors.push(`invalid threshold: ${process.env.THRESHOLD}`)
+// This file's contract is to ALWAYS leave a compact, issue-friendly result, so a
+// truncated or malformed input has to become a gate error rather than an uncaught throw
+// that leaves the summary and the issue body with nothing to read.
+const readJson = (path, label) => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch (error) {
+    errors.push(`could not read ${label} (${path}): ${error.message}`)
+    return null
+  }
+}
+
+// `?? '0.02'` accepted an EMPTY THRESHOLD as a valid threshold of 0, which fails every
+// probe with any measurable CLS and reports it as a regression instead of as the
+// misconfiguration it is.
+const rawThreshold = process.env.THRESHOLD ?? ''
+const threshold = rawThreshold.trim() === '' ? DEFAULT_THRESHOLD : Number(rawThreshold)
+const report = readJson(reportPath, 'the browser report') || {}
+const context = existsSync(environmentPath) ? readJson(environmentPath, 'the environment') : null
+const widthSweep = existsSync(widthPath) ? readJson(widthPath, 'the width sweep') : null
+
+if (!finiteNonnegative(threshold)) errors.push(`invalid threshold: ${JSON.stringify(rawThreshold)}`)
 if (!Array.isArray(report.results)) errors.push('cls.json results must be an array')
 
 const grouped = new Map()
@@ -62,14 +83,35 @@ for (const key of grouped.keys()) {
 }
 
 const heroAudit = grouped.get('desktop/hero')?.[0]?.audit
+const familyOf = (face) => (typeof face?.family === 'string' ? face.family : '')
 const fontFaceSet = Array.isArray(heroAudit?.fontFaceSet) ? heroAudit.fontFaceSet : []
+// Which web-font families declared a metric-matched fallback, read off the page's own CSS.
+const requiredPrefixes = [
+  ...new Set(
+    (Array.isArray(heroAudit?.fontFaces) ? heroAudit.fontFaces : [])
+      .map((face) => FALLBACK_FAMILY_RE.exec(familyOf(face))?.[1])
+      .filter(Boolean),
+  ),
+]
 const loadedFallbacks = fontFaceSet.filter(
   (face) =>
-    face.status === 'loaded' && REQUIRED_FALLBACKS.some((prefix) => face.family.startsWith(prefix)),
+    face.status === 'loaded' &&
+    requiredPrefixes.some((prefix) => familyOf(face).startsWith(`${prefix} Fallback: `)),
 )
-for (const prefix of REQUIRED_FALLBACKS) {
-  if (!loadedFallbacks.some((face) => face.family.startsWith(prefix))) {
-    errors.push(`${prefix.slice(0, -1)} was not loaded before the delayed web fonts`)
+
+// An audit that could not run is an infrastructure failure, not a font regression. Saying
+// so is the difference between "fix the runner" and a week spent looking for a font bug.
+if (!heroAudit || heroAudit.unavailableReason) {
+  errors.push(
+    `desktop/hero runtime audit is unavailable (${heroAudit?.unavailableReason ?? 'the sweep recorded no audit'}) — the fallback check could not run`,
+  )
+} else if (requiredPrefixes.length === 0) {
+  errors.push('desktop/hero declared no metric-matched fallback faces')
+} else {
+  for (const prefix of requiredPrefixes) {
+    if (!loadedFallbacks.some((face) => familyOf(face).startsWith(`${prefix} Fallback: `))) {
+      errors.push(`${prefix} Fallback was not loaded before the delayed web fonts`)
+    }
   }
 }
 

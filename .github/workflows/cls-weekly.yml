@@ -73,11 +73,17 @@ jobs:
           pnpm install --no-frozen-lockfile
           pnpm add -D "link:.."
 
+      # ALL THREE harnesses, or a step measures the cloned app's own drifting copy while
+      # the summary claims the result is attributable to this commit. `mkdir -p` because
+      # the app's layout floats too: a renamed directory there must not surface as a
+      # failed job that reads exactly like a CLS regression.
       - name: Use this commit's measurement harness
         working-directory: reference-app
         run: |
+          mkdir -p harness
           cp ../harness/sweep.mjs harness/sweep.mjs
           cp ../harness/clswidth.mjs harness/clswidth.mjs
+          cp ../harness/waterfall.mjs harness/waterfall.mjs
 
       - name: Install the reference app's browser
         working-directory: reference-app
@@ -150,33 +156,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # Rendered by the same module as the job summary, so the two cannot disagree.
+      - name: Render the regression issue body
+        if: failure()
+        continue-on-error: true
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: node scripts/write-cls-issue-body.mjs cls-metrics.json cls-environment.json > cls-issue-body.md
+
       - name: Open or update the regression issue
         if: failure()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          THRESHOLD: ${{ env.THRESHOLD }}
         with:
           script: |
             const fs = require('fs')
             const title = 'Weekly CLS sweep failed'
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            const format = value => Number.isFinite(value) ? value.toFixed(4) : 'invalid'
-            let body = `The weekly CLS sweep failed on \`${context.sha.slice(0, 8)}\`.\n\n[Run](${runUrl})\n\n`
+            let body
             try {
-              const m = JSON.parse(fs.readFileSync('cls-metrics.json', 'utf8'))
-              if (m.worst) body += `Worst: **${m.worst.k} = ${format(m.worst.cls)}** (threshold ${m.threshold})\n\n`
-              body += '| probe | runs | median CLS |\n|---|---|---:|\n'
-              for (const r of m.rows) body += `| ${r.k} | ${(r.clsAll || []).map(format).join(', ')} | ${format(r.cls)} |\n`
-              if (m.gate.errors.length) body += `\nGate errors:\n${m.gate.errors.map(e => `- ${e}`).join('\n')}\n`
+              body = fs.readFileSync('cls-issue-body.md', 'utf8')
             } catch {
-              body += 'The job failed before producing gated measurements. Inspect the checkout, build, and sweep steps.\n'
+              body = `The weekly CLS sweep failed on \`${context.sha.slice(0, 8)}\`, before the report could even be rendered.\n\n[Run](${runUrl})\n`
             }
-            try {
-              const e = JSON.parse(fs.readFileSync('cls-environment.json', 'utf8'))
-              body += `\nEnvironment: reference app \`${e.referenceAppSha}\`, ${e.runner.imageOS || e.runner.os} ${e.runner.imageVersion || ''}, Node ${e.runtime.node}, Puppeteer ${e.runtime.puppeteer}, ${e.runtime.browser}.\n`
-            } catch {}
-            body += '\nCheck the dedicated CLS trend before treating a single breach as a regression:\n'
-            body += '```\ngit fetch origin "refs/notes/*:refs/notes/*" && git log --notes=cls\n```\n'
 
             const open = await github.paginate(github.rest.issues.listForRepo, {
               ...context.repo, state: 'open', labels: 'cls-regression', per_page: 100,

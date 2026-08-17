@@ -27,6 +27,7 @@
  * Helvetica Neue measured *more* accurate than Arial (+0.20% vs +0.26%) yet produced
  * worse CLS, because below ~1% error whether a line break flips is arbitrary.
  */
+/** @type {Record<string, [local: string, metricsKey: string, aliases?: string[]][]>} */
 export const FALLBACK_TARGETS = {
   'sans-serif': [
     ['Arial', 'arial', ['Liberation Sans']],
@@ -44,6 +45,17 @@ export const FALLBACK_TARGETS = {
 export const pct = (n) => `${+(n * 100).toFixed(4)}%`
 export const metricsKey = (family) =>
   family.replace(/\s+/g, '').replace(/^(.)/, (m) => m.toLowerCase())
+
+/**
+ * The ONE place a fallback face's `src` list is built. `buildFallbackCss` in
+ * opsz-policy.mjs emits faces too; when it had its own `src:local("X")` an alias added
+ * to FALLBACK_TARGETS reached only one of the two emitters, and the other silently kept
+ * shipping the Linux no-op. Both call this instead.
+ * @param {string} localName
+ * @param {string[]} [aliases]
+ */
+export const localSources = (localName, aliases = []) =>
+  [localName, ...aliases].map((source) => `local("${source}")`).join(',')
 
 // Per-weight metrics. Arial 700 is 7.7% wider than Arial regular, so ONE fallback face
 // per family is wrong for every weight but one. capsize ships `variants` for all ~1,921
@@ -88,7 +100,7 @@ export function fallbackFaces(METRICS, family, subset, weights, log = () => {}, 
     if (!fbFamily) continue
     const name = `${family} Fallback: ${localName}`
     names.push(name)
-    const sources = [localName, ...aliases].map((source) => `local("${source}")`).join(',')
+    const sources = localSources(localName, aliases)
 
     for (const weight of weights) {
       const v = variantOf(m, weight)

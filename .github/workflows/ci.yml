@@ -127,35 +127,7 @@ jobs:
           cat metrics.json
 
       - name: Assert invariants
-        run: |
-          node -e "
-            const m = require('./metrics.json');
-            const must = {
-              googleapisRefs: 0, gstaticRefs: 0, blinkMacSystemFontLocals: 0,
-              leakedThemeAtRule: 0, defaultFontFamilyIsVar: 1, themeVarsWithFallback: 2,
-            };
-            const bad = Object.entries(must).filter(([k, v]) => m[k] !== v);
-            if (bad.length) {
-              for (const [k, v] of bad) console.error(\`::error::\${k} = \${m[k]}, expected \${v}\`);
-              process.exit(1);
-            }
-            if (m.fontFaceWithSizeAdjust < 8) {
-              console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
-              process.exit(1);
-            }
-            const aliases = [
-              ['Arial', m.arialLocals, 'Liberation Sans', m.liberationSansLocals],
-              ['Times New Roman', m.timesNewRomanLocals, 'Liberation Serif', m.liberationSerifLocals],
-            ];
-            const missingAliases = aliases.filter(([, primary, , alias]) => primary === 0 || primary !== alias);
-            if (missingAliases.length) {
-              for (const [name, primary, aliasName, alias] of missingAliases) {
-                console.error(\`::error::\${name} local() count \${primary}, \${aliasName} count \${alias}\`);
-              }
-              process.exit(1);
-            }
-            console.log('invariants ok');
-          "
+        run: node scripts/assert-invariants.mjs metrics.json
 
       - name: Job summary
         run: |
@@ -234,34 +206,7 @@ jobs:
         run: |
           node scripts/collect-metrics.mjs test/fixture > metrics.json
           cat metrics.json
-          node -e "
-            const m = require('./metrics.json');
-            const must = {
-              googleapisRefs: 0, gstaticRefs: 0, blinkMacSystemFontLocals: 0,
-              leakedThemeAtRule: 0, defaultFontFamilyIsVar: 1, themeVarsWithFallback: 2,
-            };
-            const bad = Object.entries(must).filter(([k, v]) => m[k] !== v);
-            if (bad.length) {
-              for (const [k, v] of bad) console.error(\`::error::\${k} = \${m[k]}, expected \${v}\`);
-              process.exit(1);
-            }
-            if (m.fontFaceWithSizeAdjust < 8) {
-              console.error('::error::too few metric-override faces: ' + m.fontFaceWithSizeAdjust);
-              process.exit(1);
-            }
-            const aliases = [
-              ['Arial', m.arialLocals, 'Liberation Sans', m.liberationSansLocals],
-              ['Times New Roman', m.timesNewRomanLocals, 'Liberation Serif', m.liberationSerifLocals],
-            ];
-            const missingAliases = aliases.filter(([, primary, , alias]) => primary === 0 || primary !== alias);
-            if (missingAliases.length) {
-              for (const [name, primary, aliasName, alias] of missingAliases) {
-                console.error(\`::error::\${name} local() count \${primary}, \${aliasName} count \${alias}\`);
-              }
-              process.exit(1);
-            }
-            console.log('invariants ok on vite ${{ matrix.vite }}');
-          "
+          node scripts/assert-invariants.mjs metrics.json "on vite ${{ matrix.vite }}"
 
   # Notes are per-commit, so PR runs would attach to a commit that may never land.
   # A separate job so `contents: write` is granted to nothing but the note push.
