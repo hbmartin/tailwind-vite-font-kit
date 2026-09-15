@@ -1,3 +1,4 @@
+import { stripFallbacks } from './browser-benchmark-css.mjs'
 // Run the real Fontaine transform against the same self-hosted production CSS.
 // Usage: node harness/browser-benchmark-fontaine.mjs INPUT_CSS FONTAINE_MODULE OUTPUT_CSS
 import assert from 'node:assert/strict'
@@ -8,9 +9,7 @@ import { resolve } from 'node:path'
 const [input, modulePath, output] = process.argv.slice(2)
 if (!output) throw new Error('Pass INPUT_CSS FONTAINE_MODULE OUTPUT_CSS')
 const { FontaineTransform } = await import(pathToFileURL(resolve(modulePath)).href)
-const plain = readFileSync(input, 'utf8')
-  .replace(/@font-face\s*\{[^{}]*size-adjust\s*:[^{}]*\}/g, '')
-  .replace(/(?:"[^"]* Fallback: [^"]*"|'[^']* Fallback: [^']*')\s*,\s*/g, '')
+const plain = stripFallbacks(readFileSync(input, 'utf8'))
 const plugin = FontaineTransform.vite({ fallbacks: {} })
 let { code } = await plugin.transform.handler(plain, '/benchmark/styles.css')
 // Fontaine documents explicitly adding the fallback suffix to CSS variables.

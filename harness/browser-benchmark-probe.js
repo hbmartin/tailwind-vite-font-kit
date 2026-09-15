@@ -1,6 +1,7 @@
 // Injected by browser-benchmark-server.mjs before app scripts. Measurement only;
 // this file never enters the application's production bundle.
 ;(() => {
+  const computeCls = __BENCH_CLS__
   const config = JSON.parse(document.currentScript.dataset.config)
   const errors = []
   let hidden = document.hidden
@@ -39,9 +40,11 @@
     return {
       at: performance.now(),
       height: document.documentElement.scrollHeight,
+      layoutWidth: document.documentElement.clientWidth,
       elements: [...document.querySelectorAll('main h1, main p, [data-probe]')].map((el) => ({
         tag: el.tagName,
         probe: el.getAttribute('data-probe'),
+        text: el.textContent,
         rect: el.getBoundingClientRect().toJSON(),
         font: getComputedStyle(el).fontFamily,
       })),
@@ -60,21 +63,13 @@
       await document.fonts.ready
       await new Promise((resolve) => setTimeout(resolve, 250))
       const after = snapshot()
-      let cls = 0,
-        session = 0,
-        start = 0,
-        last = 0
-      for (const shift of shifts) {
-        if (shift.at - last >= 1000 || shift.at - start >= 5000) {
-          session = 0
-          start = shift.at
-        }
-        session += shift.value
-        cls = Math.max(cls, session)
-        last = shift.at
-      }
+      const cls = computeCls(shifts)
+      const evidence = await fetch(`/__bench/${config.id}/evidence`)
+      if (!evidence.ok) errors.push('Missing benchmark evidence')
+      const experiment = await evidence.json()
       const result = {
         ...config,
+        experiment,
         userAgent: navigator.userAgent,
         viewport: { width: innerWidth, height: innerHeight },
         layoutWidth: document.documentElement.clientWidth,
