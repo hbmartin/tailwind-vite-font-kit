@@ -64,9 +64,18 @@
       await new Promise((resolve) => setTimeout(resolve, 250))
       const after = snapshot()
       const cls = computeCls(shifts)
-      const evidence = await fetch(`/__bench/${config.id}/evidence`)
-      if (!evidence.ok) errors.push('Missing benchmark evidence')
-      const experiment = await evidence.json()
+      let experiment = null
+      try {
+        const evidence = await fetch(`/__bench/${config.id}/evidence`)
+        if (!evidence.ok) errors.push(`Missing benchmark evidence (HTTP ${evidence.status})`)
+        try {
+          experiment = await evidence.json()
+        } catch {
+          errors.push('Invalid benchmark evidence JSON')
+        }
+      } catch (error) {
+        errors.push(`Missing benchmark evidence: ${String(error)}`)
+      }
       const result = {
         ...config,
         experiment,

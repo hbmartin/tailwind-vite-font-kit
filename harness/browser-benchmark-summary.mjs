@@ -1,5 +1,6 @@
 // Historical summaries are read-only by default. Saving always requires a new path.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { parseArgs } from 'node:util'
 import { validate, compare } from './browser-benchmark-validation.mjs'
 import { assertNewOutputs, outputPaths } from './browser-benchmark-output.mjs'
@@ -27,6 +28,9 @@ if (baselinePath)
     summary,
     { mode: values.diagnostic ? 'diagnostic' : 'acceptance' },
   )
-if (values.output) writeFileSync(values.output, JSON.stringify(summary, null, 2), { flag: 'wx' })
+if (values.output) {
+  mkdirSync(dirname(values.output), { recursive: true })
+  writeFileSync(values.output, JSON.stringify(summary, null, 2), { flag: 'wx' })
+}
 console.log(JSON.stringify(summary, null, 2))
 if (summary.comparison?.failures.length) process.exitCode = 1

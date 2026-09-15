@@ -49,9 +49,12 @@ BENCH_FONTAINE_PATH=/assets/styles-HASH.css node harness/browser-benchmark-serve
 ```
 
 `BENCH_ORIGIN` and `BENCH_PORT` override the production origin and proxy port.
+An empty `BENCH_ORIGIN` uses the default; malformed origins fail before listening.
 The Fontaine helper runs the actual transform, with its default category fallbacks,
 and explicitly connects the documented fallback names to Tailwind's two font variables.
 This compares fallback generation, not Fontaine's end-to-end download/preload integration.
+Fontaine runs strip kit metric fallbacks from other stylesheets. Their evidence records
+the replacement path, CSS hash, and whether it was served; a stale path returns 409 JSON.
 
 Open URLs such as this in the in-app browser:
 
@@ -66,6 +69,8 @@ per-run paths and `no-store` responses. JavaScript/CSS responses are gzip-compre
 when requested; WOFF2 is unchanged. Font responses are delayed by the requested
 number of milliseconds **after their request arrives**. This is a font-swap stress
 test, not a cellular network or CPU emulator.
+Runtime asset URLs without a per-run path use a same-origin Referer or, if it is absent,
+a short-lived HttpOnly run cookie. Conflicting or missing run identities return 409.
 
 The injected measurement script starts before app code, observes layout-shift entries
 without recent input, computes the maximum CLS session window, and records geometry,
@@ -85,6 +90,9 @@ const result = JSON.parse(
 // Add probe and group ('matrix' or 'widths') before saving the result.
 ```
 
+Evidence errors still publish the result element with an error and a null or unapplied
+experiment record, so validation fails without a browser timeout.
+
 For the main matrix, test all six variants on `hero`, `tailwind`, and `normal` at
 390 × 844 and 1280 × 900. Use three fresh navigations for each cell, unique run IDs,
 and rotate variant order. Collect measurements sequentially in one tab.
@@ -94,6 +102,8 @@ and rotate variant order. Collect measurements sequentially in one tab.
 Import it through the in-app browser skill after connecting to the browser; run
 batches of at most 14 cases so each tool call can finish within a minute. The helper
 does not create a separate browser or require Playwright/Puppeteer dependencies.
+It snapshots console errors before each navigation and collects only newly appended
+logs. Lost log history invalidates the observation.
 
 For the responsive sweep, test viewport widths 360 through 1060 in 20-pixel
 increments, each at a height of 900. Keep `width=0` so the app's own container sizing
@@ -115,7 +125,7 @@ node harness/browser-benchmark-summary.mjs /path/to/raw-results.json
 The summary rejects cached/missing/duplicate font downloads, late fallback snapshots,
 and unloaded metric fallbacks. It prints per-cell medians, ranges, and geometry deltas. To save a new summary,
 add `--output harness/results/new-summary.json`. Existing files are never overwritten;
-the historical summary stays unchanged.
+the historical summary stays unchanged. The output directory is created if needed.
 Keep browser console checks and native production HTTP headers alongside the report.
 Reset the browser viewport after the experiment.
 
@@ -168,9 +178,12 @@ node harness/browser-benchmark-summary.mjs harness/results/candidate.json \
 
 Validation rejects empty/incomplete/duplicated case sets (including mismatched delay), wrong viewports, failed
 requests, browser errors, hidden pages, missing fonts/fallbacks and invalid geometry.
+Candidate proof comes from changed `kit` CSS; rewrites by other variants do not count.
+Comparison checks paired served hashes and Fontaine replacement identity as well as
+original assets. Acceptance requires a paired 380×900 `kit` hero cell.
 A complete validated run can still fail performance acceptance. Comparison rejects
 any cell whose six-decimal median CLS or median absolute vertical movement exceeds
-the paired baseline, and requires the 380×900 hero to have CLS ≤0.02 and zero
+the paired baseline, and requires the 380×900 `kit` hero to have CLS ≤0.02 and zero
 vertical position/height change. Use three repeats, or nine when inconclusive.
 A passing comparison covers **only its manifest**; a short screening manifest cannot
 establish production eligibility. Changes require the full suite, Poppins/Fraunces
@@ -233,6 +246,9 @@ matching production asset hashes, matching harness code, the same browser, match
 usable layout widths, at least three repetitions, and delayed font swaps. A second
 baseline run cannot be accepted as a candidate. These are operator-error checks,
 not signatures that authenticate manually edited JSON.
+Paired candidate `kit` CSS must differ from the baseline; other variants' served
+assets must match. Harness identity includes the installed PostCSS version, and
+Fontaine cells require the same replacement path and CSS hash in both runs.
 
 Case identity includes font delay; missing `group` and `delay` normalize to `matrix`
 and `2000`. Repetitions must have identical element identities (including text),
@@ -244,7 +260,7 @@ the acceptance gate instead of fabricating metadata for them.
 
 For a limited investigation without a 380px hero, add `--diagnostic` to the summary
 command. It reports per-cell regressions with `accepted: null`; it can never approve
-production defaults. Normal acceptance retains the mandatory 380×900 hero gate.
+production defaults. Normal acceptance retains the mandatory 380×900 `kit` hero gate.
 
 A family name string still means one downloaded file for that family. For static
 weights or multiple subsets, list the exact expected paths (without the per-run
@@ -269,11 +285,12 @@ paths; choose a fresh prefix for each run. In-app batches may append only when t
 supplied results exactly match the saved raw observations. The summary command
 prints by default; `--output` saves exclusively to a new file. This avoids changing
 the committed baseline summary or overwriting raw measurements.
+An in-app batch may resume from a saved `[]` after its first case fails.
 
 The proxy supports GET/HEAD benchmark pages and assets. Other methods fail explicitly.
-Runtime `/assets/` and `/fonts/` requests must carry an attributable page/module
-referrer, otherwise they fail instead of silently receiving baseline CSS. Queries
-are preserved. `BENCH_FONTAINE_PATH` identifies the original main stylesheet;
-additional stylesheets retain their own contents. Shared CSS helpers handle quoted,
-unquoted, and escaped fallback names in stripping, candidate transformations and
-bundle accounting. Unsupported weight ranges remain unchanged by the bold candidate.
+Runtime `/assets/` and `/fonts/` requests use their page/module referrer or the
+per-run cookie when Referer is absent. Queries are preserved. `BENCH_FONTAINE_PATH`
+identifies the original main stylesheet; additional stylesheets have kit metric
+fallbacks stripped. Shared CSS helpers handle quoted, unquoted, and escaped fallback
+names, `font:` shorthand, and `!important` in stripping and bundle accounting.
+Unsupported weight ranges remain unchanged by the bold candidate.

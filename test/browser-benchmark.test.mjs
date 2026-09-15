@@ -1,7 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { validate, compare } from '../harness/browser-benchmark-validation.mjs'
-import { matrixCases, regressionCases } from '../harness/browser-benchmark-runner.mjs'
+import {
+  matrixCases,
+  regressionCases,
+  runDriver,
+  runCases,
+  newBrowserErrors,
+} from '../harness/browser-benchmark-runner.mjs'
 import { candidateCss } from '../harness/browser-benchmark-candidates.mjs'
 const cases = Array.from({ length: 3 }, () => ({
   viewport: 380,
@@ -58,6 +64,26 @@ function fixture(candidate = 'baseline') {
         { tag: 'P', probe: null, text: 'Paragraph', rect: { x: 0, y: 0, width: 100, height: 100 } },
       ],
       faces: ['Manrope', 'Fraunces'].map((family) => ({ family, status: 'loaded' })),
+    },
+  }))
+}
+function fontaineFixture(candidate = 'baseline') {
+  return fixture(candidate).map((row) => ({
+    ...row,
+    variant: 'fontaine',
+    experiment: {
+      ...row.experiment,
+      assets: row.experiment.assets.map((asset) => ({ ...asset, servedHash: 'c'.repeat(64) })),
+      fontaine: { path: '/assets/styles.css', cssHash: 'f'.repeat(64), applied: true },
+    },
+    before: {
+      ...row.before,
+      faces: row.before.faces.map((face) => ({
+        ...face,
+        family: face.family.includes('Fallback:')
+          ? face.family.split(' Fallback:')[0] + ' fallback'
+          : face.family,
+      })),
     },
   }))
 }
@@ -173,6 +199,10 @@ test('any width regression rejects a candidate even when aggregate CLS improves'
   baseline.summary.push(other)
   const candidate = structuredClone(baseline)
   candidate.candidate = 'binding'
+  for (const cell of candidate.summary) {
+    cell.experiment.candidate = 'binding'
+    cell.experiment.assets[0].servedHash = 'c'.repeat(64)
+  }
   candidate.summary[0].cls = 0.001
   candidate.summary[1].cls = 0
   assert.equal(compare(baseline, candidate).accepted, false)
@@ -327,6 +357,151 @@ test('candidate, source assets, layout width, and strict validation cannot be by
   })
   assert.throws(() => validate(unchanged, { cases, candidate: 'binding' }), /did not change CSS/)
 })
+test('candidate acceptance requires paired changed kit CSS at the 380px hero', () => {
+  const systemCases = cases.map((c) => ({ ...c, variant: 'system' }))
+  const systemRows = (candidate) =>
+    fixture(candidate).map((row) => ({
+      ...row,
+      variant: 'system',
+      resources: [],
+      experiment: {
+        ...row.experiment,
+        assets: row.experiment.assets.map((asset) => ({ ...asset, servedHash: 'b'.repeat(64) })),
+      },
+    }))
+  const baseline = validate(systemRows('baseline'), { cases: systemCases })
+  const candidate = validate(systemRows('binding'), { cases: systemCases, candidate: 'binding' })
+  assert.throws(() => compare(baseline, candidate), /Missing 380px kit hero/)
+  const misleadingCases = systemCases.map((row) => ({ ...row, group: 'fake/380/900/hero/kit' }))
+  const misleadingRows = systemRows('binding').map((row) => ({
+    ...row,
+    group: 'fake/380/900/hero/kit',
+  }))
+  assert.throws(
+    () => validate(misleadingRows, { cases: misleadingCases, candidate: 'binding' }),
+    /invalid cell identity/,
+  )
+
+  const changedBaseline = fixture()
+  changedBaseline.forEach((row) => {
+    row.experiment.assets[0].servedHash = 'b'.repeat(64)
+  })
+  assert.throws(() => validate(changedBaseline, { cases }), /baseline kit CSS changed/)
+
+  const pairedBaseline = validate(fixture(), { cases })
+  const pairedCandidate = validate(fixture('binding'), { cases, candidate: 'binding' })
+  pairedCandidate.summary[0].experiment.assets[0].servedHash = 'a'.repeat(64)
+  assert.throws(
+    () => compare(pairedBaseline, pairedCandidate),
+    /Candidate kit CSS matches baseline/,
+  )
+  pairedCandidate.summary[0].experiment.candidate = 'baseline'
+  assert.throws(() => compare(pairedBaseline, pairedCandidate), /Candidate cell candidate mismatch/)
+})
+test('Fontaine replacement identity and non-kit served CSS must match between runs', () => {
+  const fontaineCases = cases.map((c) => ({ ...c, variant: 'fontaine' }))
+  const baseline = validate(fontaineFixture(), { cases: fontaineCases })
+  const candidate = validate(fontaineFixture('binding'), {
+    cases: fontaineCases,
+    candidate: 'binding',
+  })
+  assert.equal(compare(baseline, candidate, { mode: 'diagnostic' }).accepted, null)
+  candidate.summary[0].experiment.fontaine.cssHash = 'e'.repeat(64)
+  assert.throws(() => compare(baseline, candidate, { mode: 'diagnostic' }), /Fontaine CSS mismatch/)
+  candidate.summary[0].experiment.fontaine.cssHash = 'f'.repeat(64)
+  candidate.summary[0].experiment.assets[0].servedHash = 'd'.repeat(64)
+  assert.throws(
+    () => compare(baseline, candidate, { mode: 'diagnostic' }),
+    /Non-kit served asset mismatch/,
+  )
+  const unapplied = fontaineFixture()
+  unapplied.forEach((row) => {
+    row.experiment.fontaine.applied = false
+  })
+  assert.throws(() => validate(unapplied, { cases: fontaineCases }), /Fontaine CSS was not applied/)
+})
+test('probe identity cannot collide through slashes in probe attributes and text', () => {
+  const rows = fixture()
+  rows[0].before.elements[0].probe = 'a/b'
+  rows[0].before.elements[0].text = 'c'
+  rows[0].after.elements[0].probe = 'a'
+  rows[0].after.elements[0].text = 'b/c'
+  assert.throws(() => validate(rows, { cases }), /changed probe identity/)
+})
+test('an empty saved batch resumes after its first case fails', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'benchmark-empty-resume-'))
+  const output = join(dir, 'raw.json')
+  const batch = [{ viewport: 380, height: 900, probe: 'hero', variant: 'kit' }]
+  try {
+    await assert.rejects(
+      runDriver(
+        {
+          viewport: async () => {},
+          read: async () => {
+            throw new Error('first case failed')
+          },
+        },
+        batch,
+        [],
+        output,
+      ),
+      /first case failed/,
+    )
+    assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), [])
+    const results = []
+    await runDriver(
+      { viewport: async () => {}, read: async () => ({ errors: [] }) },
+      batch,
+      results,
+      output,
+    )
+    assert.equal(results.length, 1)
+    assert.equal(JSON.parse(readFileSync(output, 'utf8')).length, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('in-app log collection ignores prior unparseable times and flags lost history', async () => {
+  const old = { message: 'old error', timestamp: 'unparseable' }
+  const current = { message: 'current error', timestamp: '1970-01-01T00:00:00Z' }
+  assert.deepEqual(newBrowserErrors([old], [old, current]), ['current error'])
+  assert.deepEqual(newBrowserErrors([old], [current]), [
+    'Browser log history lost the run boundary',
+    'current error',
+  ])
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'benchmark-tab-logs-'))
+  const logs = [old]
+  const results = []
+  try {
+    await runCases(
+      {
+        dev: { logs: async () => [...logs] },
+        goto: async () => {
+          logs.push(current)
+        },
+        playwright: {
+          locator: () => ({
+            waitFor: async () => {},
+            textContent: async () => JSON.stringify({ errors: [] }),
+          }),
+        },
+      },
+      { set: async () => {} },
+      [{ viewport: 380, height: 900, probe: 'hero', variant: 'kit' }],
+      results,
+      join(dir, 'raw.json'),
+    )
+    assert.deepEqual(results[0].errors, ['current error'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('explicit file expectations support multiple weights and reject missing or unexpected files', () => {
   const rows = fixture()
   for (const r of rows) {
@@ -418,6 +593,49 @@ test('shared CSS stripping handles quoted, escaped, and unquoted family tokens',
   )
   assert(reordered.indexOf('Helvetica') < reordered.indexOf('Arial'))
 })
+test('CSS stripping preserves important declarations and repairs fallback-only stacks and shorthand', async () => {
+  const { stripFallbacks } = await import('../harness/browser-benchmark-css.mjs')
+  assert.equal(
+    stripFallbacks(':root{--font-sans:Manrope,"Manrope Fallback: Arial"!important}'),
+    ':root{--font-sans:Manrope!important}',
+  )
+  assert.equal(
+    stripFallbacks(':root{--font-sans:"Manrope Fallback: Arial"}'),
+    ':root{--font-sans:"Arial"}',
+  )
+  assert.equal(
+    stripFallbacks('p{font:italic bold 16px/1.2 Manrope,"Manrope Fallback: Arial",sans-serif}'),
+    'p{font:italic bold 16px/1.2 Manrope,sans-serif}',
+  )
+  assert.equal(
+    stripFallbacks('p{font:16px / 1.2 "Manrope Fallback: Arial",sans-serif}'),
+    'p{font:16px / 1.2 sans-serif}',
+  )
+  assert.equal(
+    stripFallbacks('p{font:16px "Manrope Fallback: Helvetica Neue"!important}'),
+    'p{font:16px "Helvetica Neue"!important}',
+  )
+  assert.throws(
+    () => stripFallbacks('p{font:unknown "Manrope Fallback: Arial"}'),
+    /Cannot safely parse font shorthand/,
+  )
+  assert.throws(
+    () => stripFallbacks('p{font:var(--size) "Manrope Fallback: Arial"}'),
+    /Cannot safely parse font shorthand/,
+  )
+  const untouched = ':root { --unrelated:  red, blue ; } p { font: inherit; }'
+  assert.equal(stripFallbacks(untouched), untouched)
+  assert.equal(
+    stripFallbacks('p{font:var(--unrelatedFallback)}'),
+    'p{font:var(--unrelatedFallback)}',
+  )
+  const importantCandidate = candidateCss(
+    ':root{--font-sans:"Manrope Fallback: Arial","Manrope Fallback: Helvetica Neue"!important}',
+    'manrope-helvetica',
+  )
+  assert(importantCandidate.indexOf('Helvetica Neue') < importantCandidate.indexOf('Arial'))
+  assert(importantCandidate.endsWith('!important}'))
+})
 test('output paths cannot collide or overwrite existing files; historical summary is read-only', async () => {
   const { outputPaths, assertNewOutputs } = await import('../harness/browser-benchmark-output.mjs')
   const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
@@ -436,6 +654,15 @@ test('output paths cannot collide or overwrite existing files; historical summar
       stdio: 'pipe',
     })
     assert.equal(readFileSync(oldSummary, 'utf8'), 'historical summary')
+    const nested = join(dir, 'new', 'results', 'summary.json')
+    execFileSync(
+      process.execPath,
+      ['harness/browser-benchmark-summary.mjs', input, '--output', nested],
+      {
+        stdio: 'pipe',
+      },
+    )
+    assert.equal(JSON.parse(readFileSync(nested, 'utf8')).loads, 3)
     assert.throws(() =>
       execFileSync(
         process.execPath,
