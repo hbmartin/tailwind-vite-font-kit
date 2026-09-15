@@ -1,0 +1,18 @@
+{
+  "kit": {
+    "raw": 33548,
+    "gzip": 7452,
+    "brotli": 6509
+  },
+  "plain": {
+    "raw": 28850,
+    "gzip": 6802,
+    "brotli": 5982
+  },
+  "fallbackFaces": 24,
+  "delta": {
+    "raw": 4698,
+    "gzip": 650,
+    "brotli": 527
+  }
+}

@@ -1,0 +1,438 @@
+{
+  "assets/index-BhHA0ZUJ.js": [
+    {
+      "id": "\u0000rolldown/runtime.js",
+      "renderedLength": 1162
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js",
+      "renderedLength": 15332
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js",
+      "renderedLength": 330
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js",
+      "renderedLength": 9195
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js",
+      "renderedLength": 346
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js",
+      "renderedLength": 5884
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js",
+      "renderedLength": 639
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js",
+      "renderedLength": 453998
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/client.js",
+      "renderedLength": 644
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/constants.js",
+      "renderedLength": 1104
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/getStartOptions.js",
+      "renderedLength": 328
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/utils.js",
+      "renderedLength": 6234
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/invariant.js",
+      "renderedLength": 315
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/lru-cache.js",
+      "renderedLength": 1560
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/new-process-route-tree.js",
+      "renderedLength": 19581
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/path.js",
+      "renderedLength": 6445
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/not-found.js",
+      "renderedLength": 315
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/scroll-restoration.js",
+      "renderedLength": 6545
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/qss.js",
+      "renderedLength": 1051
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/searchParams.js",
+      "renderedLength": 1210
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/root.js",
+      "renderedLength": 277
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/redirect.js",
+      "renderedLength": 986
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/ssr-match-id.js",
+      "renderedLength": 432
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/rewrite.js",
+      "renderedLength": 1717
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/stores.js",
+      "renderedLength": 2047
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+history@1.162.1/node_modules/@tanstack/history/dist/esm/index.js",
+      "renderedLength": 9532
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/router.js",
+      "renderedLength": 33409
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/load-client.js",
+      "renderedLength": 43038
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/defer.js",
+      "renderedLength": 842
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/link.js",
+      "renderedLength": 298
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/manifest.js",
+      "renderedLength": 1542
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/route.js",
+      "renderedLength": 2295
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/seroval@1.6.2/node_modules/seroval/dist/index.js",
+      "renderedLength": 47102
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/serializer/transformer.js",
+      "renderedLength": 1020
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/serializer/RawStream.js",
+      "renderedLength": 6883
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/serializer/ShallowErrorPlugin.js",
+      "renderedLength": 828
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/seroval-plugins@1.6.2_seroval@1.6.2/node_modules/seroval-plugins/dist/web-43VA2W_p.js",
+      "renderedLength": 2739
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/seroval-plugins@1.6.2_seroval@1.6.2/node_modules/seroval-plugins/dist/web.js",
+      "renderedLength": 0
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/serializer/seroval-plugins.js",
+      "renderedLength": 370
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/getDefaultSerovalPlugins.js",
+      "renderedLength": 432
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client-rpc/frame-decoder.js",
+      "renderedLength": 6534
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client-rpc/serverFnFetcher.js",
+      "renderedLength": 6156
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client-rpc/createClientRpc.js",
+      "renderedLength": 650
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client/ServerFunctionSerializationAdapter.js",
+      "renderedLength": 683
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/empty-plugin-adapters.js",
+      "renderedLength": 314
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/utils.js",
+      "renderedLength": 1155
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js",
+      "renderedLength": 1025
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js",
+      "renderedLength": 354
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/awaited.js",
+      "renderedLength": 1050
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/CatchBoundary.js",
+      "renderedLength": 2589
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/ClientOnly.js",
+      "renderedLength": 630
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/routerContext.js",
+      "renderedLength": 356
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useRouter.js",
+      "renderedLength": 375
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/matchContext.js",
+      "renderedLength": 416
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+store@0.9.3/node_modules/@tanstack/store/dist/esm/alien.js",
+      "renderedLength": 5031
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+store@0.9.3/node_modules/@tanstack/store/dist/esm/atom.js",
+      "renderedLength": 4804
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/use-sync-external-store@1.6.0_react@19.2.8/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js",
+      "renderedLength": 2008
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/use-sync-external-store@1.6.0_react@19.2.8/node_modules/use-sync-external-store/shim/index.js",
+      "renderedLength": 405
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/use-sync-external-store@1.6.0_react@19.2.8/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim/with-selector.production.js",
+      "renderedLength": 2535
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/use-sync-external-store@1.6.0_react@19.2.8/node_modules/use-sync-external-store/shim/with-selector.js",
+      "renderedLength": 407
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-store@0.9.3_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-store/dist/esm/useStore.js",
+      "renderedLength": 877
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useMatch.js",
+      "renderedLength": 1383
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useLoaderData.js",
+      "renderedLength": 547
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useLoaderDeps.js",
+      "renderedLength": 496
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useParams.js",
+      "renderedLength": 630
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useSearch.js",
+      "renderedLength": 564
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useNavigate.js",
+      "renderedLength": 543
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/useRouteContext.js",
+      "renderedLength": 452
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/link.js",
+      "renderedLength": 13986
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/route.js",
+      "renderedLength": 2700
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/fileRoute.js",
+      "renderedLength": 438
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/lazyRouteComponent.js",
+      "renderedLength": 1326
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/not-found.js",
+      "renderedLength": 1534
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/ScriptOnce.js",
+      "renderedLength": 603
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/SafeFragment.js",
+      "renderedLength": 446
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/renderRouteNotFound.js",
+      "renderedLength": 739
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/scroll-restoration-script/client.js",
+      "renderedLength": 347
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/scroll-restoration.js",
+      "renderedLength": 520
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/Match.js",
+      "renderedLength": 6215
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/Transitioner.js",
+      "renderedLength": 1911
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/Matches.js",
+      "renderedLength": 1962
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/routerStores.js",
+      "renderedLength": 601
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/router.js",
+      "renderedLength": 466
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/RouterProvider.js",
+      "renderedLength": 991
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/Asset.js",
+      "renderedLength": 4287
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/headContentUtils.js",
+      "renderedLength": 3854
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/HeadContent.js",
+      "renderedLength": 663
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/Scripts.js",
+      "renderedLength": 1844
+    },
+    {
+      "id": "/private<reference-app>/src/components/Footer.tsx",
+      "renderedLength": 3010
+    },
+    {
+      "id": "/private<reference-app>/src/components/ThemeToggle.tsx",
+      "renderedLength": 2117
+    },
+    {
+      "id": "/private<reference-app>/src/components/Header.tsx",
+      "renderedLength": 4391
+    },
+    {
+      "id": "/private<reference-app>/src/styles.css?transform-only",
+      "renderedLength": 0
+    },
+    {
+      "id": "/private<reference-app>/src/styles.css?url",
+      "renderedLength": 249
+    },
+    {
+      "id": "/private<reference-app>/src/routes/__root.tsx",
+      "renderedLength": 1700
+    },
+    {
+      "id": "\u0000vite/preload-helper.js",
+      "renderedLength": 2142
+    },
+    {
+      "id": "/private<reference-app>/src/routes/index.tsx",
+      "renderedLength": 266
+    },
+    {
+      "id": "/private<reference-app>/src/routes/about.tsx",
+      "renderedLength": 270
+    },
+    {
+      "id": "/private<reference-app>/src/routes/probe.$case.tsx",
+      "renderedLength": 282
+    },
+    {
+      "id": "/private<reference-app>/src/routeTree.gen.ts",
+      "renderedLength": 440
+    },
+    {
+      "id": "/private<reference-app>/src/router.tsx",
+      "renderedLength": 188
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client/hydrateStart.js",
+      "renderedLength": 1215
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-start-client@1.168.19_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-start-client/dist/esm/hydrateStart.js",
+      "renderedLength": 408
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-start-client@1.168.19_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-start-client/dist/esm/StartClient.js",
+      "renderedLength": 613
+    },
+    {
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-start@1.168.38_crossws@0.4.10_srvx@0.11.22__react-dom@19.2.8_react@19.2_0bafb3f62270527e66051fed3bdab02e/node_modules/@tanstack/react-start/dist/plugin/default-entry/client.tsx",
+      "renderedLength": 630
+    }
+  ],
+  "assets/about-EcgpzRQF.js": [
+    {
+      "id": "/private<reference-app>/src/routes/about.tsx?tsr-split=component",
+      "renderedLength": 1047
+    }
+  ],
+  "assets/probe._case-DHC5irL-.js": [
+    {
+      "id": "/private<reference-app>/src/routes/probe.$case.tsx?tsr-split=component",
+      "renderedLength": 4041
+    }
+  ],
+  "assets/routes-tbC4_XJC.js": [
+    {
+      "id": "/private<reference-app>/src/routes/index.tsx?tsr-split=component",
+      "renderedLength": 4900
+    }
+  ]
+}

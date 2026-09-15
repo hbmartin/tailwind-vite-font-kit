@@ -1,0 +1,159 @@
+{
+  "kit": [
+    {
+      "name": "about-EcgpzRQF.js",
+      "bytes": 723,
+      "gzip": 436,
+      "brotli": 354,
+      "sha256": "6c69fc93e5747ecd87d21ce27bfa3fea4dc4241b59245b05c169f01400426745"
+    },
+    {
+      "name": "index-BhHA0ZUJ.js",
+      "bytes": 319794,
+      "gzip": 100965,
+      "brotli": 87696,
+      "sha256": "e17e1c27e687a16bfbc9ef56f0e49b0e57ad3fc49276074512f548581c383a68"
+    },
+    {
+      "name": "probe._case-DHC5irL-.js",
+      "bytes": 2842,
+      "gzip": 1148,
+      "brotli": 921,
+      "sha256": "9388866062809eecd4e7136d3cad57ca26cd922c0be88cb5bfcb55b6db6fda32"
+    },
+    {
+      "name": "routes-tbC4_XJC.js",
+      "bytes": 3309,
+      "gzip": 1355,
+      "brotli": 1109,
+      "sha256": "6bb75d230963e437654863935a38957717b0239f2bfb06637597255764ab801c"
+    },
+    {
+      "name": "styles-Bu5WLYEl.css",
+      "bytes": 33548,
+      "gzip": 7452,
+      "brotli": 6509,
+      "sha256": "4bd7d4e68457d0026481e3ad7102cb7f98ff114989e297b295a27604c3d018a9"
+    }
+  ],
+  "manual": [
+    {
+      "name": "about-EcgpzRQF.js",
+      "bytes": 723,
+      "gzip": 436,
+      "brotli": 354,
+      "sha256": "6c69fc93e5747ecd87d21ce27bfa3fea4dc4241b59245b05c169f01400426745"
+    },
+    {
+      "name": "index-BhHA0ZUJ.js",
+      "bytes": 319794,
+      "gzip": 100965,
+      "brotli": 87696,
+      "sha256": "e17e1c27e687a16bfbc9ef56f0e49b0e57ad3fc49276074512f548581c383a68"
+    },
+    {
+      "name": "probe._case-DHC5irL-.js",
+      "bytes": 2842,
+      "gzip": 1148,
+      "brotli": 921,
+      "sha256": "9388866062809eecd4e7136d3cad57ca26cd922c0be88cb5bfcb55b6db6fda32"
+    },
+    {
+      "name": "routes-tbC4_XJC.js",
+      "bytes": 3309,
+      "gzip": 1355,
+      "brotli": 1109,
+      "sha256": "6bb75d230963e437654863935a38957717b0239f2bfb06637597255764ab801c"
+    },
+    {
+      "name": "styles-Bu5WLYEl.css",
+      "bytes": 33548,
+      "gzip": 7452,
+      "brotli": 6509,
+      "sha256": "4bd7d4e68457d0026481e3ad7102cb7f98ff114989e297b295a27604c3d018a9"
+    }
+  ],
+  "identicalJavaScript": true,
+  "kitModuleCount": 107,
+  "suspectModules": [],
+  "largestModules": [
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js",
+      "renderedLength": 453998
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/seroval@1.6.2/node_modules/seroval/dist/index.js",
+      "renderedLength": 47102
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/load-client.js",
+      "renderedLength": 43038
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/router.js",
+      "renderedLength": 33409
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/new-process-route-tree.js",
+      "renderedLength": 19581
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js",
+      "renderedLength": 15332
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+react-router@1.170.21_react-dom@19.2.8_react@19.2.8__react@19.2.8/node_modules/@tanstack/react-router/dist/esm/link.js",
+      "renderedLength": 13986
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+history@1.162.1/node_modules/@tanstack/history/dist/esm/index.js",
+      "renderedLength": 9532
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js",
+      "renderedLength": 9195
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/ssr/serializer/RawStream.js",
+      "renderedLength": 6883
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+router-core@1.171.18/node_modules/@tanstack/router-core/dist/esm/scroll-restoration.js",
+      "renderedLength": 6545
+    },
+    {
+      "chunk": "assets/index-BhHA0ZUJ.js",
+      "id": "<reference-app>/node_modules/.pnpm/@tanstack+start-client-core@1.170.17/node_modules/@tanstack/start-client-core/dist/esm/client-rpc/frame-decoder.js",
+      "renderedLength": 6534
+    }
+  ],
+  "css": {
+    "kit": {
+      "raw": 33548,
+      "gzip": 7452,
+      "brotli": 6509
+    },
+    "plain": {
+      "raw": 28850,
+      "gzip": 6802,
+      "brotli": 5982
+    },
+    "fallbackFaces": 24,
+    "delta": {
+      "raw": 4698,
+      "gzip": 650,
+      "brotli": 527
+    }
+  }
+}

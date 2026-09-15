@@ -1,0 +1,67 @@
+[
+  {
+    "path": "/probe/hero",
+    "status": 200,
+    "headers": {
+      "connection": "keep-alive",
+      "content-type": "text/html; charset=utf-8",
+      "date": "Mon, 14 Sep 2026 22:04:08 GMT",
+      "keep-alive": "timeout=5",
+      "link": "</fonts/manrope-xn7gYHE41ni1AdIRggexSvfedN4.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
+      "transfer-encoding": "chunked"
+    },
+    "decodedBodyBytes": 8227
+  },
+  {
+    "path": "/assets/index-BhHA0ZUJ.js",
+    "status": 200,
+    "headers": {
+      "cache-control": "public, max-age=31536000, immutable",
+      "connection": "keep-alive",
+      "content-length": "319794",
+      "content-type": "text/javascript; charset=utf-8",
+      "date": "Mon, 14 Sep 2026 22:04:08 GMT",
+      "etag": "\"4e132-LkDjuClGNBVUghNTE36Sz2oFb1E\"",
+      "keep-alive": "timeout=5",
+      "last-modified": "Mon, 14 Sep 2026 22:00:58 GMT",
+      "link": "",
+      "vary": "Accept-Encoding"
+    },
+    "decodedBodyBytes": 319794
+  },
+  {
+    "path": "/assets/probe._case-DHC5irL-.js",
+    "status": 200,
+    "headers": {
+      "cache-control": "public, max-age=31536000, immutable",
+      "connection": "keep-alive",
+      "content-length": "2842",
+      "content-type": "text/javascript; charset=utf-8",
+      "date": "Mon, 14 Sep 2026 22:04:08 GMT",
+      "etag": "\"b1a-kaoo0bL2dEpU3LF6qnftmKlir0w\"",
+      "keep-alive": "timeout=5",
+      "last-modified": "Mon, 14 Sep 2026 22:00:58 GMT",
+      "link": "",
+      "vary": "Accept-Encoding"
+    },
+    "decodedBodyBytes": 2842
+  },
+  {
+    "path": "/fonts/manrope-xn7gYHE41ni1AdIRggexSvfedN4.woff2",
+    "status": 200,
+    "headers": {
+      "access-control-allow-origin": "*",
+      "cache-control": "public, max-age=31536000, immutable",
+      "connection": "keep-alive",
+      "content-length": "24576",
+      "content-type": "font/woff2",
+      "date": "Mon, 14 Sep 2026 22:04:08 GMT",
+      "etag": "\"6000-yOr+6GOlMYXr/a2M9DBWFj+PFP0\"",
+      "keep-alive": "timeout=5",
+      "last-modified": "Mon, 14 Sep 2026 22:00:58 GMT",
+      "link": "",
+      "vary": "Accept-Encoding"
+    },
+    "decodedBodyBytes": 24576
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-14",
+  "kitCommit": "0591b0e1c736754bfa301f853de3fd73ab35d1ec",
+  "referenceAppCommit": "93506fd58ce8b5385525cdda7df60885d397f2c7",
+  "referenceApp": "https://github.com/hbmartin/tailwind-vite-font-kit-example",
+  "node": "v24.21.0",
+  "platform": "darwin",
+  "release": "24.6.0",
+  "arch": "arm64",
+  "packages": {
+    "@tanstack/react-start": "1.168.38",
+    "@tanstack/react-router": "1.170.21",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "vite": "8.2.0",
+    "nitro": "3.0.260610-beta",
+    "tailwindcss": "4.3.3"
+  },
+  "fontaine": "0.8.1",
+  "referenceLockSha256": "d806ac93a8386621961ff193c910e61dccc59ca04aa161d3d88c8710aea2fb1d",
+  "fontsConfig": "// tailwind-vite-font-kit. Edit this, then rebuild — the plugin regenerates on change.\nexport default {\n  families: [\n    {\n      name: 'Manrope',\n      themeVar: '--font-sans',\n      weights: [400, 500, 600, 700, 800],\n      stack: ['ui-sans-serif', 'system-ui', 'sans-serif'],\n      preloadWeights: [400],\n    },\n    {\n      name: 'Fraunces',\n      themeVar: '--font-display',\n      weights: [500, 700],\n      axes: 'opsz,wght@9..144,500;9..144,700',\n      opszPin: 48,\n      stack: ['Georgia', 'serif'],\n      preloadWeights: [],\n    },\n  ],\n}\n",
+  "appConfig": "import { defineConfig } from 'vite'\nimport { writeFileSync } from 'node:fs'\nimport { devtools } from '@tanstack/devtools-vite'\n\nimport { tanstackStart } from '@tanstack/react-start/plugin/vite'\n\nimport viteReact from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\nimport { nitro } from 'nitro/vite'\nimport { fonts } from '<font-kit>/src/index.mjs'\n\nconst config = defineConfig({\n  resolve: { tsconfigPaths: true },\n  plugins: [\n    devtools(),\n    nitro({ rollupConfig: { external: [/^@sentry\\//] } }),\n    ...(process.env.FONT_BENCH_MANUAL ? [] : [fonts()]),\n    tailwindcss(),\n    tanstackStart(),\n    viteReact(),\n    {\n      name: 'benchmark-module-audit',\n      generateBundle(_options, bundle) {\n        if (this.environment?.config.consumer !== 'client') return\n        writeFileSync('client-modules.json', JSON.stringify(Object.fromEntries(\n          Object.entries(bundle).filter(([, entry]) => entry.type === 'chunk')\n            .map(([file, entry]) => [file, Object.entries(entry.modules).map(([id, info]) => ({ id, renderedLength: info.renderedLength }))])\n        ), null, 2))\n      },\n    },\n  ],\n})\n\nexport default config\n"
+}

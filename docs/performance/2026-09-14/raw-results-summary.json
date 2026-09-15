@@ -1,0 +1,1346 @@
+{
+  "loads": 214,
+  "validated": true,
+  "summary": [
+    {
+      "key": "matrix/390/hero/kit/0",
+      "runs": 3,
+      "cls": 0.001547056240547532,
+      "min": 0.001547056240547532,
+      "max": 0.001547056240547532,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/tailwind/kit/0",
+      "runs": 3,
+      "cls": 0.0002754820934222052,
+      "min": 0.0002754820934222052,
+      "max": 0.0002754820934222052,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/kit/0",
+      "runs": 3,
+      "cls": 0.0002754820934222052,
+      "min": 0.0002754820934222052,
+      "max": 0.0002754820934222052,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 46
+    },
+    {
+      "key": "matrix/390/hero/swap/0",
+      "runs": 3,
+      "cls": 0.03442574290784125,
+      "min": 0.03407167235247832,
+      "max": 0.03442574290784125,
+      "fcp": 48,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "matrix/390/tailwind/swap/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 52,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/swap/0",
+      "runs": 3,
+      "cls": 0.08874138608746435,
+      "min": 0.08874138608746435,
+      "max": 0.08874138608746435,
+      "fcp": 52,
+      "fontBytes": 24576,
+      "maxProbeShift": 330
+    },
+    {
+      "key": "matrix/390/hero/swap-preload/0",
+      "runs": 3,
+      "cls": 0.03407167235247832,
+      "min": 0.03407167235247832,
+      "max": 0.03407167235247832,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "matrix/390/tailwind/swap-preload/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/swap-preload/0",
+      "runs": 3,
+      "cls": 0.08874138608746435,
+      "min": 0.08874138608746435,
+      "max": 0.08874138608746435,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 330
+    },
+    {
+      "key": "matrix/390/hero/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/tailwind/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 44,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/hero/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/tailwind/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 56,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 40,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/hero/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/tailwind/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 52,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/system/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 0,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/hero/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/tailwind/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 44,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/optional/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 44,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/hero/swap-preload/0",
+      "runs": 3,
+      "cls": 0.000375805295826455,
+      "min": 0.000375805295826455,
+      "max": 0.000375805295826455,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/tailwind/swap-preload/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/swap-preload/0",
+      "runs": 3,
+      "cls": 0.02303701042040963,
+      "min": 0.02303701042040963,
+      "max": 0.02303701042040963,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 123
+    },
+    {
+      "key": "matrix/1280/hero/swap/0",
+      "runs": 3,
+      "cls": 0.000375805295826455,
+      "min": 0.000375805295826455,
+      "max": 0.001567109491764179,
+      "fcp": 48,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/tailwind/swap/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 48,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/swap/0",
+      "runs": 3,
+      "cls": 0.02303701042040963,
+      "min": 0.02303701042040963,
+      "max": 0.02303701042040963,
+      "fcp": 44,
+      "fontBytes": 24576,
+      "maxProbeShift": 123
+    },
+    {
+      "key": "matrix/1280/hero/kit/0",
+      "runs": 3,
+      "cls": 0.00031871906901980796,
+      "min": 0.00031871906901980796,
+      "max": 0.00031871906901980796,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/tailwind/kit/0",
+      "runs": 3,
+      "cls": 0.00021795877012086842,
+      "min": 0.00021795877012086842,
+      "max": 0.00021795877012086842,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/kit/0",
+      "runs": 3,
+      "cls": 0.00021795877012086842,
+      "min": 0.00021795877012086842,
+      "max": 0.00021795877012086842,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/hero/fontaine/0",
+      "runs": 3,
+      "cls": 0.00010166708547651671,
+      "min": 0.00010166708547651671,
+      "max": 0.00010166708547651671,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/tailwind/fontaine/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/390/normal/fontaine/0",
+      "runs": 3,
+      "cls": 0,
+      "min": 0,
+      "max": 0,
+      "fcp": 136,
+      "fontBytes": 24576,
+      "maxProbeShift": 46
+    },
+    {
+      "key": "matrix/1280/hero/fontaine/0",
+      "runs": 3,
+      "cls": 0.0104644784327204,
+      "min": 0.0104644784327204,
+      "max": 0.0104644784327204,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "matrix/1280/tailwind/fontaine/0",
+      "runs": 3,
+      "cls": 0.00001820067403715797,
+      "min": 0.00001820067403715797,
+      "max": 0.00001820067403715797,
+      "fcp": 144,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "matrix/1280/normal/fontaine/0",
+      "runs": 3,
+      "cls": 0.00001820067403715797,
+      "min": 0.00001820067403715797,
+      "max": 0.00001820067403715797,
+      "fcp": 140,
+      "fontBytes": 24576,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/280",
+      "runs": 1,
+      "cls": 0.007842320784750756,
+      "min": 0.007842320784750756,
+      "max": 0.007842320784750756,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 276
+    },
+    {
+      "key": "widths/1280/hero/fontaine/280",
+      "runs": 1,
+      "cls": 0.0019595098605925208,
+      "min": 0.0019595098605925208,
+      "max": 0.0019595098605925208,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 192
+    },
+    {
+      "key": "widths/1280/hero/kit/300",
+      "runs": 1,
+      "cls": 0.006826604429325044,
+      "min": 0.006826604429325044,
+      "max": 0.006826604429325044,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 168
+    },
+    {
+      "key": "widths/1280/hero/fontaine/300",
+      "runs": 1,
+      "cls": 0.00001820067403715797,
+      "min": 0.00001820067403715797,
+      "max": 0.00001820067403715797,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/320",
+      "runs": 1,
+      "cls": 0.0037684136540694804,
+      "min": 0.0037684136540694804,
+      "max": 0.0037684136540694804,
+      "fcp": 428,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/fontaine/320",
+      "runs": 1,
+      "cls": 0.00356865555798577,
+      "min": 0.00356865555798577,
+      "max": 0.00356865555798577,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/kit/340",
+      "runs": 1,
+      "cls": 0.0006072205991865726,
+      "min": 0.0006072205991865726,
+      "max": 0.0006072205991865726,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/fontaine/340",
+      "runs": 1,
+      "cls": 0.000020749973745011555,
+      "min": 0.000020749973745011555,
+      "max": 0.000020749973745011555,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/360",
+      "runs": 1,
+      "cls": 0.0006308755300903867,
+      "min": 0.0006308755300903867,
+      "max": 0.0006308755300903867,
+      "fcp": 156,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/fontaine/360",
+      "runs": 1,
+      "cls": 0.0000642387366099559,
+      "min": 0.0000642387366099559,
+      "max": 0.0000642387366099559,
+      "fcp": 152,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/380",
+      "runs": 1,
+      "cls": 0.0070162230767027555,
+      "min": 0.0070162230767027555,
+      "max": 0.0070162230767027555,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/fontaine/380",
+      "runs": 1,
+      "cls": 0.00004114437140784022,
+      "min": 0.00004114437140784022,
+      "max": 0.00004114437140784022,
+      "fcp": 164,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/400",
+      "runs": 1,
+      "cls": 0.0074457607632433635,
+      "min": 0.0074457607632433635,
+      "max": 0.0074457607632433635,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/fontaine/400",
+      "runs": 1,
+      "cls": 0.007132462112532787,
+      "min": 0.007132462112532787,
+      "max": 0.007132462112532787,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/kit/420",
+      "runs": 1,
+      "cls": 0.00028177010915131725,
+      "min": 0.00028177010915131725,
+      "max": 0.00028177010915131725,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/fontaine/420",
+      "runs": 1,
+      "cls": 0.00005389086994710814,
+      "min": 0.00005389086994710814,
+      "max": 0.00005389086994710814,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/440",
+      "runs": 1,
+      "cls": 0.00037647423929968186,
+      "min": 0.00037647423929968186,
+      "max": 0.00037647423929968186,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/fontaine/440",
+      "runs": 1,
+      "cls": 0.00005389086994710814,
+      "min": 0.00005389086994710814,
+      "max": 0.00005389086994710814,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/460",
+      "runs": 1,
+      "cls": 0.0114204308617191,
+      "min": 0.0114204308617191,
+      "max": 0.0114204308617191,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/fontaine/460",
+      "runs": 1,
+      "cls": 0.00005389086994710814,
+      "min": 0.00005389086994710814,
+      "max": 0.00005389086994710814,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "widths/1280/hero/kit/480",
+      "runs": 1,
+      "cls": 0.011867177716762054,
+      "min": 0.011867177716762054,
+      "max": 0.011867177716762054,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 84
+    },
+    {
+      "key": "widths/1280/hero/fontaine/480",
+      "runs": 1,
+      "cls": 0.00005389086994710814,
+      "min": 0.00005389086994710814,
+      "max": 0.00005389086994710814,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/360/hero/kit/0",
+      "runs": 1,
+      "cls": 0.03828797383811952,
+      "min": 0.03828797383811952,
+      "max": 0.03828797383811952,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/360/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.004620795228350331,
+      "min": 0.004620795228350331,
+      "max": 0.004620795228350331,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/380/hero/kit/0",
+      "runs": 1,
+      "cls": 0.14358410110667175,
+      "min": 0.14358410110667175,
+      "max": 0.14358410110667175,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/380/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00009185835235920853,
+      "min": 0.00009185835235920853,
+      "max": 0.00009185835235920853,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/400/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0013510720047699215,
+      "min": 0.0013510720047699215,
+      "max": 0.0013510720047699215,
+      "fcp": 160,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/400/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00019093734968734968,
+      "min": 0.00019093734968734968,
+      "max": 0.00019093734968734968,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/420/hero/kit/0",
+      "runs": 1,
+      "cls": 0.049498634235444296,
+      "min": 0.049498634235444296,
+      "max": 0.049498634235444296,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/420/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00008278592249657066,
+      "min": 0.00008278592249657066,
+      "max": 0.00008278592249657066,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/440/hero/kit/0",
+      "runs": 1,
+      "cls": 0.03654412615740741,
+      "min": 0.03654412615740741,
+      "max": 0.03654412615740741,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/440/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00007889011437908498,
+      "min": 0.00007889011437908498,
+      "max": 0.00007889011437908498,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/460/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0364439334729158,
+      "min": 0.0364439334729158,
+      "max": 0.0364439334729158,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/460/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.036149185523304206,
+      "min": 0.036149185523304206,
+      "max": 0.036149185523304206,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/480/hero/kit/0",
+      "runs": 1,
+      "cls": 0.00035417448642639055,
+      "min": 0.00035417448642639055,
+      "max": 0.00035417448642639055,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/480/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.0000721038679808841,
+      "min": 0.0000721038679808841,
+      "max": 0.0000721038679808841,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "confirm-380/380/hero/kit/0",
+      "runs": 3,
+      "cls": 0.14358410110667175,
+      "min": 0.14358410110667175,
+      "max": 0.14358410110667175,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "confirm-380/380/hero/fontaine/0",
+      "runs": 3,
+      "cls": 0.00009185835235920853,
+      "min": 0.00009185835235920853,
+      "max": 0.00009185835235920853,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "confirm-380/380/hero/swap-preload/0",
+      "runs": 3,
+      "cls": 0.03321765567526003,
+      "min": 0.03321765567526003,
+      "max": 0.03321765567526003,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "confirm-380/380/hero/swap/0",
+      "runs": 3,
+      "cls": 0.03363421613394216,
+      "min": 0.03321765567526003,
+      "max": 0.03363421613394216,
+      "fcp": 48,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/500/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0005187870489690721,
+      "min": 0.0005187870489690721,
+      "max": 0.0005187870489690721,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/500/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00006913051260022909,
+      "min": 0.00006913051260022909,
+      "max": 0.00006913051260022909,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/520/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0005064177476775455,
+      "min": 0.0005064177476775455,
+      "max": 0.0005064177476775455,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/520/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00006639267051705171,
+      "min": 0.00006639267051705171,
+      "max": 0.00006639267051705171,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/540/hero/kit/0",
+      "runs": 1,
+      "cls": 0.04042393399103469,
+      "min": 0.04042393399103469,
+      "max": 0.04042393399103469,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/540/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.00006386342592592593,
+      "min": 0.00006386342592592593,
+      "max": 0.00006386342592592593,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/560/hero/kit/0",
+      "runs": 1,
+      "cls": 0.04043072698989127,
+      "min": 0.04043072698989127,
+      "max": 0.04043072698989127,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/560/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.0001714493430739608,
+      "min": 0.0001714493430739608,
+      "max": 0.0001714493430739608,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/580/hero/kit/0",
+      "runs": 1,
+      "cls": 0.03988506461337813,
+      "min": 0.03988506461337813,
+      "max": 0.03988506461337813,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/580/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.03965291799819731,
+      "min": 0.03965291799819731,
+      "max": 0.03965291799819731,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/600/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0453673467177113,
+      "min": 0.0453673467177113,
+      "max": 0.0453673467177113,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/600/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.04400101983750132,
+      "min": 0.04400101983750132,
+      "max": 0.04400101983750132,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 48
+    },
+    {
+      "key": "responsive/620/hero/kit/0",
+      "runs": 1,
+      "cls": 0.000272216754030201,
+      "min": 0.000272216754030201,
+      "max": 0.000272216754030201,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/620/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.0000554186753902663,
+      "min": 0.0000554186753902663,
+      "max": 0.0000554186753902663,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/640/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0008826999240451388,
+      "min": 0.0008826999240451388,
+      "max": 0.0008826999240451388,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/640/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016542777777777778,
+      "min": 0.016542777777777778,
+      "max": 0.016542777777777778,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/660/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0008559514414983165,
+      "min": 0.0008559514414983165,
+      "max": 0.0008559514414983165,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/660/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01653979797979798,
+      "min": 0.01653979797979798,
+      "max": 0.01653979797979798,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/680/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0008307763991013071,
+      "min": 0.0008307763991013071,
+      "max": 0.0008307763991013071,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/680/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01653699346405229,
+      "min": 0.01653699346405229,
+      "max": 0.01653699346405229,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/700/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0008070399305555555,
+      "min": 0.0008070399305555555,
+      "max": 0.0008070399305555555,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/700/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01653434920634921,
+      "min": 0.01653434920634921,
+      "max": 0.01653434920634921,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/720/hero/kit/0",
+      "runs": 1,
+      "cls": 0.00078462215470679,
+      "min": 0.00078462215470679,
+      "max": 0.00078462215470679,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/720/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016531851851851853,
+      "min": 0.016531851851851853,
+      "max": 0.016531851851851853,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/740/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0007634161505255255,
+      "min": 0.0007634161505255255,
+      "max": 0.0007634161505255255,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/740/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016529489489489492,
+      "min": 0.016529489489489492,
+      "max": 0.016529489489489492,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/760/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0007433262518274853,
+      "min": 0.0007433262518274853,
+      "max": 0.0007433262518274853,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/760/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016527251461988305,
+      "min": 0.016527251461988305,
+      "max": 0.016527251461988305,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/780/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0007242666043447292,
+      "min": 0.0007242666043447292,
+      "max": 0.0007242666043447292,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/780/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016525128205128206,
+      "min": 0.016525128205128206,
+      "max": 0.016525128205128206,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/800/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0007061599392361111,
+      "min": 0.0007061599392361111,
+      "max": 0.0007061599392361111,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/800/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016523111111111113,
+      "min": 0.016523111111111113,
+      "max": 0.016523111111111113,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/820/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0006889365260840108,
+      "min": 0.0006889365260840108,
+      "max": 0.0006889365260840108,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/820/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01652119241192412,
+      "min": 0.01652119241192412,
+      "max": 0.01652119241192412,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/840/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0006725332754629629,
+      "min": 0.0006725332754629629,
+      "max": 0.0006725332754629629,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/840/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01651936507936508,
+      "min": 0.01651936507936508,
+      "max": 0.01651936507936508,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/860/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0006568929667312662,
+      "min": 0.0006568929667312662,
+      "max": 0.0006568929667312662,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/860/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01651762273901809,
+      "min": 0.01651762273901809,
+      "max": 0.01651762273901809,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/880/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0006419635811237373,
+      "min": 0.0006419635811237373,
+      "max": 0.0006419635811237373,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/880/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016515959595959598,
+      "min": 0.016515959595959598,
+      "max": 0.016515959595959598,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/900/hero/kit/0",
+      "runs": 1,
+      "cls": 0.000627697723765432,
+      "min": 0.000627697723765432,
+      "max": 0.000627697723765432,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/900/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.017030946502057616,
+      "min": 0.017030946502057616,
+      "max": 0.017030946502057616,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/920/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0006007031619210776,
+      "min": 0.0006007031619210776,
+      "max": 0.0006007031619210776,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/920/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016560806553245117,
+      "min": 0.016560806553245117,
+      "max": 0.016560806553245117,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/940/hero/kit/0",
+      "runs": 1,
+      "cls": 0.000575413259676324,
+      "min": 0.000575413259676324,
+      "max": 0.000575413259676324,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/940/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.016111211709672554,
+      "min": 0.016111211709672554,
+      "max": 0.016111211709672554,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/960/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0005516874525282118,
+      "min": 0.0005516874525282118,
+      "max": 0.0005516874525282118,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/960/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01568084490740741,
+      "min": 0.01568084490740741,
+      "max": 0.01568084490740741,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/980/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0005293993713556851,
+      "min": 0.0005293993713556851,
+      "max": 0.0005293993713556851,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/980/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.015268499236429266,
+      "min": 0.015268499236429266,
+      "max": 0.015268499236429266,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/1000/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0005084351562499999,
+      "min": 0.0005084351562499999,
+      "max": 0.0005084351562499999,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/1000/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.014873066666666667,
+      "min": 0.014873066666666667,
+      "max": 0.014873066666666667,
+      "fcp": 136,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/1020/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0004886919994713572,
+      "min": 0.0004886919994713572,
+      "max": 0.0004886919994713572,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/1020/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.01449352813020633,
+      "min": 0.01449352813020633,
+      "max": 0.01449352813020633,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/1040/hero/kit/0",
+      "runs": 1,
+      "cls": 0.00047007688262758874,
+      "min": 0.00047007688262758874,
+      "max": 0.00047007688262758874,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/1040/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.014128944773175544,
+      "min": 0.014128944773175544,
+      "max": 0.014128944773175544,
+      "fcp": 140,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    },
+    {
+      "key": "responsive/1060/hero/kit/0",
+      "runs": 1,
+      "cls": 0.0004655893008401823,
+      "min": 0.0004655893008401823,
+      "max": 0.0004655893008401823,
+      "fcp": 144,
+      "fontBytes": 61640,
+      "maxProbeShift": 0
+    },
+    {
+      "key": "responsive/1060/hero/fontaine/0",
+      "runs": 1,
+      "cls": 0.013525551154964401,
+      "min": 0.013525551154964401,
+      "max": 0.013525551154964401,
+      "fcp": 148,
+      "fontBytes": 61640,
+      "maxProbeShift": 24
+    }
+  ]
+}
