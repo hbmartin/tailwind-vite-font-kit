@@ -1,3 +1,4 @@
+import { mapMetricFaces, mapStacks, familyName, fontWeight } from './browser-benchmark-css.mjs'
 // Experimental CSS only. No production defaults change until the paired gates pass.
 const boldNames = {
   Arial: ['Arial Bold', 'Arial-BoldMT'],
@@ -15,17 +16,22 @@ export function candidateCss(css, candidate) {
   if (!['binding', 'manrope-helvetica', 'combined'].includes(candidate))
     throw new Error(`Unknown candidate: ${candidate}`)
   if (['binding', 'combined'].includes(candidate))
-    css = css.replace(/@font-face\s*\{[^{}]*size-adjust\s*:[^{}]*\}/g, (face) => {
-      if (Number(/font-weight:\s*(\d+)/.exec(face)?.[1]) < 600) return face
+    css = mapMetricFaces(css, (face) => {
+      const weight = fontWeight(face)
+      if (weight === null || weight < 600) return face
       return face.replace(/local\(([^)]+)\)/g, (source, rawName) => {
         const name = rawName.trim().replace(/^["']|["']$/g, '')
         return boldNames[name]?.map((n) => `local("${n}")`).join(',') ?? source
       })
     })
   if (['manrope-helvetica', 'combined'].includes(candidate))
-    css = css.replace(
-      /(["']Manrope Fallback: Arial["'])\s*,\s*(["']Manrope Fallback: Helvetica Neue["'])/g,
-      '$2,$1',
-    )
+    css = mapStacks(css, (tokens) => {
+      const arial = tokens.findIndex((t) => familyName(t) === 'Manrope Fallback: Arial')
+      const helvetica = tokens.findIndex(
+        (t) => familyName(t) === 'Manrope Fallback: Helvetica Neue',
+      )
+      if (arial >= 0 && helvetica > arial) tokens.splice(arial, 0, ...tokens.splice(helvetica, 1))
+      return tokens
+    })
   return css
 }

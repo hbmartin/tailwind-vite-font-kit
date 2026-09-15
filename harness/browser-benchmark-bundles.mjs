@@ -1,3 +1,4 @@
+import { stripFallbacks, metricFaces } from './browser-benchmark-css.mjs'
 // Usage: node harness/browser-benchmark-bundles.mjs KIT_PUBLIC MANUAL_PUBLIC KIT_MODULES OUT
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -38,23 +39,18 @@ const suspectModules = modules.filter((m) => {
     )
   )
 })
-const portable = (m) => ({
-  ...m,
-  id: m.id
-    .replaceAll('\\', '/')
-    .replace(/^.*?(?=node_modules\/)/, '')
-    .replace(kitRoot, '<font-kit>/')
-    .replace(/^.*?\/src\//, '<reference-app>/src/'),
-})
+const portable = (m) => {
+  const id = m.id.replaceAll('\\', '/')
+  if (id.startsWith(kitRoot + 'src/')) return { ...m, id: id.replace(kitRoot, '<font-kit>/') }
+  if (id.includes('node_modules/')) return { ...m, id: id.slice(id.indexOf('node_modules/')) }
+  return { ...m, id: id.replace(/^.*?\/src\//, '<reference-app>/src/') }
+}
 assert(js(kit).length && js(manual).length, 'Missing JavaScript assets')
 const identicalJavaScript = JSON.stringify(js(kit)) === JSON.stringify(js(manual))
 const cssAssets = kit.filter((a) => a.name.endsWith('.css'))
 assert(cssAssets.length, 'Missing CSS assets')
 const css = cssAssets.map((a) => readFileSync(join(kitPublic, 'assets', a.name), 'utf8')).join('\n')
-const fallbackPattern = /@font-face\s*\{[^{}]*size-adjust\s*:[^{}]*\}/g
-const plain = css
-  .replace(fallbackPattern, '')
-  .replace(/(?:"[^"]* Fallback: [^"]*"|'[^']* Fallback: [^']*')\s*,\s*/g, '')
+const plain = stripFallbacks(css)
 const size = (s) => ({
   raw: Buffer.byteLength(s),
   gzip: gzipSync(s).length,
@@ -75,7 +71,7 @@ const report = {
   css: {
     kit: kitCss,
     plain: plainCss,
-    fallbackFaces: [...css.matchAll(fallbackPattern)].length,
+    fallbackFaces: metricFaces(css).length,
     delta: Object.fromEntries(Object.keys(kitCss).map((k) => [k, kitCss[k] - plainCss[k]])),
   },
 }

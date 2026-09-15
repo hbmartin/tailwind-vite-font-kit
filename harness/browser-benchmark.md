@@ -44,7 +44,8 @@ node harness/browser-benchmark-fontaine.mjs \
   /path/to/kit-output/public/assets/styles-HASH.css \
   /path/to/competitor/node_modules/fontaine/dist/index.mjs \
   /path/to/fontaine.css
-BENCH_FONTAINE_CSS=/path/to/fontaine.css node harness/browser-benchmark-server.mjs
+BENCH_FONTAINE_CSS=/path/to/fontaine.css \
+BENCH_FONTAINE_PATH=/assets/styles-HASH.css node harness/browser-benchmark-server.mjs
 ```
 
 `BENCH_ORIGIN` and `BENCH_PORT` override the production origin and proxy port.
@@ -112,7 +113,9 @@ node harness/browser-benchmark-summary.mjs /path/to/raw-results.json
 ```
 
 The summary rejects cached/missing/duplicate font downloads, late fallback snapshots,
-and unloaded metric fallbacks. It writes per-cell medians, ranges, and geometry deltas.
+and unloaded metric fallbacks. It prints per-cell medians, ranges, and geometry deltas. To save a new summary,
+add `--output harness/results/new-summary.json`. Existing files are never overwritten;
+the historical summary stays unchanged.
 Keep browser console checks and native production HTTP headers alongside the report.
 Reset the browser viewport after the experiment.
 
@@ -151,7 +154,7 @@ Default CLI coverage is three repetitions of the three probes at 390/1280, all 3
 responsive widths, the 380px confirmation, and 11 narrow containers: 162 loads.
 Supply `--manifest path.json` to customize it. A manifest is an object with `cases`
 (an array from `matrixCases`, `responsiveCases`, or `regressionCases`) and optionally
-`families`, mapping probe names to the expected downloaded family names. Cases
+`candidate` (default `baseline`) and `families`, mapping probe names to font expectations. Cases
 accept `viewport`, `height`, `probe`, `variant`, `width`, `delay`, and `group`.
 `matrixCases` and `responsiveCases` accept `repeats`, `viewports`, and `variants`;
 `matrixCases` also accepts `probes`. The in-app `runCases` final argument accepts
@@ -159,10 +162,11 @@ accept `viewport`, `height`, `probe`, `variant`, `width`, `delay`, and `group`.
 
 ```sh
 node harness/browser-benchmark-summary.mjs harness/results/candidate.json \
-  harness/results/baseline-manifest.json harness/results/baseline.json
+  harness/results/candidate-manifest.json harness/results/baseline.json \
+  --output harness/results/comparison.json
 ```
 
-Validation rejects empty/incomplete/duplicated case sets, wrong viewports, failed
+Validation rejects empty/incomplete/duplicated case sets (including mismatched delay), wrong viewports, failed
 requests, browser errors, hidden pages, missing fonts/fallbacks and invalid geometry.
 A complete validated run can still fail performance acceptance. Comparison rejects
 any cell whose six-decimal median CLS or median absolute vertical movement exceeds
@@ -175,7 +179,7 @@ regressions, and matched macOS and Ubuntu results before changing defaults.
 Keep browser version, OS, fonts, scrollbar behavior, content and production build
 identical within each baseline/candidate pair. Headless Chrome uses overlay
 scrollbars: the same outer viewport can have 15px more usable width than the in-app
-browser. Geometry and `layoutWidth` expose this difference. Do not compare the CLI
+browser. Before/after usable layout widths are recorded and must match across paired cells. Do not compare the CLI
 and historical in-app values as if their layout were identical.
 
 Experimental candidates are opt-in **harness-only**, with no library API setting:
@@ -206,3 +210,70 @@ fallbacks differ from the Mac's Arial/Georgia.
 Future raw runs, manifests and summaries go in ignored `harness/results/`. The
 committed September baseline remains unchanged; record decisions in a separate
 follow-up report. Browser tooling and reports remain outside the published package.
+
+
+## Review fixes: trustworthy comparisons and safe artifacts
+
+Run a candidate with **both** its proxy origin and its expected identity:
+
+```sh
+node harness/browser-benchmark-cli.mjs --app /tmp/font-benchmark-app \
+  --origin http://127.0.0.1:3212 --candidate binding \
+  --output harness/results/binding.json
+node harness/browser-benchmark-summary.mjs harness/results/binding.json \
+  harness/results/binding-manifest.json harness/results/baseline.json \
+  --output harness/results/binding-comparison.json
+```
+
+The proxy writes its actual candidate, a hash of the measurement/transform code,
+and original/transformed asset hashes into every observation. The CLI fails on the
+first wrong-proxy observation; validation checks the manifest's expected candidate.
+Acceptance requires an identified candidate that actually changed CSS, a baseline,
+matching production asset hashes, matching harness code, the same browser, matching
+usable layout widths, at least three repetitions, and delayed font swaps. A second
+baseline run cannot be accepted as a candidate. These are operator-error checks,
+not signatures that authenticate manually edited JSON.
+
+Case identity includes font delay; missing `group` and `delay` normalize to `matrix`
+and `2000`. Repetitions must have identical element identities (including text),
+asset evidence, and layout widths. A change in text/hydration invalidates a font-only
+comparison. Both adapters collect browser errors. Historical `strict: false`
+validation can summarize old observations, but its output cannot pass comparison.
+The archived observations lack the new evidence; collect fresh paired runs to use
+the acceptance gate instead of fabricating metadata for them.
+
+For a limited investigation without a 380px hero, add `--diagnostic` to the summary
+command. It reports per-cell regressions with `accepted: null`; it can never approve
+production defaults. Normal acceptance retains the mandatory 380×900 hero gate.
+
+A family name string still means one downloaded file for that family. For static
+weights or multiple subsets, list the exact expected paths (without the per-run
+`/__bench/ID` prefix):
+
+```json
+{
+  "families": {
+    "hero": [
+      { "name": "Poppins", "files": ["/fonts/poppins-400.woff2", "/fonts/poppins-700.woff2"] },
+      { "name": "Fraunces", "files": ["/fonts/fraunces.woff2"] }
+    ]
+  }
+}
+```
+
+Use the actual generated filenames. Counts, required paths, duplicate downloads,
+fresh responses, and loaded family/fallback faces are all checked.
+
+Output names must end in `.json`. CLI runs refuse existing raw/manifest/summary
+paths; choose a fresh prefix for each run. In-app batches may append only when the
+supplied results exactly match the saved raw observations. The summary command
+prints by default; `--output` saves exclusively to a new file. This avoids changing
+the committed baseline summary or overwriting raw measurements.
+
+The proxy supports GET/HEAD benchmark pages and assets. Other methods fail explicitly.
+Runtime `/assets/` and `/fonts/` requests must carry an attributable page/module
+referrer, otherwise they fail instead of silently receiving baseline CSS. Queries
+are preserved. `BENCH_FONTAINE_PATH` identifies the original main stylesheet;
+additional stylesheets retain their own contents. Shared CSS helpers handle quoted,
+unquoted, and escaped fallback names in stripping, candidate transformations and
+bundle accounting. Unsupported weight ranges remain unchanged by the bold candidate.

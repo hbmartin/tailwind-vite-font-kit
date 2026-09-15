@@ -10,10 +10,23 @@ const cases = Array.from({ length: 3 }, () => ({
   group: 'responsive',
   variant: 'kit',
 }))
-function fixture() {
+function fixture(candidate = 'baseline') {
   return cases.map((c, i) => ({
     ...c,
     id: String(i),
+    userAgent: 'Test Chrome',
+    experiment: {
+      candidate,
+      transformId: 'd'.repeat(64),
+      assets: [
+        {
+          path: '/assets/styles.css',
+          type: 'text/css',
+          sourceHash: 'a'.repeat(64),
+          servedHash: (candidate === 'baseline' ? 'a' : 'c').repeat(64),
+        },
+      ],
+    },
     viewport: { width: 380, height: 900 },
     requestedViewport: { width: 380, height: 900 },
     delay: 2000,
@@ -30,14 +43,20 @@ function fixture() {
     })),
     before: {
       at: 200,
-      elements: [{ tag: 'P', probe: null, rect: { x: 0, y: 0, width: 100, height: 100 } }],
+      layoutWidth: 365,
+      elements: [
+        { tag: 'P', probe: null, text: 'Paragraph', rect: { x: 0, y: 0, width: 100, height: 100 } },
+      ],
       faces: ['Manrope', 'Fraunces'].flatMap((family) => [
         { family, status: 'loading' },
         { family: `${family} Fallback: Arial`, status: 'loaded' },
       ]),
     },
     after: {
-      elements: [{ tag: 'P', probe: null, rect: { x: 0, y: 0, width: 100, height: 100 } }],
+      layoutWidth: 365,
+      elements: [
+        { tag: 'P', probe: null, text: 'Paragraph', rect: { x: 0, y: 0, width: 100, height: 100 } },
+      ],
       faces: ['Manrope', 'Fraunces'].map((family) => ({ family, status: 'loaded' })),
     },
   }))
@@ -53,52 +72,87 @@ test('manifest requires exactly the declared repeated cells', () => {
 })
 test('invalid browser data cannot be accepted', () => {
   const changes = [
-    (r) => {
-      r.viewport.width++
-    },
-    (r) => {
-      r.resources[0].status = 404
-    },
-    (r) => {
-      r.resources[0].transfer = 0
-    },
-    (r) => {
-      r.resources.push(r.resources[0])
-    },
-    (r) => {
-      r.before.at = 2200
-    },
-    (r) => {
-      r.before.faces = []
-    },
-    (r) => {
-      r.after.faces = []
-    },
-    (r) => {
-      r.errors.push('error')
-    },
-    (r) => {
-      r.hidden = true
-    },
-    (r) => {
-      r.after.elements[0].rect.y = NaN
-    },
+    [
+      (r) => {
+        r.requestedViewport.width++
+      },
+      /viewport mismatch/,
+    ],
+    [
+      (r) => {
+        r.resources[0].status = 404
+      },
+      /failed request/,
+    ],
+    [
+      (r) => {
+        r.resources[0].transfer = 0
+      },
+      /cached\/empty/,
+    ],
+    [
+      (r) => {
+        r.resources.push(r.resources[0])
+      },
+      /duplicate font URL/,
+    ],
+    [
+      (r) => {
+        r.before.at = 2200
+      },
+      /late before-snapshot/,
+    ],
+    [
+      (r) => {
+        r.before.faces = r.before.faces.filter((f) => f.status === 'loading')
+      },
+      /fallback never loaded/,
+    ],
+    [
+      (r) => {
+        r.after.faces = []
+      },
+      /never loaded/,
+    ],
+    [
+      (r) => {
+        r.errors.push('error')
+      },
+      /browser errors/,
+    ],
+    [
+      (r) => {
+        r.hidden = true
+      },
+      /hidden page/,
+    ],
+    [
+      (r) => {
+        r.after.elements[0].rect.y = NaN
+      },
+      /invalid geometry/,
+    ],
   ]
-  for (const change of changes) {
+  for (const [change, expected] of changes) {
     const rows = fixture()
     change(rows[0])
-    assert.throws(() => validate(rows, { cases }))
+    assert.throws(() => validate(rows, { cases }), expected)
   }
 })
+
 test('valid measurements and performance acceptance are separate', () => {
   const baseline = validate(fixture(), { cases })
-  assert.equal(compare(baseline, baseline).accepted, true)
-  const rows = fixture()
+  assert.throws(() => compare(baseline, baseline), /identified candidate/)
+  assert.equal(
+    compare(baseline, validate(fixture('binding'), { cases, candidate: 'binding' })).accepted,
+    true,
+  )
+  const rows = fixture('binding')
   for (const r of rows) {
     r.cls = 0.03
     r.after.elements[0].rect.height += 24
   }
-  const candidate = validate(rows, { cases })
+  const candidate = validate(rows, { cases, candidate: 'binding' })
   assert.equal(candidate.validated, true)
   const report = compare(baseline, candidate)
   assert.equal(report.accepted, false)
@@ -118,6 +172,7 @@ test('any width regression rejects a candidate even when aggregate CLS improves'
   other.cls = 0.1
   baseline.summary.push(other)
   const candidate = structuredClone(baseline)
+  candidate.candidate = 'binding'
   candidate.summary[0].cls = 0.001
   candidate.summary[1].cls = 0
   assert.equal(compare(baseline, candidate).accepted, false)
@@ -215,4 +270,242 @@ test('bold candidate handles actual minified production local names', () => {
     ),
   )
   assert(changed.includes('size-adjust:101.15%'))
+})
+
+test('delay is part of the manifest and comparison identity', () => {
+  const rows = fixture()
+  rows.forEach((r) => {
+    r.delay = 0
+  })
+  assert.throws(() => validate(rows, { cases }), /Incomplete/)
+  const fastCases = cases.map((c) => ({ ...c, delay: 0 }))
+  const candidate = validate(
+    rows.map((r) => ({ ...r, experiment: fixture('binding')[0].experiment })),
+    { cases: fastCases, candidate: 'binding' },
+  )
+  assert.throws(() => compare(validate(fixture(), { cases }), candidate), /Unpaired comparison/)
+})
+test('candidate, source assets, layout width, and strict validation cannot be bypassed', () => {
+  assert.throws(() => validate(fixture(), { cases, candidate: 'binding' }), /wrong candidate proxy/)
+  const baseline = validate(fixture(), { cases })
+  for (const [change, message] of [
+    [
+      (r) => {
+        r.before.layoutWidth = 380
+      },
+      /Layout width mismatch/,
+    ],
+    [
+      (r) => {
+        r.experiment.assets[0].sourceHash = 'b'.repeat(64)
+      },
+      /Production asset mismatch/,
+    ],
+    [
+      (r) => {
+        r.experiment.transformId = 'e'.repeat(64)
+      },
+      /Harness transform mismatch/,
+    ],
+  ]) {
+    const rows = fixture('binding')
+    rows.forEach(change)
+    assert.throws(() => compare(baseline, validate(rows, { cases, candidate: 'binding' })), message)
+  }
+  const rows = fixture('binding')
+  rows.forEach((r) => {
+    r.errors = ['error']
+    r.hidden = true
+  })
+  assert.throws(
+    () => compare(baseline, validate(rows, { cases, candidate: 'binding', strict: false })),
+    /complete validated/,
+  )
+  const unchanged = fixture('binding')
+  unchanged.forEach((r) => {
+    r.experiment.assets[0].servedHash = r.experiment.assets[0].sourceHash
+  })
+  assert.throws(() => validate(unchanged, { cases, candidate: 'binding' }), /did not change CSS/)
+})
+test('explicit file expectations support multiple weights and reject missing or unexpected files', () => {
+  const rows = fixture()
+  for (const r of rows) {
+    r.resources[0].name = 'http://localhost/__bench/' + r.id + '/fonts/manrope-400.woff2'
+    r.resources[1].name = 'http://localhost/fonts/fraunces.woff2'
+    r.resources.push({ ...r.resources[0], name: 'http://localhost/fonts/manrope-700.woff2' })
+  }
+  const families = {
+    hero: [
+      { name: 'Manrope', files: ['/fonts/manrope-400.woff2', '/fonts/manrope-700.woff2'] },
+      { name: 'Fraunces', files: ['/fonts/fraunces.woff2'] },
+    ],
+  }
+  assert.equal(validate(rows, { cases, families }).loads, 3)
+  rows[0].resources[2].name = 'http://localhost/fonts/wrong.woff2'
+  assert.throws(() => validate(rows, { cases, families }), /missing expected font/)
+})
+test('missing group normalizes identically, and diagnostic comparisons cannot approve defaults', () => {
+  const withoutGroup = cases.map(({ group: _group, ...c }) => c)
+  const rows = fixture().map((r) => ({
+    ...r,
+    group: 'matrix',
+    viewport: { width: 390, height: 900 },
+    requestedViewport: { width: 390, height: 900 },
+  }))
+  const options = { cases: withoutGroup.map((c) => ({ ...c, viewport: 390 })) }
+  const baseline = validate(rows, options)
+  const candidate = validate(
+    rows.map((r) => ({ ...r, experiment: fixture('binding')[0].experiment })),
+    { ...options, candidate: 'binding' },
+  )
+  assert.throws(() => compare(baseline, candidate), /Missing 380px/)
+  assert.deepEqual(compare(baseline, candidate, { mode: 'diagnostic' }), {
+    dataValid: true,
+    mode: 'diagnostic',
+    accepted: null,
+    failures: [],
+  })
+})
+test('repetitions must contain the same elements in the same order', () => {
+  const missing = fixture()
+  missing[1].before.elements.push({ ...missing[1].before.elements[0], text: 'Other' })
+  missing[1].after.elements.push({ ...missing[1].after.elements[0], text: 'Other' })
+  assert.throws(() => validate(missing, { cases }), /identities differ across repetitions/)
+  const swapped = fixture()
+  swapped[1].before.elements[0].text = 'Another paragraph'
+  swapped[1].after.elements[0].text = 'Another paragraph'
+  assert.throws(() => validate(swapped, { cases }), /identities differ across repetitions/)
+})
+test('regular, keyword and ranged weights are handled deliberately', () => {
+  for (const weight of ['', 'font-weight:normal;', 'font-weight:400;', 'font-weight:400 700;']) {
+    const face = `@font-face{font-family:Example;${weight}src:local(Georgia);size-adjust:100%}`
+    assert.equal(candidateCss(face, 'binding'), face)
+  }
+  assert.match(
+    candidateCss('@font-face{font-weight:bold;src:local(Georgia);size-adjust:100%}', 'binding'),
+    /Georgia Bold/,
+  )
+})
+test('the injected CLS function starts its window at the first shift', async () => {
+  const { clsSession } = await import('../harness/browser-benchmark-session.mjs')
+  assert.equal(
+    +clsSession(
+      [800, 1600, 2400, 3200, 4000, 4800, 5300].map((at) => ({ at, value: 0.01 })),
+    ).toFixed(2),
+    0.07,
+  )
+  assert.equal(
+    clsSession([
+      { at: 200, value: 0.1 },
+      { at: 1200, value: 0.2 },
+      { at: 1300, value: 1, hadRecentInput: true },
+    ]),
+    0.2,
+  )
+  assert.equal(clsSession([]), 0)
+})
+test('shared CSS stripping handles quoted, escaped, and unquoted family tokens', async () => {
+  const { stripFallbacks } = await import('../harness/browser-benchmark-css.mjs')
+  const css =
+    '@font-face{font-family:Manrope Fallback\\: Arial;size-adjust:100%;src:local(Arial)}:root{--font-sans:Manrope,Manrope Fallback\\: Arial,"Manrope Fallback: Helvetica Neue",sans-serif}p{font-family:Manrope,Manrope Fallback\\3a  Arial,serif}'
+  const plain = stripFallbacks(css)
+  assert(!plain.includes('Fallback'))
+  assert.match(plain, /--font-sans:Manrope,sans-serif/)
+  assert.match(plain, /font-family:Manrope,serif/)
+  const reordered = candidateCss(
+    ':root{--font-sans:Manrope,Manrope Fallback\\: Arial,Manrope Fallback\\: Helvetica Neue,sans-serif}',
+    'manrope-helvetica',
+  )
+  assert(reordered.indexOf('Helvetica') < reordered.indexOf('Arial'))
+})
+test('output paths cannot collide or overwrite existing files; historical summary is read-only', async () => {
+  const { outputPaths, assertNewOutputs } = await import('../harness/browser-benchmark-output.mjs')
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { execFileSync } = await import('node:child_process')
+  assert.throws(() => outputPaths('run'), /must end in .json/)
+  const dir = mkdtempSync(join(tmpdir(), 'benchmark-output-'))
+  try {
+    const input = join(dir, 'raw.json')
+    const oldSummary = join(dir, 'raw-summary.json')
+    writeFileSync(input, JSON.stringify(fixture()))
+    writeFileSync(oldSummary, 'historical summary')
+    assert.throws(() => assertNewOutputs([input]), /Refusing to overwrite/)
+    execFileSync(process.execPath, ['harness/browser-benchmark-summary.mjs', input], {
+      stdio: 'pipe',
+    })
+    assert.equal(readFileSync(oldSummary, 'utf8'), 'historical summary')
+    assert.throws(() =>
+      execFileSync(
+        process.execPath,
+        ['harness/browser-benchmark-summary.mjs', input, '--output', input],
+        { stdio: 'pipe' },
+      ),
+    )
+    assert.equal(JSON.parse(readFileSync(input)).length, 3)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('portable audit paths retain kit and dependency source identities', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join, resolve } = await import('node:path')
+  const { execFileSync } = await import('node:child_process')
+  const dir = mkdtempSync(join(tmpdir(), 'benchmark-module-path-'))
+  try {
+    mkdirSync(join(dir, 'assets'))
+    writeFileSync(join(dir, 'assets', 'main.js'), 'app()')
+    writeFileSync(join(dir, 'assets', 'style.css'), 'body{}')
+    const modules = join(dir, 'modules.json')
+    const output = join(dir, 'report.json')
+    writeFileSync(
+      modules,
+      JSON.stringify({
+        main: [
+          { id: resolve('src/index.mjs'), renderedLength: 100 },
+          {
+            id: '/elsewhere/node_modules/tailwind-vite-font-kit/src/index.mjs',
+            renderedLength: 90,
+          },
+          { id: '/elsewhere/node_modules/other/src/index.js', renderedLength: 80 },
+        ],
+      }),
+    )
+    assert.throws(() =>
+      execFileSync(
+        process.execPath,
+        ['harness/browser-benchmark-bundles.mjs', dir, dir, modules, output],
+        { stdio: 'pipe' },
+      ),
+    )
+    const report = JSON.parse(readFileSync(output))
+    assert.deepEqual(
+      report.largestModules.map((m) => m.id),
+      [
+        '<font-kit>/src/index.mjs',
+        'node_modules/tailwind-vite-font-kit/src/index.mjs',
+        'node_modules/other/src/index.js',
+      ],
+    )
+    assert.equal(report.suspectModules.length, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CSS helpers do not change unrelated declarations or inflate the fallback size delta', async () => {
+  const { stripFallbacks } = await import('../harness/browser-benchmark-css.mjs')
+  const css =
+    ':root { --unrelated:  red, blue ; --font-sans: "Manrope", sans-serif ; } p { font-family: Georgia, serif; }'
+  assert.equal(stripFallbacks(css), css)
+  assert.equal(candidateCss(css, 'manrope-helvetica'), css)
+  assert.equal(
+    stripFallbacks(
+      ':root{--font-sans:"Manrope", "Manrope Fallback: Arial", ui-sans-serif, system-ui}',
+    ),
+    ':root{--font-sans:"Manrope", ui-sans-serif, system-ui}',
+  )
 })

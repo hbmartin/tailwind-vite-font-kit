@@ -1,6 +1,8 @@
 // Shared cases and driver. The in-app adapter only uses its supplied tab.
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import assert from 'node:assert/strict'
+import { outputPaths } from './browser-benchmark-output.mjs'
 import { randomUUID } from 'node:crypto'
 
 export function matrixCases({
@@ -58,7 +60,15 @@ export async function runDriver(
   outputPath,
   { origin = 'http://127.0.0.1:3211' } = {},
 ) {
+  outputPaths(outputPath)
   await mkdir(dirname(outputPath), { recursive: true })
+  if (!results.length) await writeFile(outputPath, '[]', { flag: 'wx' })
+  else
+    assert.deepEqual(
+      JSON.parse(await readFile(outputPath, 'utf8')),
+      results,
+      'Resume data differs from saved observations',
+    )
   for (const c of cases) {
     const viewport = { width: c.viewport, height: c.height ?? (c.viewport === 390 ? 844 : 900) }
     await driver.viewport(viewport)
@@ -85,10 +95,21 @@ export async function runCases(tab, viewportCapability, cases, results, outputPa
     {
       viewport: (size) => viewportCapability.set(size),
       async read(url) {
+        const startedAt = Date.now()
         await tab.goto(url)
         const locator = tab.playwright.locator('#font-benchmark-result')
         await locator.waitFor({ state: 'attached', timeoutMs: 15000 })
         const result = JSON.parse(await locator.textContent())
+        const logs = await tab.dev.logs({ levels: ['error'], limit: 100 })
+        result.errors.push(
+          ...logs
+            .filter(
+              (log) =>
+                !Number.isFinite(Date.parse(log.timestamp)) ||
+                Date.parse(log.timestamp) >= startedAt,
+            )
+            .map((log) => log.message),
+        )
         return result
       },
     },

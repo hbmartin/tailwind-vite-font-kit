@@ -1,3 +1,4 @@
+import { outputPaths, assertNewOutputs } from './browser-benchmark-output.mjs'
 // Run manually. Puppeteer comes from the disposable reference app, never npm runtime.
 import { createRequire } from 'node:module'
 import { resolve, dirname } from 'node:path'
@@ -12,6 +13,7 @@ const { values } = parseArgs({
     output: { type: 'string', default: 'harness/results/run.json' },
     manifest: { type: 'string' },
     executable: { type: 'string' },
+    candidate: { type: 'string' },
   },
 })
 if (!values.app) throw new Error('Pass --app /path/to/disposable-reference-app')
@@ -20,12 +22,12 @@ const { default: puppeteer } = await import(require.resolve('puppeteer'))
 const manifest = values.manifest
   ? JSON.parse(await readFile(values.manifest, 'utf8'))
   : { cases: regressionCases() }
+if (values.candidate) manifest.candidate = values.candidate
+const paths = outputPaths(values.output)
+assertNewOutputs(Object.values(paths))
 const results = []
 await mkdir(dirname(values.output), { recursive: true })
-await writeFile(
-  values.output.replace(/\.json$/, '-manifest.json'),
-  JSON.stringify(manifest, null, 2),
-)
+await writeFile(paths.manifest, JSON.stringify(manifest, null, 2), { flag: 'wx' })
 const browser = await puppeteer.launch({
   executablePath: values.executable,
   headless: true,
@@ -53,6 +55,8 @@ try {
           JSON.parse(el.textContent),
         )
         result.errors.push(...errors)
+        if (result.experiment?.candidate !== (manifest.candidate ?? 'baseline'))
+          throw new Error('Wrong candidate proxy: check --origin and --candidate')
         return result
       },
     },
@@ -62,10 +66,7 @@ try {
     { origin: values.origin },
   )
   const summary = validate(results, manifest)
-  await writeFile(
-    values.output.replace(/\.json$/, '-summary.json'),
-    JSON.stringify(summary, null, 2),
-  )
+  await writeFile(paths.summary, JSON.stringify(summary, null, 2), { flag: 'wx' })
   console.log(JSON.stringify({ output: values.output, loads: results.length, validated: true }))
 } finally {
   await browser.close()

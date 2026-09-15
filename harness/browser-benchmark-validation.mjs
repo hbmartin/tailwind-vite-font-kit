@@ -4,8 +4,20 @@ export const median = (values) => {
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
-export const cellKey = (r) =>
-  `${r.group}/${typeof r.viewport === 'number' ? r.viewport : r.viewport.width}/${r.height ?? r.viewport.height ?? (r.viewport === 390 ? 844 : 900)}/${r.probe}/${r.variant}/${r.width ?? 0}`
+export const cellKey = (r) => {
+  const width = typeof r.viewport === 'number' ? r.viewport : r.viewport.width
+  return `${r.group ?? 'matrix'}/${width}/${r.height ?? r.viewport.height ?? (width === 390 ? 844 : 900)}/${r.probe}/${r.variant}/${r.width ?? 0}/${r.delay ?? 2000}`
+}
+const identities = (snapshot) =>
+  snapshot.elements.map((e, i) => JSON.stringify([i, e.tag, e.probe, e.text]))
+const fontPath = (name) => {
+  const url = new URL(name)
+  return url.pathname.replace(/^\/__bench\/[^/]+/, '') + url.search
+}
+const sourceAssets = (experiment) =>
+  experiment.assets
+    .map(({ path, sourceHash }) => ({ path, sourceHash }))
+    .sort((a, b) => a.path.localeCompare(b.path))
 const counts = (rows) => {
   const map = new Map()
   for (const row of rows) map.set(cellKey(row), (map.get(cellKey(row)) ?? 0) + 1)
@@ -14,7 +26,7 @@ const counts = (rows) => {
 const fontsOf = (r) => r.resources.filter((f) => /\.woff2?(?:\?|$)/.test(f.name))
 export function movement(row) {
   return row.after.elements.map((e, i) => ({
-    key: `${i}:${e.tag}:${e.probe ?? ''}`,
+    key: identities(row.after)[i],
     y: Math.abs(e.rect.y - row.before.elements[i].rect.y),
     height: Math.abs(e.rect.height - row.before.elements[i].rect.height),
   }))
@@ -25,21 +37,26 @@ export function validate(
     cases,
     families = { hero: ['Manrope', 'Fraunces'], tailwind: ['Manrope'], normal: ['Manrope'] },
     strict = true,
+    candidate = 'baseline',
   } = {},
 ) {
+  assert(typeof strict === 'boolean', 'strict must be boolean')
   assert(results.length > 0, 'No observations')
+  if (strict)
+    assert.equal(new Set(results.map((r) => r.userAgent)).size, 1, 'Mixed browser identities')
   assert.equal(new Set(results.map((r) => r.id)).size, results.length, 'Duplicate run IDs')
   if (strict) assert(cases?.length, 'A case manifest is required')
   if (cases)
     assert.deepEqual(counts(results), counts(cases), 'Incomplete, unexpected, or duplicate cells')
   for (const r of results) {
+    assert(Number.isFinite(r.delay) && r.delay >= 0, `${r.id}: invalid delay`)
     assert(Number.isFinite(r.cls) && r.cls >= 0, `${r.id}: invalid CLS`)
     assert(r.before?.elements.length && r.after?.elements.length, `${r.id}: missing geometry`)
     assert.equal(r.before.elements.length, r.after.elements.length, `${r.id}: changed probes`)
     for (const [i, e] of r.after.elements.entries()) {
       assert.equal(
-        `${e.tag}/${e.probe}`,
-        `${r.before.elements[i].tag}/${r.before.elements[i].probe}`,
+        `${e.tag}/${e.probe}/${e.text}`,
+        `${r.before.elements[i].tag}/${r.before.elements[i].probe}/${r.before.elements[i].text}`,
         `${r.id}: changed probe identity`,
       )
       for (const rect of [e.rect, r.before.elements[i].rect])
@@ -49,6 +66,42 @@ export function validate(
         )
     }
     if (strict) {
+      assert(
+        typeof r.userAgent === 'string' && r.userAgent.length,
+        `${r.id}: missing browser identity`,
+      )
+      for (const snapshot of [r.before, r.after]) {
+        assert(
+          Number.isFinite(snapshot.layoutWidth) && snapshot.layoutWidth > 0,
+          `${r.id}: missing layout width`,
+        )
+        assert(
+          snapshot.elements.every((e) => typeof e.text === 'string'),
+          `${r.id}: missing element identity`,
+        )
+      }
+      assert.equal(r.experiment?.candidate, candidate, `${r.id}: wrong candidate proxy`)
+      assert(
+        /^[a-f0-9]{64}$/.test(r.experiment?.transformId ?? ''),
+        `${r.id}: missing transform identity`,
+      )
+      assert(r.experiment.assets?.length, `${r.id}: missing asset evidence`)
+      assert(
+        r.experiment.assets.every(
+          (a) =>
+            a.path.startsWith('/') &&
+            /^[a-f0-9]{64}$/.test(a.sourceHash) &&
+            /^[a-f0-9]{64}$/.test(a.servedHash),
+        ),
+        `${r.id}: invalid asset evidence`,
+      )
+      if (candidate !== 'baseline')
+        assert(
+          r.experiment.assets.some(
+            (a) => a.type.includes('text/css') && a.sourceHash !== a.servedHash,
+          ),
+          `${r.id}: candidate did not change CSS`,
+        )
       assert.deepEqual(r.viewport, r.requestedViewport, `${r.id}: viewport mismatch`)
       assert.deepEqual(r.errors, [], `${r.id}: browser errors`)
       assert.equal(r.hidden, false, `${r.id}: hidden page`)
@@ -58,14 +111,38 @@ export function validate(
       )
     }
     assert(families[r.probe], `${r.id}: missing expected families for ${r.probe}`)
-    const expectedFamilies = r.variant === 'system' ? [] : families[r.probe]
+    const expectedFamilies = (r.variant === 'system' ? [] : families[r.probe]).map((f) =>
+      typeof f === 'string' ? { name: f, files: null } : f,
+    )
+    assert(
+      expectedFamilies.every(
+        (f) =>
+          typeof f.name === 'string' &&
+          (f.files === null ||
+            (Array.isArray(f.files) &&
+              f.files.length &&
+              f.files.every((p) => typeof p === 'string' && p.startsWith('/')))),
+      ),
+      `${r.id}: invalid family expectation`,
+    )
     const fonts = fontsOf(r)
-    assert.equal(fonts.length, expectedFamilies.length, `${r.id}: missing or duplicate fonts`)
     assert.equal(
-      new Set(fonts.map((f) => f.name)).size,
+      new Set(fonts.map((f) => fontPath(f.name))).size,
       fonts.length,
       `${r.id}: duplicate font URL`,
     )
+    assert.equal(
+      fonts.length,
+      expectedFamilies.reduce((n, f) => n + (f.files?.length ?? 1), 0),
+      `${r.id}: missing or duplicate fonts`,
+    )
+    for (const family of expectedFamilies)
+      if (family.files)
+        for (const path of family.files)
+          assert(
+            fonts.some((f) => fontPath(f.name) === path),
+            `${r.id}: missing expected font ${path}`,
+          )
     assert(
       fonts.every((f) => f.encoded > 0 && f.transfer > 0),
       `${r.id}: cached/empty font response`,
@@ -78,7 +155,7 @@ export function validate(
       )
     }
     if (!['system', 'optional'].includes(r.variant))
-      for (const family of expectedFamilies) {
+      for (const { name: family } of expectedFamilies) {
         assert(
           r.after.faces.some((f) => f.family === family && f.status === 'loaded'),
           `${r.id}: ${family} never loaded`,
@@ -93,14 +170,44 @@ export function validate(
       }
   }
   const groups = Map.groupBy(results, cellKey)
+  for (const rows of groups.values())
+    for (const row of rows) {
+      assert.deepEqual(
+        identities(row.after),
+        identities(rows[0].after),
+        `${row.id}: element identities differ across repetitions`,
+      )
+      if (strict) {
+        assert.deepEqual(
+          row.experiment,
+          rows[0].experiment,
+          `${row.id}: experiment differs across repetitions`,
+        )
+        assert.equal(
+          row.before.layoutWidth,
+          rows[0].before.layoutWidth,
+          `${row.id}: layout width differs across repetitions`,
+        )
+        assert.equal(
+          row.after.layoutWidth,
+          rows[0].after.layoutWidth,
+          `${row.id}: layout width differs across repetitions`,
+        )
+      }
+    }
   return {
     loads: results.length,
     userAgents: [...new Set(results.map((r) => r.userAgent))].sort(),
     validated: true,
+    strictValidated: strict,
+    candidate,
     completenessChecked: Boolean(cases),
     summary: [...groups].map(([key, rows]) => ({
       key,
       runs: rows.length,
+      delay: rows[0].delay,
+      experiment: rows[0].experiment,
+      layout: [rows[0].before.layoutWidth, rows[0].after.layoutWidth],
       cls: median(rows.map((r) => r.cls)),
       min: Math.min(...rows.map((r) => r.cls)),
       max: Math.max(...rows.map((r) => r.cls)),
@@ -114,15 +221,23 @@ export function validate(
     })),
   }
 }
-export function compare(baseline, candidate) {
+export function compare(baseline, candidate, { mode = 'acceptance' } = {}) {
+  assert(['acceptance', 'diagnostic'].includes(mode), 'Unknown comparison mode')
   assert(
-    baseline.validated &&
+    baseline.strictValidated &&
+      candidate.strictValidated &&
+      baseline.validated &&
       candidate.validated &&
       baseline.completenessChecked &&
       candidate.completenessChecked,
     'Only complete validated runs can be accepted',
   )
   assert.deepEqual(baseline.userAgents, candidate.userAgents, 'Browser/platform mismatch')
+  if (mode === 'acceptance')
+    assert(
+      baseline.candidate === 'baseline' && candidate.candidate !== 'baseline',
+      'Acceptance requires a baseline and an identified candidate',
+    )
   const base = new Map(baseline.summary.map((c) => [c.key, c]))
   assert.deepEqual(
     [...base.keys()].sort(),
@@ -132,6 +247,15 @@ export function compare(baseline, candidate) {
   const failures = []
   for (const c of candidate.summary) {
     const b = base.get(c.key)
+    assert.deepEqual(c.layout, b.layout, 'Layout width mismatch')
+    assert.equal(c.experiment.transformId, b.experiment.transformId, 'Harness transform mismatch')
+    assert.deepEqual(
+      sourceAssets(c.experiment),
+      sourceAssets(b.experiment),
+      'Production asset mismatch',
+    )
+    if (mode === 'acceptance')
+      assert(c.delay >= 1500 && b.delay >= 1500, 'Acceptance requires delayed font swaps')
     assert(c.runs >= 3 && b.runs >= 3, 'At least three repetitions required')
     if (+c.cls.toFixed(6) > +b.cls.toFixed(6))
       failures.push({ key: c.key, reason: 'CLS regression', baseline: b.cls, candidate: c.cls })
@@ -143,14 +267,21 @@ export function compare(baseline, candidate) {
     if (c.movement.some((m, i) => m.y > b.movement[i].y || m.height > b.movement[i].height))
       failures.push({ key: c.key, reason: 'Geometry regression' })
     if (
+      mode === 'acceptance' &&
       c.key.includes('/380/900/hero/') &&
       (c.cls > 0.02 || c.movement.some((m) => m.y > 0 || m.height > 0))
     )
       failures.push({ key: c.key, reason: '380px acceptance gate', cls: c.cls })
   }
-  assert(
-    candidate.summary.some((c) => c.key.includes('/380/900/hero/')),
-    'Missing 380px acceptance cell',
-  )
-  return { dataValid: true, accepted: failures.length === 0, failures }
+  if (mode === 'acceptance')
+    assert(
+      candidate.summary.some((c) => c.key.includes('/380/900/hero/')),
+      'Missing 380px acceptance cell',
+    )
+  return {
+    dataValid: true,
+    mode,
+    accepted: mode === 'acceptance' ? failures.length === 0 : null,
+    failures,
+  }
 }
