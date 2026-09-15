@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { fontAssetPattern } from './browser-benchmark-assets.mjs'
 export const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
@@ -16,17 +17,22 @@ const fontPath = (name) => {
 }
 const sourceAssets = (experiment) =>
   experiment.assets
-    .map(({ path, sourceHash }) => ({ path, sourceHash }))
+    .map(({ path, type, sourceHash }) => ({ path, type, sourceHash }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+const servedAssets = (experiment) =>
+  experiment.assets
+    .map(({ path, type, servedHash }) => ({ path, type, servedHash }))
     .sort((a, b) => a.path.localeCompare(b.path))
 const counts = (rows) => {
   const map = new Map()
   for (const row of rows) map.set(cellKey(row), (map.get(cellKey(row)) ?? 0) + 1)
   return [...map].sort(([a], [b]) => a.localeCompare(b))
 }
-const fontsOf = (r) => r.resources.filter((f) => /\.woff2?(?:\?|$)/.test(f.name))
+const fontsOf = (r) => r.resources.filter((f) => fontAssetPattern.test(f.name))
 export function movement(row) {
+  const keys = identities(row.after)
   return row.after.elements.map((e, i) => ({
-    key: identities(row.after)[i],
+    key: keys[i],
     y: Math.abs(e.rect.y - row.before.elements[i].rect.y),
     height: Math.abs(e.rect.height - row.before.elements[i].rect.height),
   }))
@@ -53,12 +59,10 @@ export function validate(
     assert(Number.isFinite(r.cls) && r.cls >= 0, `${r.id}: invalid CLS`)
     assert(r.before?.elements.length && r.after?.elements.length, `${r.id}: missing geometry`)
     assert.equal(r.before.elements.length, r.after.elements.length, `${r.id}: changed probes`)
+    const beforeKeys = identities(r.before)
+    const afterKeys = identities(r.after)
     for (const [i, e] of r.after.elements.entries()) {
-      assert.equal(
-        `${e.tag}/${e.probe}/${e.text}`,
-        `${r.before.elements[i].tag}/${r.before.elements[i].probe}/${r.before.elements[i].text}`,
-        `${r.id}: changed probe identity`,
-      )
+      assert.equal(afterKeys[i], beforeKeys[i], `${r.id}: changed probe identity`)
       for (const rect of [e.rect, r.before.elements[i].rect])
         assert(
           ['x', 'y', 'width', 'height'].every((k) => Number.isFinite(rect[k])),
@@ -66,6 +70,17 @@ export function validate(
         )
     }
     if (strict) {
+      assert(
+        Number.isFinite(r.viewport?.width) &&
+          Number.isFinite(r.viewport?.height) &&
+          r.viewport.width > 0 &&
+          r.viewport.height > 0 &&
+          (r.height === undefined || r.height === r.viewport.height) &&
+          [r.group ?? 'matrix', r.probe, r.variant].every(
+            (part) => typeof part === 'string' && part.length > 0 && !part.includes('/'),
+          ),
+        `${r.id}: invalid cell identity`,
+      )
       assert(
         typeof r.userAgent === 'string' && r.userAgent.length,
         `${r.id}: missing browser identity`,
@@ -85,23 +100,48 @@ export function validate(
         /^[a-f0-9]{64}$/.test(r.experiment?.transformId ?? ''),
         `${r.id}: missing transform identity`,
       )
-      assert(r.experiment.assets?.length, `${r.id}: missing asset evidence`)
+      assert(r.experiment?.assets?.length, `${r.id}: missing asset evidence`)
       assert(
         r.experiment.assets.every(
           (a) =>
             a.path.startsWith('/') &&
+            typeof a.type === 'string' &&
             /^[a-f0-9]{64}$/.test(a.sourceHash) &&
             /^[a-f0-9]{64}$/.test(a.servedHash),
         ),
         `${r.id}: invalid asset evidence`,
       )
-      if (candidate !== 'baseline')
+      assert.equal(
+        new Set(r.experiment.assets.map((a) => a.path)).size,
+        r.experiment.assets.length,
+        `${r.id}: duplicate asset evidence`,
+      )
+      if (r.variant === 'kit' && candidate === 'baseline')
+        assert(
+          r.experiment.assets
+            .filter((a) => a.type.includes('text/css'))
+            .every((a) => a.sourceHash === a.servedHash),
+          `${r.id}: baseline kit CSS changed`,
+        )
+      if (r.variant === 'kit' && candidate !== 'baseline')
         assert(
           r.experiment.assets.some(
             (a) => a.type.includes('text/css') && a.sourceHash !== a.servedHash,
           ),
           `${r.id}: candidate did not change CSS`,
         )
+      if (r.variant === 'fontaine') {
+        const fontaine = r.experiment.fontaine
+        assert(
+          /^\/assets\/[^?#]+\.css$/.test(fontaine?.path ?? '') &&
+            /^[a-f0-9]{64}$/.test(fontaine?.cssHash ?? '') &&
+            fontaine?.applied === true &&
+            r.experiment.assets.some(
+              (a) => a.path.split('?')[0] === fontaine.path && a.type.includes('text/css'),
+            ),
+          `${r.id}: Fontaine CSS was not applied`,
+        )
+      }
       assert.deepEqual(r.viewport, r.requestedViewport, `${r.id}: viewport mismatch`)
       assert.deepEqual(r.errors, [], `${r.id}: browser errors`)
       assert.equal(r.hidden, false, `${r.id}: hidden page`)
@@ -202,23 +242,26 @@ export function validate(
     strictValidated: strict,
     candidate,
     completenessChecked: Boolean(cases),
-    summary: [...groups].map(([key, rows]) => ({
-      key,
-      runs: rows.length,
-      delay: rows[0].delay,
-      experiment: rows[0].experiment,
-      layout: [rows[0].before.layoutWidth, rows[0].after.layoutWidth],
-      cls: median(rows.map((r) => r.cls)),
-      min: Math.min(...rows.map((r) => r.cls)),
-      max: Math.max(...rows.map((r) => r.cls)),
-      fcp: median(rows.map((r) => r.fcp)),
-      fontBytes: median(rows.map((r) => fontsOf(r).reduce((n, f) => n + f.encoded, 0))),
-      movement: movement(rows[0]).map((m, i) => ({
-        key: m.key,
-        y: median(rows.map((r) => movement(r)[i].y)),
-        height: median(rows.map((r) => movement(r)[i].height)),
-      })),
-    })),
+    summary: [...groups].map(([key, rows]) => {
+      const moves = rows.map(movement)
+      return {
+        key,
+        runs: rows.length,
+        delay: rows[0].delay,
+        experiment: rows[0].experiment,
+        layout: [rows[0].before.layoutWidth, rows[0].after.layoutWidth],
+        cls: median(rows.map((r) => r.cls)),
+        min: Math.min(...rows.map((r) => r.cls)),
+        max: Math.max(...rows.map((r) => r.cls)),
+        fcp: median(rows.map((r) => r.fcp)),
+        fontBytes: median(rows.map((r) => fontsOf(r).reduce((n, f) => n + f.encoded, 0))),
+        movement: moves[0].map((m, i) => ({
+          key: m.key,
+          y: median(moves.map((row) => row[i].y)),
+          height: median(moves.map((row) => row[i].height)),
+        })),
+      }
+    }),
   }
 }
 export function compare(baseline, candidate, { mode = 'acceptance' } = {}) {
@@ -247,6 +290,8 @@ export function compare(baseline, candidate, { mode = 'acceptance' } = {}) {
   const failures = []
   for (const c of candidate.summary) {
     const b = base.get(c.key)
+    assert.equal(b.experiment.candidate, baseline.candidate, 'Baseline cell candidate mismatch')
+    assert.equal(c.experiment.candidate, candidate.candidate, 'Candidate cell candidate mismatch')
     assert.deepEqual(c.layout, b.layout, 'Layout width mismatch')
     assert.equal(c.experiment.transformId, b.experiment.transformId, 'Harness transform mismatch')
     assert.deepEqual(
@@ -254,6 +299,28 @@ export function compare(baseline, candidate, { mode = 'acceptance' } = {}) {
       sourceAssets(b.experiment),
       'Production asset mismatch',
     )
+    if (c.key.includes('/fontaine/'))
+      assert.deepEqual(c.experiment.fontaine, b.experiment.fontaine, 'Fontaine CSS mismatch')
+    const candidateServed = servedAssets(c.experiment)
+    const baselineServed = servedAssets(b.experiment)
+    if (c.key.includes('/kit/')) {
+      assert.deepEqual(
+        candidateServed.filter((a) => !a.type.includes('text/css')),
+        baselineServed.filter((a) => !a.type.includes('text/css')),
+        'Non-CSS asset mismatch',
+      )
+      const baseCss = new Map(
+        baselineServed
+          .filter((a) => a.type.includes('text/css'))
+          .map((a) => [a.path, a.servedHash]),
+      )
+      assert(
+        candidateServed.some(
+          (a) => a.type.includes('text/css') && a.servedHash !== baseCss.get(a.path),
+        ),
+        'Candidate kit CSS matches baseline',
+      )
+    } else assert.deepEqual(candidateServed, baselineServed, 'Non-kit served asset mismatch')
     if (mode === 'acceptance')
       assert(c.delay >= 1500 && b.delay >= 1500, 'Acceptance requires delayed font swaps')
     assert(c.runs >= 3 && b.runs >= 3, 'At least three repetitions required')
@@ -268,15 +335,15 @@ export function compare(baseline, candidate, { mode = 'acceptance' } = {}) {
       failures.push({ key: c.key, reason: 'Geometry regression' })
     if (
       mode === 'acceptance' &&
-      c.key.includes('/380/900/hero/') &&
+      c.key.includes('/380/900/hero/kit/') &&
       (c.cls > 0.02 || c.movement.some((m) => m.y > 0 || m.height > 0))
     )
       failures.push({ key: c.key, reason: '380px acceptance gate', cls: c.cls })
   }
   if (mode === 'acceptance')
     assert(
-      candidate.summary.some((c) => c.key.includes('/380/900/hero/')),
-      'Missing 380px acceptance cell',
+      candidate.summary.some((c) => c.key.includes('/380/900/hero/kit/')),
+      'Missing 380px kit hero acceptance cell',
     )
   return {
     dataValid: true,

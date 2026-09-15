@@ -5,6 +5,16 @@ import assert from 'node:assert/strict'
 import { outputPaths } from './browser-benchmark-output.mjs'
 import { randomUUID } from 'node:crypto'
 
+const logKey = (log) => JSON.stringify(log)
+export function newBrowserErrors(before, after) {
+  let overlap = Math.min(before.length, after.length)
+  while (overlap > 0 && !before.slice(-overlap).every((log, i) => logKey(log) === logKey(after[i])))
+    overlap--
+  const errors = after.slice(overlap).map((log) => log.message)
+  if (before.length && overlap === 0) errors.unshift('Browser log history lost the run boundary')
+  return errors
+}
+
 export function matrixCases({
   repeats = 3,
   viewports = [390, 1280],
@@ -62,13 +72,18 @@ export async function runDriver(
 ) {
   outputPaths(outputPath)
   await mkdir(dirname(outputPath), { recursive: true })
-  if (!results.length) await writeFile(outputPath, '[]', { flag: 'wx' })
-  else
-    assert.deepEqual(
-      JSON.parse(await readFile(outputPath, 'utf8')),
-      results,
-      'Resume data differs from saved observations',
-    )
+  if (!results.length) {
+    try {
+      await writeFile(outputPath, '[]', { flag: 'wx' })
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+    }
+  }
+  assert.deepEqual(
+    JSON.parse(await readFile(outputPath, 'utf8')),
+    results,
+    'Resume data differs from saved observations',
+  )
   for (const c of cases) {
     const viewport = { width: c.viewport, height: c.height ?? (c.viewport === 390 ? 844 : 900) }
     await driver.viewport(viewport)
@@ -95,21 +110,13 @@ export async function runCases(tab, viewportCapability, cases, results, outputPa
     {
       viewport: (size) => viewportCapability.set(size),
       async read(url) {
-        const startedAt = Date.now()
+        const beforeLogs = await tab.dev.logs({ levels: ['error'], limit: 500 })
         await tab.goto(url)
         const locator = tab.playwright.locator('#font-benchmark-result')
         await locator.waitFor({ state: 'attached', timeoutMs: 15000 })
         const result = JSON.parse(await locator.textContent())
-        const logs = await tab.dev.logs({ levels: ['error'], limit: 100 })
-        result.errors.push(
-          ...logs
-            .filter(
-              (log) =>
-                !Number.isFinite(Date.parse(log.timestamp)) ||
-                Date.parse(log.timestamp) >= startedAt,
-            )
-            .map((log) => log.message),
-        )
+        const afterLogs = await tab.dev.logs({ levels: ['error'], limit: 500 })
+        result.errors.push(...newBrowserErrors(beforeLogs, afterLogs))
         return result
       },
     },
