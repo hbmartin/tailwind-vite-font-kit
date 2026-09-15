@@ -2,6 +2,18 @@
 // this file never enters the application's production bundle.
 ;(() => {
   const config = JSON.parse(document.currentScript.dataset.config)
+  const errors = []
+  let hidden = document.hidden
+  addEventListener(
+    'error',
+    (event) =>
+      errors.push(event.message || `Resource error: ${event.target?.src || event.target?.href}`),
+    true,
+  )
+  addEventListener('unhandledrejection', (event) => errors.push(String(event.reason)))
+  document.addEventListener('visibilitychange', () => {
+    hidden ||= document.hidden
+  })
   const shifts = []
   let lcp = null
   let before = null
@@ -65,14 +77,18 @@
         ...config,
         userAgent: navigator.userAgent,
         viewport: { width: innerWidth, height: innerHeight },
+        layoutWidth: document.documentElement.clientWidth,
         cls,
         shifts,
+        errors,
+        hidden,
         before,
         after,
         lcp,
         fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime,
         resources: performance.getEntriesByType('resource').map((r) => ({
           name: r.name,
+          status: r.responseStatus,
           type: r.initiatorType,
           transfer: r.transferSize,
           encoded: r.encodedBodySize,

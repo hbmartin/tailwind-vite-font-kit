@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { brotliCompressSync, gzipSync } from 'node:zlib'
 
@@ -9,6 +10,7 @@ const [kitPublic, manualPublic, moduleFile, out] = process.argv.slice(2)
 if (!out) throw new Error('Pass KIT_PUBLIC MANUAL_PUBLIC KIT_MODULES OUT')
 const stats = (dir) =>
   readdirSync(join(dir, 'assets'))
+    .filter((name) => !/\.(?:gz|br|zst|map)$/.test(name))
     .sort()
     .map((name) => {
       const bytes = readFileSync(join(dir, 'assets', name))
@@ -26,12 +28,29 @@ const js = (assets) => assets.filter((a) => a.name.endsWith('.js'))
 const modules = Object.entries(JSON.parse(readFileSync(moduleFile, 'utf8'))).flatMap(
   ([chunk, entries]) => entries.map((entry) => ({ chunk, ...entry })),
 )
-const suspectModules = modules.filter((m) =>
-  /font-kit\/src|fontkit|capsize|wawoff2|es-module-lexer/.test(m.id),
-)
+const kitRoot = fileURLToPath(new URL('../', import.meta.url)).replaceAll('\\', '/')
+const suspectModules = modules.filter((m) => {
+  const id = m.id.replaceAll('\\', '/')
+  return (
+    id.startsWith(`${kitRoot}src/`) ||
+    /(?:^|\/)node_modules\/(?:@capsizecss\/|fontkit\/|wawoff2\/|es-module-lexer\/|tailwind-vite-font-kit\/)/.test(
+      id,
+    )
+  )
+})
+const portable = (m) => ({
+  ...m,
+  id: m.id
+    .replaceAll('\\', '/')
+    .replace(/^.*?(?=node_modules\/)/, '')
+    .replace(kitRoot, '<font-kit>/')
+    .replace(/^.*?\/src\//, '<reference-app>/src/'),
+})
+assert(js(kit).length && js(manual).length, 'Missing JavaScript assets')
 const identicalJavaScript = JSON.stringify(js(kit)) === JSON.stringify(js(manual))
-const cssName = kit.find((a) => a.name.endsWith('.css')).name
-const css = readFileSync(join(kitPublic, 'assets', cssName), 'utf8')
+const cssAssets = kit.filter((a) => a.name.endsWith('.css'))
+assert(cssAssets.length, 'Missing CSS assets')
+const css = cssAssets.map((a) => readFileSync(join(kitPublic, 'assets', a.name), 'utf8')).join('\n')
 const fallbackPattern = /@font-face\s*\{[^{}]*size-adjust\s*:[^{}]*\}/g
 const plain = css
   .replace(fallbackPattern, '')
@@ -48,8 +67,11 @@ const report = {
   manual,
   identicalJavaScript,
   kitModuleCount: modules.length,
-  suspectModules,
-  largestModules: [...modules].sort((a, b) => b.renderedLength - a.renderedLength).slice(0, 12),
+  suspectModules: suspectModules.map(portable),
+  largestModules: [...modules]
+    .sort((a, b) => b.renderedLength - a.renderedLength)
+    .slice(0, 12)
+    .map(portable),
   css: {
     kit: kitCss,
     plain: plainCss,

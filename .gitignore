@@ -9,3 +9,6 @@ coverage
 
 # tss-fonts writes these before editing your files
 *.bak
+
+# Local manual performance runs (the dated baseline is intentionally tracked)
+harness/results/

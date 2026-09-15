@@ -2,6 +2,7 @@
 // Start the built TanStack app, then: node harness/browser-benchmark-server.mjs
 // Open /probe/hero?variant=kit&run=unique&delay=2000. Every run gets unique asset
 // URLs and no-store responses so browser memory/disk caches cannot hide font swaps.
+import { candidateCss } from './browser-benchmark-candidates.mjs'
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
@@ -14,6 +15,7 @@ const fontaineCss = process.env.BENCH_FONTAINE_CSS
   ? readFileSync(process.env.BENCH_FONTAINE_CSS, 'utf8')
   : null
 if (fontaineCss) variants.add('fontaine')
+const candidate = process.env.BENCH_CANDIDATE
 const runs = new Map()
 const stripFallbacks = (css) =>
   css
@@ -53,6 +55,7 @@ createServer(async (req, res) => {
     const headers = { 'content-type': type, 'cache-control': 'no-store' }
     if (type.includes('text/css')) {
       let css = run.variant === 'fontaine' ? fontaineCss : body.toString()
+      if (candidate && run.variant === 'kit') css = candidateCss(css, candidate)
       if (run.variant !== 'kit' && run.variant !== 'fontaine') css = stripFallbacks(css)
       if (run.variant === 'optional')
         css = css.replace(/font-display\s*:\s*swap/g, 'font-display:optional')
@@ -66,7 +69,10 @@ createServer(async (req, res) => {
     } else if (type.includes('text/html')) {
       let html = rewrite(body.toString())
       const config = JSON.stringify(run).replace(/'/g, '&#39;')
-      html = html.replace('<head>', `<head><script data-config='${config}'>${probe}</script>`)
+      html = html.replace(
+        '<head>',
+        `<head><link rel="icon" href="data:,"><script data-config='${config}'>${probe}</script>`,
+      )
       if (run.width)
         html = html.replace(
           '</head>',
