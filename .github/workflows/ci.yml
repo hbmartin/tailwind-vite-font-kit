@@ -94,6 +94,7 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             test/fixture/pnpm-lock.yaml
+            test/start-fixture/pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -119,6 +120,15 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+          pnpm run doctor
+          pnpm run verify:preview
+
+      - name: Build and serve the pinned TanStack Start fixture
+        working-directory: test/start-fixture
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm run verify:server
 
       - name: Collect metrics
         id: metrics
@@ -201,6 +211,7 @@ jobs:
             console.log('building against vite ' + got);
           "
           pnpm build
+          pnpm run verify:preview
 
       - name: Assert the same invariants as the Vite 8 build
         run: |

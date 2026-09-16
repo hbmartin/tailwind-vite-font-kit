@@ -29,6 +29,10 @@ export { assertFontHost } from './font-host.mjs'
 
 const require_ = createRequire(import.meta.url)
 const PKG_VERSION = require_('../package.json').version
+// Bump when the generated CSS/meta contract changes without a package-version bump
+// (notably while developing a release). This prevents an older warm cache from hiding
+// new metadata or serving CSS generated under previous semantics.
+const CACHE_FORMAT = 2
 
 // Google returns legacy TTF with every subset in one file unless it believes you are a
 // modern desktop browser. With this UA it returns per-subset woff2 with unicode-range.
@@ -164,6 +168,7 @@ function cacheKey(opts) {
     .update(
       JSON.stringify({
         v: PKG_VERSION,
+        format: CACHE_FORMAT,
         families: opts.families,
         subsets: opts.subsets,
         publicPath: opts.publicPath,
@@ -181,7 +186,8 @@ function cacheKey(opts) {
  * call site or from `fonts.config.mjs`). Everything below can assume all of it is set.
  * @typedef {Required<Pick<import('../index.d.ts').FontsOptions,
  *     'subsets' | 'publicPath' | 'assets' | 'output' | 'preloadHeader' | 'silent'>>
- *   & Pick<import('../index.d.ts').FontsOptions, 'leadingUtilities'>
+ *   & Pick<import('../index.d.ts').FontsOptions,
+ *       'leadingUtilities' | 'preloadHtml' | 'preloadBudgetKb'>
  *   & { families: import('../index.d.ts').FontFamily[] }} ResolvedOptions
  */
 
@@ -194,6 +200,9 @@ function cacheKey(opts) {
  *   absent on a meta written by an older version, and on `strategy: 'cdn'` families,
  *   which download nothing
  * @property {import('../index.d.ts').FontPreload[]} preloads
+ * @property {{family: string, url: string, hasOpsz: boolean,
+ *   configuredOpszPin: number|'auto'|null, implicitOpszPin: boolean,
+ *   fontDisplay: string, subsetText: boolean}[]} sourceRequests
  * @property {number} realFaces
  * @property {number} fallbackFaces
  * @property {boolean} fromCache
@@ -266,6 +275,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
   const seenSrc = new Map()
   /** @type {Record<string, {sha256: string, bytes: number}>} */
   const digests = {}
+  const sourceRequests = []
 
   for (const fam of opts.families) {
     // Weights may live only in an axes spec ('opsz,wght@9..144,500;9..144,700'); the
@@ -304,15 +314,33 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     }
 
     const url = googleUrl(resolved, log, warn)
+    const originalHasOpsz = Boolean(fam.axes && /(^|,)opsz/.test(fam.axes))
+    sourceRequests.push({
+      family: fam.name,
+      url,
+      hasOpsz: originalHasOpsz,
+      configuredOpszPin: fam.opszPin ?? null,
+      implicitOpszPin: originalHasOpsz && fam.opszPin === undefined,
+      fontDisplay: fam.fontDisplay ?? 'swap',
+      subsetText: fam.subsetText !== undefined,
+    })
     log(`${fam.name}: ${url}`)
     const css = await (await fetchRetry(url, { log })).text()
 
-    const blocks = [...css.matchAll(/\/\*\s*([a-z0-9-]+)\s*\*\/\s*(@font-face\s*\{[^}]*\})/g)]
-    const wanted = blocks.filter(([, subset]) => opts.subsets.includes(subset))
+    const blocks = [
+      ...css.matchAll(/(?:\/\*\s*([a-z0-9-]+)\s*\*\/\s*)?(@font-face\s*\{[^}]*\})/g),
+    ].map((match) => ({ subset: match[1] ?? null, block: match[2] }))
+    // Google's `text=` endpoint deliberately omits per-subset comments. It already
+    // returns only the requested glyphs, so every face is wanted and the caller's
+    // metrics hint supplies the fallback script. Ordinary requests retain the existing
+    // per-subset filtering behavior.
+    const wanted = fam.subsetText
+      ? blocks.map((item) => ({ ...item, subset: fam.subsetTextMetrics ?? opts.subsets[0] }))
+      : blocks.filter(({ subset }) => subset && opts.subsets.includes(subset))
     if (!wanted.length) {
       throw new Error(
         `[tss-fonts] no ${opts.subsets.join('/')} blocks for ${fam.name}. ` +
-          `Available: ${[...new Set(blocks.map((b) => b[1]))].join(', ') || 'none'}`,
+          `Available: ${[...new Set(blocks.map((b) => b.subset).filter(Boolean))].join(', ') || 'none'}`,
       )
     }
 
@@ -323,7 +351,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     const selfHost = (fam.strategy ?? 'self-host') === 'self-host'
     const rangesBySubset = new Map()
 
-    for (const [, subset, block] of wanted) {
+    for (const { subset, block } of wanted) {
       // If Google reshapes the css2 output, fail with a message naming the family and
       // URL instead of a bare TypeError on a null match.
       const grab = (re, what) => {
@@ -342,7 +370,8 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       // CSS, so an off-host src is just as much a poisoned css2 response there as it is
       // on the self-host download path.
       const fontUrl = assertFontHost(src, fam.name)
-      if (!fontUrl.pathname.toLowerCase().endsWith('.woff2')) {
+      const queryWoff2 = fontUrl.pathname === '/l/font' && fontUrl.searchParams.has('kit')
+      if (!fontUrl.pathname.toLowerCase().endsWith('.woff2') && !queryWoff2) {
         throw new Error(
           `[tss-fonts] ${fam.name}: css2 returned a non-WOFF2 font URL: ${src}. ` +
             `Expected the browser-targeted stylesheet to contain only .woff2 sources.`,
@@ -355,21 +384,31 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       if (selfHost) {
         let file = seenSrc.get(src)
         if (!file) {
-          // Google's own filenames already carry a content hash, so a fixed name is
-          // safe to serve `immutable`.
-          file = `${slug(fam.name)}-${fontUrl.pathname.split('/').pop()}`
           // A redirect changes the origin the host check above approved. gstatic does
           // not need one, so reject it instead of following bytes from another host.
           const buf = Buffer.from(
             await (await fetchRetry(src, { log, redirect: 'error' })).arrayBuffer(),
           )
+          if (buf.length < 4 || buf.subarray(0, 4).toString('ascii') !== 'wOF2') {
+            throw new Error(
+              `[tss-fonts] ${fam.name}: downloaded bytes from ${src} are not a WOFF2 font ` +
+                `(missing the wOF2 signature).`,
+            )
+          }
+          const digest = sha256(buf)
+          // Normal gstatic paths already carry Google's content hash. `text=` sources
+          // are query URLs with a generic /l/font path, so give those immutable bytes a
+          // content-addressed filename of our own.
+          file = queryWoff2
+            ? `${slug(fam.name)}-${digest.slice(0, 16)}.woff2`
+            : `${slug(fam.name)}-${fontUrl.pathname.split('/').pop()}`
           writeAtomic(join(filesDir, file), buf)
           seenSrc.set(src, file)
           files.push(file)
           // Recorded so a cache hit can prove the bytes on disk are still the bytes that
           // were downloaded, and so the `assets` directory copy can spot a stale or
           // truncated file rather than trusting the filename.
-          digests[file] = { sha256: sha256(buf), bytes: buf.length }
+          digests[file] = { sha256: digest, bytes: buf.length }
           log(`  downloaded ${file} (${(buf.length / 1024).toFixed(1)} kB)`)
         }
         // NOT posix.join: under a full-URL base publicPath is 'https://cdn…/fonts', and
@@ -379,7 +418,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
 
       realFaces.push(
         `@font-face{font-family:"${fam.name}";font-style:${style};font-weight:${weight};` +
-          `font-display:swap;src:url(${href}) format("woff2")` +
+          `font-display:${fam.fontDisplay ?? 'swap'};src:url(${href}) format("woff2")` +
           (range ? `;unicode-range:${range}` : '') +
           `}`,
       )
@@ -413,7 +452,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     // for: a family covering only latin out of ['latin', 'greek'] needs no ranges at
     // all — its one set of fallback faces may go unscoped, exactly like a
     // single-subset config's.
-    if (rangesBySubset.size > 1) {
+    if (rangesBySubset.size > 1 || fam.subsetText) {
       const rangeless = [...rangesBySubset].filter(([, r]) => !r).map(([s]) => s)
       if (rangeless.length) {
         throw new Error(
@@ -459,7 +498,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       // Every fallback rule is single-line with exactly one closing brace, so this
       // appends the descriptor to each rule in the group.
       fallbackCss.push(
-        bySignature.size > 1
+        bySignature.size > 1 || fam.subsetText
           ? css.replaceAll('}', `;unicode-range:${group.ranges.join(', ')}}`)
           : css,
       )
@@ -487,6 +526,7 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     files,
     digests,
     preloads,
+    sourceRequests,
     realFaces: realFaces.length,
     fallbackFaces: fallbackCss.join('\n').split('@font-face').length - 1,
   }

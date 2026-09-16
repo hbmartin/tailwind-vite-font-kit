@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "doctor": "tss-fonts doctor",
+    "verify:preview": "node assert-preview.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

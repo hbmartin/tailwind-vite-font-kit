@@ -100,5 +100,9 @@ export function googleUrl(fam, log = () => {}, warn = log) {
     axes = pinned
     log(`  opsz axis detected -> pinned at ${pin} (removes the axis, ~45% smaller file)`)
   }
-  return `https://fonts.googleapis.com/css2?family=${fam.name.replace(/\s+/g, '+')}:${axes}&display=swap`
+  let url =
+    `https://fonts.googleapis.com/css2?family=${fam.name.replace(/\s+/g, '+')}:${axes}` +
+    `&display=${fam.fontDisplay ?? 'swap'}`
+  if (fam.subsetText !== undefined) url += `&text=${encodeURIComponent(fam.subsetText)}`
+  return url
 }

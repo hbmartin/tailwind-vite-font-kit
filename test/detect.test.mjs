@@ -20,3 +20,11 @@ test('familiesFromGoogleUrl defaults to [400] when the spec has no wght axis', (
   assert.equal(fams.length, 1)
   assert.deepEqual(fams[0].weights, [400])
 })
+
+test('familiesFromGoogleUrl preserves display and text parameters', () => {
+  const [family] = familiesFromGoogleUrl(
+    'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&display=optional&text=Hello%20world',
+  )
+  assert.equal(family.fontDisplay, 'optional')
+  assert.equal(family.subsetText, 'Hello world')
+})

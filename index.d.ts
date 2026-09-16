@@ -33,6 +33,22 @@ export interface FontFamily {
   preloadWeights?: number[]
   /** `'self-host'` (default) serves from your origin; `'cdn'` keeps Google's gstatic URL. */
   strategy?: 'self-host' | 'cdn'
+  /**
+   * Browser loading policy emitted in both the Google CSS request and the generated
+   * `@font-face`. Defaults to `'swap'`. `'optional'` can avoid a late swap entirely,
+   * but may keep the fallback for the whole first visit on a slow connection.
+   */
+  fontDisplay?: 'auto' | 'block' | 'swap' | 'fallback' | 'optional'
+  /**
+   * Ask Google Fonts for a glyph-optimized font using its `text=` API. Use only text
+   * that is known at build time; omitted characters cannot render in this family.
+   */
+  subsetText?: string
+  /**
+   * Metrics subset used for the fallback faces of a `subsetText` family. Defaults to
+   * the first configured `subsets` value.
+   */
+  subsetTextMetrics?: string
   /** Raw css2 axis spec, e.g. `'opsz,wght@9..144,500;9..144,700'`. Defaults to `wght@<weights>`. */
   axes?: string
   /**
@@ -113,6 +129,17 @@ export interface FontsOptions {
    * themselves; pass your own list to widen or narrow it.
    */
   preloadHeader?: boolean | { exclude?: string[] }
+  /**
+   * Inject font preload links into built HTML. `'auto'` (default) does so for plain
+   * Vite when Nitro is absent, preloads were generated, and `preloadHeader` is enabled.
+   * `true` always injects; `false` never does.
+   */
+  preloadHtml?: 'auto' | boolean
+  /**
+   * Maximum total unique preload bytes checked by `tss-fonts doctor`.
+   * One kB is 1024 bytes. Zero is a valid budget.
+   */
+  preloadBudgetKb?: number
   /**
    * Append two scoped `@utility` escape hatches to the generated stylesheet:
    * `leading-auto` and `prose-auto`, both of which set `line-height: normal` on a

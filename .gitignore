@@ -1,6 +1,9 @@
 node_modules
 .DS_Store
 test/fixture/dist
+test/fixture/dist-v7
+test/start-fixture/.output
+test/start-fixture/src/routeTree.gen.ts
 metrics.json
 cls-metrics.json
 coverage

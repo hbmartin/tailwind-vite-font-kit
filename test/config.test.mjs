@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadAndValidate, validateFamilies } from '../src/config.mjs'
+import { loadAndValidate, validateFamilies, validateOptions } from '../src/config.mjs'
 
 /** One valid family, with `extra` merged over it. */
 const fam = (extra) => [{ name: 'Manrope', themeVar: '--font-sans', weights: [400], ...extra }]
@@ -14,6 +14,29 @@ const fam = (extra) => [{ name: 'Manrope', themeVar: '--font-sans', weights: [40
 test('a valid family list is returned as-is', () => {
   const families = fam()
   assert.equal(validateFamilies(families, 'test'), families)
+})
+
+test('fontDisplay and explicit text options are validated', () => {
+  for (const fontDisplay of ['auto', 'block', 'swap', 'fallback', 'optional']) {
+    assert.doesNotThrow(() => validateFamilies(fam({ fontDisplay }), 'test'))
+  }
+  assert.throws(() => validateFamilies(fam({ fontDisplay: 'instant' }), 'test'), /fontDisplay/)
+  assert.doesNotThrow(() =>
+    validateFamilies(fam({ subsetText: 'Hello', subsetTextMetrics: 'latin' }), 'test'),
+  )
+  assert.throws(() => validateFamilies(fam({ subsetText: '' }), 'test'), /subsetText/)
+  assert.throws(() => validateFamilies(fam({ subsetTextMetrics: 'latin' }), 'test'), /without/)
+})
+
+test('preloadHtml and preloadBudgetKb accept their documented values', () => {
+  for (const preloadHtml of ['auto', true, false]) {
+    assert.doesNotThrow(() => validateOptions({ preloadHtml }, 'test'))
+  }
+  for (const preloadBudgetKb of [0, 12.5]) {
+    assert.doesNotThrow(() => validateOptions({ preloadBudgetKb }, 'test'))
+  }
+  assert.throws(() => validateOptions({ preloadHtml: 'yes' }, 'test'), /preloadHtml/)
+  assert.throws(() => validateOptions({ preloadBudgetKb: -1 }, 'test'), /preloadBudgetKb/)
 })
 
 test("opszPin accepts a positive number or 'auto', and nothing else", () => {

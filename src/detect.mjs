@@ -124,14 +124,21 @@ export function weightsFromSpec(spec) {
 /** Families referenced by a Google Fonts css2 URL. */
 export function familiesFromGoogleUrl(url) {
   const out = []
-  const qs = url.slice(url.indexOf('?') + 1)
-  for (const part of qs.split('&')) {
-    if (!part.startsWith('family=')) continue
-    const val = decodeURIComponent(part.slice('family='.length))
+  const params = new URL(url).searchParams
+  const fontDisplay = params.get('display') ?? undefined
+  const subsetText = params.get('text') ?? undefined
+  for (const val of params.getAll('family')) {
     const [rawName, spec = 'wght@400'] = val.split(':')
     const name = rawName.replace(/\+/g, ' ').trim()
     const { weights, axes, hasOpsz } = weightsFromSpec(spec)
-    out.push({ name, weights: weights.length ? weights : [400], axes, hasOpsz })
+    out.push({
+      name,
+      weights: weights.length ? weights : [400],
+      axes,
+      hasOpsz,
+      fontDisplay,
+      subsetText,
+    })
   }
   return out
 }
@@ -244,6 +251,8 @@ export function buildFontPlan({ cssText, flags }) {
       weights: fam.weights,
       axes: fam.axes ?? undefined,
       opszPin: fam.hasOpsz ? (themeVar === '--font-display' ? 48 : 16) : undefined,
+      fontDisplay: fam.fontDisplay,
+      subsetText: fam.subsetText,
       stack,
       preloadWeights: [],
       sourceUsages: usages.filter((u) => u.first.toLowerCase() === fam.name.toLowerCase()).length,

@@ -24,6 +24,14 @@ const MULTI_SUBSET_CSS2 =
     .replace('abc123.woff2', 'thai456.woff2')
     .replace('U+0000-00FF', 'U+0E00-0E7F')
 
+const TEXT_CSS2 = `@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/l/font?kit=text-optimized) format('woff2');
+  unicode-range: U+0048,U+0065,U+006C,U+006F;
+}`
+
 /** A css2 response naming an arbitrary family, so two configs can be told apart. */
 const css2For = (family) => CSS2.replace('Fakefam', family)
 
@@ -83,6 +91,90 @@ test('preloadWeights match a variable font-weight range like "100 900"', async (
   assert.equal(gen.preloads.length, 1, '400 sits inside 100–900, so the face must preload')
   assert.match(gen.preloads[0].href, /abc123\.woff2/)
   assert.equal(gen.realFaces, 1)
+})
+
+test('text optimization accepts unannotated CSS and content-addresses query downloads', async (t) => {
+  const bytes = new Uint8Array([0x77, 0x4f, 0x46, 0x32, 1, 2, 3])
+  const { outDir, calls } = sandbox(t, (url) =>
+    url.includes('fonts.googleapis.com')
+      ? new Response(TEXT_CSS2, { status: 200 })
+      : new Response(bytes, { status: 200 }),
+  )
+  const gen = await generate(
+    {
+      ...optsFor('Manrope'),
+      families: [
+        {
+          ...optsFor('Manrope').families[0],
+          strategy: 'self-host',
+          subsetText: 'Hello',
+          subsetTextMetrics: 'latin',
+          fontDisplay: 'optional',
+          preloadWeights: [400],
+        },
+      ],
+    },
+    outDir,
+  )
+  assert.match(calls[0], /[?&]text=Hello/)
+  assert.match(calls[0], /[?&]display=optional/)
+  assert.match(gen.files[0], /^manrope-[0-9a-f]{16}\.woff2$/)
+  assert.equal(gen.sourceRequests[0].url, calls[0])
+  const css = readFileSync(gen.cssPath, 'utf8')
+  assert.match(css, /font-display:optional/)
+  assert.match(css, /unicode-range:U\+0048,U\+0065,U\+006C,U\+006F/)
+  assert.match(css, /Manrope Fallback: Arial[^}]*unicode-range:U\+0048,U\+0065,U\+006C,U\+006F/)
+  const otherText = await generate(
+    {
+      ...optsFor('Manrope'),
+      families: [
+        {
+          ...optsFor('Manrope').families[0],
+          strategy: 'self-host',
+          subsetText: 'World',
+          subsetTextMetrics: 'latin',
+        },
+      ],
+    },
+    outDir,
+  )
+  assert.notEqual(gen.cssPath, otherText.cssPath, 'subsetText must invalidate the cache key')
+})
+
+test('self-hosting refuses bytes without the WOFF2 signature', async (t) => {
+  const { outDir } = sandbox(t, (url) =>
+    url.endsWith('.woff2')
+      ? new Response(new Uint8Array([0, 1, 2, 3]), { status: 200 })
+      : new Response(CSS2, { status: 200 }),
+  )
+  await assert.rejects(
+    () =>
+      generate(
+        {
+          ...optsFor('Fakefam'),
+          families: [{ ...optsFor('Fakefam').families[0], strategy: 'self-host' }],
+        },
+        outDir,
+      ),
+    /missing the wOF2 signature/,
+  )
+})
+
+test('every fontDisplay value is emitted and participates in cache invalidation', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(css2For('Manrope'), { status: 200 }))
+  const paths = new Set()
+  for (const fontDisplay of ['auto', 'block', 'swap', 'fallback', 'optional']) {
+    const generated = await generate(
+      {
+        ...optsFor('Manrope'),
+        families: [{ ...optsFor('Manrope').families[0], fontDisplay }],
+      },
+      outDir,
+    )
+    paths.add(generated.cssPath)
+    assert.match(readFileSync(generated.cssPath, 'utf8'), new RegExp(`font-display:${fontDisplay}`))
+  }
+  assert.equal(paths.size, 5)
 })
 
 // The cache is keyed on the config hash. If the CSS file is NOT keyed with it, a config

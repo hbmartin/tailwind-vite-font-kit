@@ -1,7 +1,5 @@
-// Minimal Vite + Tailwind v4 app. Deliberately NOT a TanStack Start app: this fixture
-// exists to exercise the generator and the Tailwind @import/@theme integration on every
-// push, in seconds, with no browser. The Start-specific surface (nitro routeRules, the
-// Link: preload header, SSR) is covered by the weekly job against the reference app.
+// Minimal plain Vite + Tailwind v4 app. It exercises generation, automatic HTML
+// preloads, and preview response headers. A separate pinned fixture covers Nitro/Start.
 import { defineConfig } from 'vite'
 import tailwindcss from '@tailwindcss/vite'
 import { fonts } from 'tailwind-vite-font-kit'

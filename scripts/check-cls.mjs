@@ -53,6 +53,32 @@ const widthSweep = existsSync(widthPath) ? readJson(widthPath, 'the width sweep'
 if (!finiteNonnegative(threshold)) errors.push(`invalid threshold: ${JSON.stringify(rawThreshold)}`)
 if (!Array.isArray(report.results)) errors.push('cls.json results must be an array')
 
+const staticAudit = report.staticAudit
+const documentPreloads = [
+  ...(Array.isArray(staticAudit?.headerPreloadFontLinks) ? staticAudit.headerPreloadFontLinks : []),
+  ...(Array.isArray(staticAudit?.headPreloadFontLinks) ? staticAudit.headPreloadFontLinks : []),
+]
+if (!staticAudit) {
+  errors.push('the static font delivery audit is missing')
+} else {
+  if (!documentPreloads.length) errors.push('the document carries no font preload')
+  else if (!documentPreloads.some((link) => /\bcrossorigin\b/i.test(link))) {
+    errors.push('the document font preload is missing crossorigin')
+  }
+  const font = staticAudit.sampleFontResponse
+  if (!font || font.error) {
+    errors.push(`the sample font response is unavailable${font?.error ? ` (${font.error})` : ''}`)
+  } else {
+    if (font.status !== 200) errors.push(`the sample font response returned HTTP ${font.status}`)
+    if (!/\bimmutable\b/i.test(font.cacheControl)) {
+      errors.push('the sample font response is missing immutable cache-control')
+    }
+    if (!font.cors) errors.push('the sample font response is missing CORS')
+    if (font.link)
+      errors.push('the sample font response incorrectly carries the document preload Link')
+  }
+}
+
 const grouped = new Map()
 for (const result of Array.isArray(report.results) ? report.results : []) {
   const key = `${result.viewport}/${result.probe}`
