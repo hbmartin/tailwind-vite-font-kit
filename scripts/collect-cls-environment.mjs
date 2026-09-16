@@ -10,8 +10,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const referenceApp = resolve(process.argv[2] || 'reference-app')
 const outputPath = resolve(process.argv[3] || 'cls-environment.json')
 const kitRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const run = (command, args, cwd = kitRoot) =>
-  execFileSync(command, args, { cwd, encoding: 'utf8' }).trim()
+const run = (command, args, cwd = kitRoot) => {
+  // Node's test coverage is inherited by child processes. Capturing `pnpm --version`
+  // under the unit test must not add pnpm's 5 MB bundled CLI to this package's coverage.
+  const env = { ...process.env }
+  delete env.NODE_V8_COVERAGE
+  return execFileSync(command, args, { cwd, env, encoding: 'utf8' }).trim()
+}
+const errors = {}
+const capture = (key, action) => {
+  try {
+    return action()
+  } catch (error) {
+    errors[key] = { message: error.message, code: error.code ?? null }
+    return null
+  }
+}
 const packageVersionFor = (entry, expectedName) => {
   let directory = dirname(entry)
   while (true) {
@@ -33,15 +47,31 @@ const packageVersionFor = (entry, expectedName) => {
 }
 
 const requireFromReference = createRequire(join(referenceApp, 'package.json'))
-const puppeteerEntry = requireFromReference.resolve('puppeteer')
-const puppeteerModule = await import(pathToFileURL(puppeteerEntry).href)
-const puppeteer = puppeteerModule.default || puppeteerModule
-const browserPath = puppeteer.executablePath()
-const puppeteerVersion = packageVersionFor(puppeteerEntry, 'puppeteer')
+const puppeteerEntry = capture('runtime.puppeteer.entry', () =>
+  requireFromReference.resolve('puppeteer'),
+)
+/** @type {any} */
+let puppeteer = null
+if (puppeteerEntry) {
+  try {
+    const puppeteerModule = await import(pathToFileURL(puppeteerEntry).href)
+    puppeteer = puppeteerModule.default || puppeteerModule
+  } catch (error) {
+    errors['runtime.puppeteer.import'] = { message: error.message, code: error.code ?? null }
+  }
+}
+const browserPath = puppeteer
+  ? capture('runtime.browser.path', () => puppeteer.executablePath())
+  : null
+const puppeteerVersion = puppeteerEntry
+  ? capture('runtime.puppeteer.version', () => packageVersionFor(puppeteerEntry, 'puppeteer'))
+  : null
 
 const environment = {
-  kitSha: process.env.GITHUB_SHA || run('git', ['rev-parse', 'HEAD']),
-  referenceAppSha: run('git', ['rev-parse', 'HEAD'], referenceApp),
+  kitSha: process.env.GITHUB_SHA || capture('kitSha', () => run('git', ['rev-parse', 'HEAD'])),
+  referenceAppSha: capture('referenceAppSha', () =>
+    run('git', ['rev-parse', 'HEAD'], referenceApp),
+  ),
   referenceAppRemote: process.env.REFERENCE_APP || null,
   runner: {
     os: process.env.RUNNER_OS || process.platform,
@@ -51,10 +81,13 @@ const environment = {
   },
   runtime: {
     node: process.version,
-    pnpm: run('pnpm', ['--version']),
+    pnpm: capture('runtime.pnpm', () => run('pnpm', ['--version'])),
     puppeteer: puppeteerVersion,
-    browser: run(browserPath, ['--version']),
+    browser: browserPath
+      ? capture('runtime.browser.version', () => run(browserPath, ['--version']))
+      : null,
   },
+  metadataErrors: errors,
 }
 
 writeFileSync(outputPath, JSON.stringify(environment, null, 2))

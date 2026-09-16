@@ -112,6 +112,16 @@ test('init migrates the CSS, captures the config, and wires vite.config', (t) =>
   assert.match(vite, /fonts\(\),\s*\n\s*tailwindcss\(\)/, 'fonts() must precede tailwindcss()')
 })
 
+test('adopt preserves Google display and text request parameters', (t) => {
+  const root = project(t, {
+    'src/styles.css': ENTRY.replace('&display=swap', '&display=optional&text=Hello%20world%21'),
+  })
+  assert.equal(run(root, 'adopt').status, 0)
+  const config = read(root, 'fonts.config.mjs')
+  assert.match(config, /fontDisplay: 'optional'/)
+  assert.match(config, /subsetText: "Hello world!"/)
+})
+
 test('--dry-run writes nothing at all', (t) => {
   const root = project(t, { 'vite.config.ts': VITE_CONFIG })
   const { status, out } = run(root, 'init', '--dry-run')

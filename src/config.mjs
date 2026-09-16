@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url'
 import { weightsFromSpec } from './detect.mjs'
 
 const STRATEGIES = ['self-host', 'cdn']
+const FONT_DISPLAYS = ['auto', 'block', 'swap', 'fallback', 'optional']
 
 // Tailwind's theme namespace for font families. A var outside it (`--fonts-sans`, or
 // `font-sans` with the dashes forgotten) produces a `@theme` block that Tailwind accepts
@@ -94,6 +95,25 @@ export function validateFamilies(families, source) {
     if (fam.strategy !== undefined && !STRATEGIES.includes(fam.strategy)) {
       fail(`${at} has strategy ${JSON.stringify(fam.strategy)}; expected 'self-host' or 'cdn'.`)
     }
+    if (fam.fontDisplay !== undefined && !FONT_DISPLAYS.includes(fam.fontDisplay)) {
+      fail(
+        `${at} has fontDisplay ${JSON.stringify(fam.fontDisplay)}; expected ` +
+          FONT_DISPLAYS.map((v) => `'${v}'`).join(', ') +
+          '.',
+      )
+    }
+    if (fam.subsetText !== undefined && (typeof fam.subsetText !== 'string' || !fam.subsetText)) {
+      fail(`${at} has a \`subsetText\` that is not a non-empty string.`)
+    }
+    if (
+      fam.subsetTextMetrics !== undefined &&
+      (typeof fam.subsetTextMetrics !== 'string' || !fam.subsetTextMetrics.trim())
+    ) {
+      fail(`${at} has a \`subsetTextMetrics\` that is not a non-empty subset name.`)
+    }
+    if (fam.subsetTextMetrics !== undefined && fam.subsetText === undefined) {
+      fail(`${at} sets \`subsetTextMetrics\` without \`subsetText\`.`)
+    }
     if (
       fam.opszPin !== undefined &&
       fam.opszPin !== 'auto' &&
@@ -125,6 +145,35 @@ export function validateFamilies(families, source) {
   })
 
   return /** @type {import('../index.d.ts').FontFamily[]} */ (families)
+}
+
+/** Validate plugin-wide options after config-file and inline values have been merged. */
+export function validateOptions(options, source) {
+  const fail = (msg) => {
+    throw new Error(`[tss-fonts] ${source}: ${msg}`)
+  }
+  if (
+    options.preloadHtml !== undefined &&
+    options.preloadHtml !== 'auto' &&
+    typeof options.preloadHtml !== 'boolean'
+  ) {
+    fail(`\`preloadHtml\` must be 'auto', true, or false.`)
+  }
+  if (
+    options.preloadBudgetKb !== undefined &&
+    (!Number.isFinite(options.preloadBudgetKb) || options.preloadBudgetKb < 0)
+  ) {
+    fail(`\`preloadBudgetKb\` must be a non-negative finite number.`)
+  }
+  if (
+    options.subsets !== undefined &&
+    (!Array.isArray(options.subsets) ||
+      !options.subsets.length ||
+      options.subsets.some((subset) => typeof subset !== 'string' || !subset.trim()))
+  ) {
+    fail(`\`subsets\` must be a non-empty array of subset names.`)
+  }
+  return options
 }
 
 /**

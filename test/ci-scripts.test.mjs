@@ -10,6 +10,19 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const run = (command, args, cwd, env = process.env) =>
   execFileSync(command, args, { cwd, env, encoding: 'utf8' })
 
+const GOOD_STATIC_AUDIT = {
+  headerPreloadFontLinks: [
+    '</fonts/manrope.woff2>; rel=preload; as=font; type=font/woff2; crossorigin',
+  ],
+  headPreloadFontLinks: [],
+  sampleFontResponse: {
+    status: 200,
+    cacheControl: 'public, max-age=31536000, immutable',
+    cors: '*',
+    link: '',
+  },
+}
+
 test('write-note keeps metrics and CLS histories on separate refs', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'font-kit-notes-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -78,6 +91,7 @@ test('check-cls enforces the exact six probes, three runs, and loaded fallbacks'
     ],
   }
   const report = {
+    staticAudit: GOOD_STATIC_AUDIT,
     results: keys.map(([viewport, probe]) => ({
       viewport,
       probe,
@@ -136,6 +150,7 @@ test('check-cls reports an unusable audit as an audit failure, not a missing fal
     ['mobile', 'normal'],
   ]
   const report = {
+    staticAudit: GOOD_STATIC_AUDIT,
     results: keys.map(([viewport, probe]) => ({
       viewport,
       probe,
@@ -151,7 +166,7 @@ test('check-cls reports an unusable audit as an audit failure, not a missing fal
   const outputPath = join(dir, 'metrics.json')
   writeFileSync(reportPath, JSON.stringify(report))
   const result = spawnSync(
-    'node',
+    process.execPath,
     [
       join(root, 'scripts/check-cls.mjs'),
       reportPath,
@@ -193,6 +208,7 @@ test('check-cls treats an empty THRESHOLD as unset, and still writes a result on
   writeFileSync(
     reportPath,
     JSON.stringify({
+      staticAudit: GOOD_STATIC_AUDIT,
       results: keys.map(([viewport, probe]) => ({
         viewport,
         probe,
@@ -222,6 +238,88 @@ test('check-cls treats an empty THRESHOLD as unset, and still writes a result on
   const { gate } = JSON.parse(readFileSync(outputPath))
   assert.equal(gate.passed, false)
   assert.match(gate.errors.join('\n'), /could not read the browser report/)
+})
+
+test('check-cls gates preload and font response delivery headers', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'font-kit-delivery-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const keys = [
+    ['desktop', 'hero'],
+    ['desktop', 'tailwind'],
+    ['desktop', 'normal'],
+    ['mobile', 'hero'],
+    ['mobile', 'tailwind'],
+    ['mobile', 'normal'],
+  ]
+  const report = {
+    staticAudit: structuredClone(GOOD_STATIC_AUDIT),
+    results: keys.map(([viewport, probe]) => ({
+      viewport,
+      probe,
+      clsMedian: 0,
+      clsAll: [0, 0, 0],
+      audit:
+        viewport === 'desktop' && probe === 'hero'
+          ? {
+              fontFaces: [{ family: 'Manrope Fallback: Arial' }],
+              fontFaceSet: [{ family: 'Manrope Fallback: Arial', status: 'loaded' }],
+            }
+          : null,
+    })),
+  }
+  const input = join(dir, 'cls.json')
+  const output = join(dir, 'metrics.json')
+  const script = join(root, 'scripts/check-cls.mjs')
+  const execute = () => {
+    writeFileSync(input, JSON.stringify(report))
+    return spawnSync(
+      'node',
+      [script, input, join(dir, 'missing-env'), join(dir, 'missing-width'), output],
+      { cwd: dir, env: { ...process.env, THRESHOLD: '0.02' } },
+    )
+  }
+  assert.equal(execute().status, 0)
+  const failures = [
+    [(audit) => (audit.headerPreloadFontLinks = []), /no font preload/],
+    [
+      (audit) => (audit.headerPreloadFontLinks = ['</fonts/manrope.woff2>; rel=preload; as=font']),
+      /missing crossorigin/,
+    ],
+    [(audit) => (audit.sampleFontResponse.status = 404), /returned HTTP 404/],
+    [(audit) => (audit.sampleFontResponse.cacheControl = 'public'), /immutable cache-control/],
+    [(audit) => (audit.sampleFontResponse.cors = ''), /missing CORS/],
+    [
+      (audit) => (audit.sampleFontResponse.link = '</fonts/manrope.woff2>; rel=preload'),
+      /incorrectly carries/,
+    ],
+  ]
+  for (const [breakAudit, expected] of failures) {
+    report.staticAudit = structuredClone(GOOD_STATIC_AUDIT)
+    breakAudit(report.staticAudit)
+    assert.equal(execute().status, 1)
+    assert.match(JSON.parse(readFileSync(output)).gate.errors.join('\n'), expected)
+  }
+})
+
+test('environment capture records unavailable metadata without aborting', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'font-kit-environment-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const output = join(dir, 'environment.json')
+  const result = spawnSync(
+    process.execPath,
+    [join(root, 'scripts/collect-cls-environment.mjs'), join(dir, 'missing-app'), output],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      // Keep this resilience test independent of Corepack. Under Node's aggregate
+      // coverage, launching pnpm here would count pnpm's bundled 5 MB CLI as project code.
+      env: { ...process.env, PATH: '/usr/bin:/bin', GITHUB_SHA: 'test-sha' },
+    },
+  )
+  assert.equal(result.status, 0, result.stderr)
+  const environment = JSON.parse(readFileSync(output, 'utf8'))
+  assert.equal(environment.runtime.puppeteer, null)
+  assert.ok(environment.metadataErrors['runtime.puppeteer.entry'])
 })
 
 test('assert-invariants fails on a mismatched alias pair and on an orphaned alias face', (t) => {

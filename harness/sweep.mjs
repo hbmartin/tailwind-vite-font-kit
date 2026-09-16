@@ -138,6 +138,26 @@ async function staticAudit(url) {
   for (const h of hrefs) await pull(h)
   const all = cssTexts.join('\n')
   const faceBlocks = [...all.matchAll(/@font-face\s*\{[^}]*\}/g)].map((m) => m[0])
+  const sampleFontHref = faceBlocks
+    .map((block) => /src:[^;}]*url\(([^)]+)\)/.exec(block)?.[1]?.replace(/^['"]|['"]$/g, ''))
+    .find((href) => href && !href.startsWith('local('))
+  let sampleFontResponse = null
+  if (sampleFontHref) {
+    const fontUrl = new globalThis.URL(sampleFontHref, origin).href
+    try {
+      const fontResponse = await fetch(fontUrl)
+      await fontResponse.arrayBuffer()
+      sampleFontResponse = {
+        url: fontUrl,
+        status: fontResponse.status,
+        cacheControl: fontResponse.headers.get('cache-control') || '',
+        cors: fontResponse.headers.get('access-control-allow-origin') || '',
+        link: fontResponse.headers.get('link') || '',
+      }
+    } catch (error) {
+      sampleFontResponse = { url: fontUrl, error: error.message }
+    }
+  }
   return {
     stylesheetHrefs: hrefs,
     inlineStyleTags: inlineStyles.length,
@@ -163,6 +183,7 @@ async function staticAudit(url) {
       .map((m) => m[0].slice(0, 200)),
     navigationLinkHeader: navigationLinkHeader.slice(0, 2000),
     headerPreloadFontLinks,
+    sampleFontResponse,
   }
 }
 

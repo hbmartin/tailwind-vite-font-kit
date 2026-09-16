@@ -80,6 +80,7 @@ export default {
       stack: ['ui-sans-serif', 'system-ui', 'sans-serif'],
       preloadWeights: [400],
       strategy: 'self-host',             // or 'cdn' — per family
+      fontDisplay: 'swap',               // auto | block | swap | fallback | optional
     },
     {
       name: 'Fraunces',
@@ -89,10 +90,15 @@ export default {
       opszPin: 48,                       // or 'auto' — see "opsz" below
       stack: ['Georgia', 'serif'],
       preloadWeights: [],
+      subsetText: 'A known display headline', // optional Google text= glyph optimization
+      subsetTextMetrics: 'latin',        // fallback metrics; defaults to subsets[0]
     },
   ],
   assets: 'emit',    // 'emit' = nothing in your source tree | or a dir path, e.g. 'public/fonts'
   output: 'cache',   // 'cache' = node_modules/.cache | 'commit' = .tss-fonts/, hermetic CI
+  subsets: ['latin'],
+  preloadHtml: 'auto', // plain Vite HTML fallback | true = always | false = never
+  preloadBudgetKb: 20, // optional `tss-fonts doctor` limit; 1 kB = 1024 bytes
 }
 ```
 
@@ -113,11 +119,13 @@ is normalized, and `publicPath: '/'` serves fonts from the bundle root. At the b
 the fonts share a namespace with documents, so the plugin deliberately omits its font-scoped
 Nitro caching/CORS rule and font-response preload exclusion rather than matching the whole app.
 
-**Nitro is what delivers the preloads.** The `Link:` header and the `immutable` caching on
-`/fonts/**` both ship as Nitro route rules, which is what makes this zero-app-edit. On
-plain Vite that config key is ignored: the fonts still generate, emit and serve, you just
-silently get neither. The plugin warns once when it does not find Nitro. To preload
-without it, set `preloadHeader: false` and render the links yourself from `virtual:fonts`.
+**Nitro is the automatic production-header path.** It delivers the `Link:` header and
+`immutable`/CORS headers on `/fonts/**`. In a plain Vite app, `preloadHtml: 'auto'` injects
+the same generated preloads into built HTML. Vite dev serves generated font bytes with the
+right headers, and `vite preview` adds them before serving built assets; production cache
+headers are still the deployment host's responsibility. `preloadHtml: true` injects even
+with Nitro, while `false` never does. `preloadHeader: false` plus the default HTML behavior
+preserves the manual escape hatch: render `fontPreloads` from `virtual:fonts` yourself.
 
 ---
 
@@ -139,9 +147,9 @@ Every one of these fails **silently** if you get it wrong, which is the reason t
 | **`/fonts/**` served `immutable`** | Nitro serves `public/` with no cache-control at all. |
 | Desktop Chrome **User-Agent** on the CSS fetch | Without it Google returns legacy TTF with every subset in one file. |
 
-Preloads ship as an HTTP **`Link:` response header**, not a `<link>` in `head()`. That is what makes
-this zero-app-edit, and it is order-free — React 19 hoists stylesheets above any `<link>` you write.
-Measured equivalent: 608 ms FCP / 586 ms fonts (header) vs 604 / 579 (JSX), 9 runs at 150 ms RTT.
+Under Nitro, preloads ship as an HTTP **`Link:` response header**. Plain Vite receives
+equivalent `<link>` elements through `transformIndexHtml`. Measured equivalent: 608 ms FCP /
+586 ms fonts (header) vs 604 / 579 (HTML), 9 runs at 150 ms RTT.
 
 ### The preload budget
 
@@ -152,6 +160,44 @@ Preloading is zero-sum against your render-blocking stylesheet.
 
 Preload the body face. Add the display face only if the headline is your LCP element — and note that
 pinning `opsz` often shrinks it enough to change that answer, so re-measure.
+
+Set `preloadBudgetKb` to make `tss-fonts doctor` fail when the exact unique preload bytes
+exceed a project budget. With no budget, doctor reports the bytes without failing.
+
+### Glyph subsetting
+
+`subsets` selects Google's script blocks such as `latin` and `thai`; it does not inspect
+your source. For text known at build time, `subsetText` sends Google's `text=` parameter and
+can reduce a display face dramatically. The returned exact `unicode-range` is preserved,
+and `subsetTextMetrics` chooses the script used to build metric fallbacks (defaulting to the
+first configured subset).
+
+This is intentionally explicit: every glyph the family may render must appear in
+`subsetText`. Dynamic content, localization, user input, case changes, punctuation, and
+accessibility text can otherwise fall through to another font. There is no automatic source
+scanner.
+
+### `font-display`
+
+`fontDisplay` is per family and defaults to `swap`, preserving existing behavior. The value
+is applied to both the Google request and emitted `@font-face`. `optional` can eliminate a
+late swap—metric-matched fallbacks make that a defensible zero-shift policy—but on a slow
+first visit the web font may not appear at all. Choose it as a typography policy rather than
+assuming it is universally faster.
+
+### Doctor
+
+```bash
+npx tss-fonts doctor
+npx tss-fonts doctor --cwd path/to/app
+```
+
+Doctor resolves the project's real Vite build config and generates/downloads what the build
+would use. It checks plugin presence and order, Tailwind entry discovery, `@theme inline`
+conflicts, Nitro/HTML preload delivery, production caching boundaries, `opsz` requests,
+generated assets, and exact unique preload bytes. Definite failures exit nonzero; valid
+plain-Vite fallbacks, host-controlled production caching, and implicit `opsz` defaults are
+warnings.
 
 ### opsz
 
@@ -247,4 +293,6 @@ viewports was shifting 51 px at 2 of 36 container widths.
 
 The weekly monitor gates three runs of `hero`, `tailwind`, and `normal` at desktop and mobile sizes
 on `ubuntu-24.04`. It also checks that the sans and serif fallback faces actually loaded before the
-delayed web fonts. The broader hero width sweep is reported for diagnosis but does not gate.
+delayed web fonts, that the document preload carries `crossorigin`, and that a real font response
+has immutable caching and CORS without repeating the document `Link`. The broader hero width sweep
+is reported for diagnosis but does not gate.

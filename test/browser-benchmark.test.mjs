@@ -74,7 +74,7 @@ function fontaineFixture(candidate = 'baseline') {
     experiment: {
       ...row.experiment,
       assets: row.experiment.assets.map((asset) => ({ ...asset, servedHash: 'c'.repeat(64) })),
-      fontaine: { path: '/assets/styles.css', cssHash: 'f'.repeat(64), applied: true },
+      fontaine: { path: '/assets/styles.css', cssHash: 'c'.repeat(64), applied: true },
     },
     before: {
       ...row.before,
@@ -408,11 +408,17 @@ test('Fontaine replacement identity and non-kit served CSS must match between ru
   assert.equal(compare(baseline, candidate, { mode: 'diagnostic' }).accepted, null)
   candidate.summary[0].experiment.fontaine.cssHash = 'e'.repeat(64)
   assert.throws(() => compare(baseline, candidate, { mode: 'diagnostic' }), /Fontaine CSS mismatch/)
-  candidate.summary[0].experiment.fontaine.cssHash = 'f'.repeat(64)
+  candidate.summary[0].experiment.fontaine.cssHash = 'c'.repeat(64)
   candidate.summary[0].experiment.assets[0].servedHash = 'd'.repeat(64)
   assert.throws(
     () => compare(baseline, candidate, { mode: 'diagnostic' }),
     /Non-kit served asset mismatch/,
+  )
+  const unequalHashes = fontaineFixture()
+  unequalHashes[0].experiment.fontaine.cssHash = 'f'.repeat(64)
+  assert.throws(
+    () => validate(unequalHashes, { cases: fontaineCases }),
+    /Fontaine CSS was not applied/,
   )
   const unapplied = fontaineFixture()
   unapplied.forEach((row) => {

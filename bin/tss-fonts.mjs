@@ -79,6 +79,8 @@ ${c.b('tss-fonts')} — wiring for tailwind-vite-font-kit
           point hand-written font-family rules at the theme var.
   ${c.b('init')}    adopt, plus write fonts.config.mjs and add fonts() to vite.config.ts.
   ${c.b('opsz')}    measure a family's optical-size axis and recommend an opszPin.
+  ${c.b('doctor')}  resolve the real Vite config, generate fonts, and check delivery,
+          conflicts, assets, opsz pinning, and the preload byte budget.
   ${c.b('early-hints')}
           write src/server.ts, a TanStack Start entry that ships the preloads as
           103 Early Hints — the only mechanism that beats a slow route loader.
@@ -97,8 +99,20 @@ ${c.b('tss-fonts opsz')} <Family> [--sizes 16,24,48,96] [--weights 400,700] [--w
 `)
   process.exit(0)
 }
-if (cmd !== 'adopt' && cmd !== 'init' && cmd !== 'opsz' && cmd !== 'early-hints') {
+if (
+  cmd !== 'adopt' &&
+  cmd !== 'init' &&
+  cmd !== 'opsz' &&
+  cmd !== 'doctor' &&
+  cmd !== 'early-hints'
+) {
   die(`unknown command "${cmd}". Try \`tss-fonts help\`.`)
+}
+
+if (cmd === 'doctor') {
+  const { runDoctor } = await import('../src/doctor.mjs')
+  const result = await runDoctor({ root })
+  process.exit(result.exitCode)
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +659,8 @@ function renderConfig(fams) {
           `      weights: [${f.weights.join(', ')}],\n` +
           (f.axes ? `      axes: '${f.axes}',\n` : '') +
           (f.opszPin ? `      opszPin: ${f.opszPin},\n` : '') +
+          (f.fontDisplay ? `      fontDisplay: '${f.fontDisplay}',\n` : '') +
+          (f.subsetText ? `      subsetText: ${JSON.stringify(f.subsetText)},\n` : '') +
           `      stack: [${(f.stack ?? []).map((s) => `'${s}'`).join(', ')}],\n` +
           // Preloading is zero-sum against the render-blocking stylesheet:
           // FCP cost ~= preloaded bytes / bandwidth. Body face only, by default.

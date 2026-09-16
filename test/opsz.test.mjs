@@ -112,3 +112,16 @@ test('spaces in a family name become +', () => {
     /family=Plus\+Jakarta\+Sans/,
   )
 })
+
+test('googleUrl carries every font-display policy and encoded subset text', () => {
+  for (const fontDisplay of ['auto', 'block', 'swap', 'fallback', 'optional']) {
+    const url = googleUrl({
+      name: 'Manrope',
+      weights: [400],
+      fontDisplay,
+      subsetText: 'Hello & café',
+    })
+    assert.match(url, new RegExp(`display=${fontDisplay}`))
+    assert.equal(new URL(url).searchParams.get('text'), 'Hello & café')
+  }
+})

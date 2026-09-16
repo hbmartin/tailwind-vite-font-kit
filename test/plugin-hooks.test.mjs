@@ -510,12 +510,21 @@ test('a config that default-exports the families array is named as the mistake',
 // On plain Vite the `nitro` config key is simply ignored: no preloads, no immutable
 // caching, no error. "It works but slower than the README claims" is exactly the kind of
 // silent degradation this package exists to stop, so it says so once.
-test('a build without Nitro says the preload header was not applied', async (t) => {
+test('a build without Nitro reports the HTML fallback and production caching boundary', async (t) => {
   const warned = captureWarnings(t)
   const { plugin } = await routeRules(t)
   plugin.configResolved({ plugins: [{ name: 'vite:css' }, { name: '@tailwindcss/vite' }] })
   assert.match(warned.join('\n'), /no Nitro plugin found/)
-  assert.match(warned.join('\n'), /virtual:fonts/, 'it should point at the way out')
+  assert.match(warned.join('\n'), /injected into HTML/)
+})
+
+test('plain Vite self-hosting names the production caching responsibility', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t, {
+    families: [{ ...FAMILY, strategy: 'self-host' }],
+  })
+  plugin.configResolved({ plugins: [{ name: 'vite:css' }] })
+  assert.match(warned.join('\n'), /deployment host/)
 })
 
 test('a build with Nitro stays quiet', async (t) => {
@@ -530,6 +539,55 @@ test('preloadHeader: false is a deliberate choice, not a missing Nitro', async (
   const { plugin } = await routeRules(t, { preloadHeader: false })
   plugin.configResolved({ plugins: [{ name: 'vite:css' }] })
   assert.deepEqual(warned, [])
+})
+
+test('HTML preload injection follows auto/true/false and Nitro rules', async (t) => {
+  captureWarnings(t)
+  const cases = [
+    { options: {}, nitro: false, expected: 1 },
+    { options: {}, nitro: true, expected: 0 },
+    { options: { preloadHtml: true }, nitro: true, expected: 1 },
+    { options: { preloadHtml: false }, nitro: false, expected: 0 },
+    { options: { preloadHeader: false }, nitro: false, expected: 0 },
+  ]
+  for (const item of cases) {
+    const { plugin } = await routeRules(t, item.options)
+    plugin.configResolved({ plugins: item.nitro ? [{ name: 'vite:nitro' }] : [] })
+    const result = plugin.transformIndexHtml('<html><head></head></html>')
+    assert.equal(result?.length ?? 0, item.expected)
+  }
+})
+
+test('HTML preload injection deduplicates a matching existing link', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = plugin.transformIndexHtml('<html><head></head></html>')
+  const html = `<link href="${attrs.href}" as="font" rel="preload" crossorigin="anonymous">`
+  assert.equal(plugin.transformIndexHtml(html), undefined)
+})
+
+test('HTML preload deduplication understands escaped query-string hrefs', async (t) => {
+  captureWarnings(t)
+  const root = sandbox(t)
+  globalThis.fetch = async () =>
+    new Response(`@font-face {
+      font-family: 'Manrope'; font-style: normal; font-weight: 400;
+      src: url(https://fonts.gstatic.com/l/font?kit=abc&skey=def) format('woff2');
+      unicode-range: U+0041;
+    }`)
+  const plugin = fonts({
+    families: [{ ...FAMILY, subsetText: 'A' }],
+    silent: true,
+  })
+  await plugin.config({ root }, { command: 'build' })
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = plugin.transformIndexHtml('<head></head>')
+  const escaped = attrs.href.replaceAll('&', '&amp;')
+  assert.equal(
+    plugin.transformIndexHtml(`<link rel="preload" as="font" href="${escaped}">`),
+    undefined,
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -636,6 +694,25 @@ test('the bundle-root dev middleware serves only generated woff2 requests', asyn
   assert.equal(request(fontPath).nexted, false)
   assert.equal(request('/assets/index.js').nexted, true)
   assert.equal(request('/not-a-generated-font.woff2').nexted, true)
+})
+
+test('preview middleware adds immutable caching and CORS before static serving', async (t) => {
+  const plugin = await built(t)
+  let middleware
+  plugin.configurePreviewServer({
+    middlewares: { use: (fn) => (middleware = fn) },
+  })
+  const [, href] = /"href":"([^"]+\.woff2)"/.exec(plugin.load('\0virtual:fonts'))
+  const headers = {}
+  let nexted = false
+  middleware(
+    { url: new URL(href, 'http://vite.dev').pathname },
+    { setHeader: (key, value) => (headers[key] = value) },
+    () => (nexted = true),
+  )
+  assert.equal(nexted, true, 'Vite still serves the built response body')
+  assert.match(headers['cache-control'], /immutable/)
+  assert.equal(headers['access-control-allow-origin'], '*')
 })
 
 // ---------------------------------------------------------------------------
