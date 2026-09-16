@@ -137,7 +137,10 @@ export function validate(
             /^[a-f0-9]{64}$/.test(fontaine?.cssHash ?? '') &&
             fontaine?.applied === true &&
             r.experiment.assets.some(
-              (a) => a.path.split('?')[0] === fontaine.path && a.type.includes('text/css'),
+              (a) =>
+                a.path.split('?')[0] === fontaine.path &&
+                a.type.includes('text/css') &&
+                a.servedHash === fontaine.cssHash,
             ),
           `${r.id}: Fontaine CSS was not applied`,
         )
