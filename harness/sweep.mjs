@@ -6,6 +6,7 @@
 
 import puppeteer from 'puppeteer'
 import { writeFileSync } from 'node:fs'
+import { staticAudit } from './static-audit.mjs'
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, arr) => {
@@ -98,94 +99,6 @@ const RUNTIME_AUDIT = `(() => {
     preloadLinks: [...document.querySelectorAll('link[rel=preload][as=font]')].map(l => ({href:l.getAttribute('href'),crossorigin:l.getAttribute('crossorigin')})),
     headStyleTags: document.querySelectorAll('head style').length };
 })()`
-
-// Follow the served HTML -> stylesheets -> @import chain in Node so we can read
-// cross-origin CSS the page itself cannot introspect.
-async function staticAudit(url) {
-  const response = await fetch(url)
-  const html = await response.text()
-  const navigationLinkHeader = response.headers.get('link') || ''
-  const headerPreloadFontLinks = navigationLinkHeader
-    .split(/,(?=\s*<)/)
-    .filter((link) => /\brel\s*=\s*["']?preload/i.test(link) && /\bas\s*=\s*["']?font/i.test(link))
-    .map((link) => link.trim().slice(0, 300))
-  const hrefs = [
-    ...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/g),
-  ].map((m) => m[1])
-  const inlineStyles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1])
-  const seen = new Set()
-  const cssTexts = [...inlineStyles]
-  const origin = new globalThis.URL(url).origin
-  async function pull(href, depth = 0) {
-    if (depth > 3) return
-    const abs = href.startsWith('http') ? href : origin + href
-    if (seen.has(abs)) return
-    seen.add(abs)
-    try {
-      const t = await fetch(abs, {
-        headers: {
-          'user-agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-        },
-      }).then((r) => r.text())
-      cssTexts.push(t)
-      for (const m of t.matchAll(/@import\s+(?:url\()?["']?([^"')]+)["']?\)?/g))
-        await pull(m[1], depth + 1)
-    } catch {
-      /* ignore */
-    }
-  }
-  for (const h of hrefs) await pull(h)
-  const all = cssTexts.join('\n')
-  const faceBlocks = [...all.matchAll(/@font-face\s*\{[^}]*\}/g)].map((m) => m[0])
-  const sampleFontHref = faceBlocks
-    .map((block) => /src:[^;}]*url\(([^)]+)\)/.exec(block)?.[1]?.replace(/^['"]|['"]$/g, ''))
-    .find((href) => href && !href.startsWith('local('))
-  let sampleFontResponse = null
-  if (sampleFontHref) {
-    const fontUrl = new globalThis.URL(sampleFontHref, origin).href
-    try {
-      const fontResponse = await fetch(fontUrl)
-      await fontResponse.arrayBuffer()
-      sampleFontResponse = {
-        url: fontUrl,
-        status: fontResponse.status,
-        cacheControl: fontResponse.headers.get('cache-control') || '',
-        cors: fontResponse.headers.get('access-control-allow-origin') || '',
-        link: fontResponse.headers.get('link') || '',
-      }
-    } catch (error) {
-      sampleFontResponse = { url: fontUrl, error: error.message }
-    }
-  }
-  return {
-    stylesheetHrefs: hrefs,
-    inlineStyleTags: inlineStyles.length,
-    totalFontFaceBlocks: faceBlocks.length,
-    facesWithSizeAdjust: faceBlocks.filter((b) => /size-adjust/.test(b)).length,
-    facesWithAscentOverride: faceBlocks.filter((b) => /ascent-override/.test(b)).length,
-    facesWithLocalSrc: faceBlocks.filter((b) => /local\(/.test(b)).length,
-    supportsGuards: (all.match(/@supports\s*\([^)]*ascent-override/g) || []).length,
-    fontFamiliesDeclared: [
-      ...new Set(
-        faceBlocks
-          .map((b) => (b.match(/font-family:\s*([^;]+)/) || [])[1]?.replace(/["']/g, '').trim())
-          .filter(Boolean),
-      ),
-    ],
-    sampleFallbackFace:
-      faceBlocks
-        .find((b) => /size-adjust/.test(b))
-        ?.replace(/\s+/g, ' ')
-        .slice(0, 400) || null,
-    headPreloadFontLinks: [...html.matchAll(/<link[^>]+rel=["']preload["'][^>]*>/g)]
-      .filter((m) => /as=["']font/.test(m[0]))
-      .map((m) => m[0].slice(0, 200)),
-    navigationLinkHeader: navigationLinkHeader.slice(0, 2000),
-    headerPreloadFontLinks,
-    sampleFontResponse,
-  }
-}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

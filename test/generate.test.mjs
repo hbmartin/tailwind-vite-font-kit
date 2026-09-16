@@ -141,6 +141,39 @@ test('text optimization accepts unannotated CSS and content-addresses query down
   assert.notEqual(gen.cssPath, otherText.cssPath, 'subsetText must invalidate the cache key')
 })
 
+test('extensionless kit URLs are accepted only for subsetText requests', async (t) => {
+  const { outDir, calls } = sandbox(t, () => new Response(`/* latin */\n${TEXT_CSS2}`))
+  await assert.rejects(
+    () => generate(optsFor('Manrope'), outDir),
+    /css2 returned a non-WOFF2 font URL: .*\/l\/font\?kit=/,
+  )
+  assert.equal(calls.length, 1, 'CDN generation must not download the rejected font URL')
+})
+
+test('implicit opsz metadata is set only when the default pin replaces a range', async (t) => {
+  const { outDir } = sandbox(t, () => new Response(CSS2))
+  const cases = [
+    { axes: 'opsz,wght@48,400', expected: false },
+    { axes: 'opsz,wght@9..144,400', expected: true },
+    { axes: 'opsz,wght@48,400;9..144,400', expected: true },
+  ]
+  for (const item of cases) {
+    const gen = await generate(
+      {
+        ...optsFor('Fakefam'),
+        families: [
+          {
+            ...optsFor('Fakefam').families[0],
+            axes: item.axes,
+          },
+        ],
+      },
+      outDir,
+    )
+    assert.equal(gen.sourceRequests[0].implicitOpszPin, item.expected, item.axes)
+  }
+})
+
 test('self-hosting refuses bytes without the WOFF2 signature', async (t) => {
   const { outDir } = sandbox(t, (url) =>
     url.endsWith('.woff2')

@@ -62,8 +62,8 @@ if (!staticAudit) {
   errors.push('the static font delivery audit is missing')
 } else {
   if (!documentPreloads.length) errors.push('the document carries no font preload')
-  else if (!documentPreloads.some((link) => /\bcrossorigin\b/i.test(link))) {
-    errors.push('the document font preload is missing crossorigin')
+  else if (!documentPreloads.every((link) => /\bcrossorigin\b/i.test(link))) {
+    errors.push('one or more document font preloads are missing crossorigin')
   }
   const font = staticAudit.sampleFontResponse
   if (!font || font.error) {

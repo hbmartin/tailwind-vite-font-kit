@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { fallbackFaces } from './metrics.mjs'
 import { leadingUtilities } from './leading.mjs'
-import { googleUrl } from './opsz.mjs'
+import { googleUrl, hasOpszAxis, hasRangedOpszAxis } from './opsz.mjs'
 import { weightsFromSpec } from './detect.mjs'
 import { assertFontHost, redirectRefusalError } from './font-host.mjs'
 
@@ -32,7 +32,7 @@ const PKG_VERSION = require_('../package.json').version
 // Bump when the generated CSS/meta contract changes without a package-version bump
 // (notably while developing a release). This prevents an older warm cache from hiding
 // new metadata or serving CSS generated under previous semantics.
-const CACHE_FORMAT = 2
+const CACHE_FORMAT = 3
 
 // Google returns legacy TTF with every subset in one file unless it believes you are a
 // modern desktop browser. With this UA it returns per-subset woff2 with unicode-range.
@@ -314,13 +314,13 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
     }
 
     const url = googleUrl(resolved, log, warn)
-    const originalHasOpsz = Boolean(fam.axes && /(^|,)opsz/.test(fam.axes))
+    const originalHasOpsz = hasOpszAxis(fam.axes)
     sourceRequests.push({
       family: fam.name,
       url,
       hasOpsz: originalHasOpsz,
       configuredOpszPin: fam.opszPin ?? null,
-      implicitOpszPin: originalHasOpsz && fam.opszPin === undefined,
+      implicitOpszPin: hasRangedOpszAxis(fam.axes) && fam.opszPin === undefined,
       fontDisplay: fam.fontDisplay ?? 'swap',
       subsetText: fam.subsetText !== undefined,
     })
@@ -370,7 +370,10 @@ export async function generate(opts, outDir, log = () => {}, warn = () => {}) {
       // CSS, so an off-host src is just as much a poisoned css2 response there as it is
       // on the self-host download path.
       const fontUrl = assertFontHost(src, fam.name)
-      const queryWoff2 = fontUrl.pathname === '/l/font' && fontUrl.searchParams.has('kit')
+      const queryWoff2 =
+        fam.subsetText !== undefined &&
+        fontUrl.pathname === '/l/font' &&
+        fontUrl.searchParams.has('kit')
       if (!fontUrl.pathname.toLowerCase().endsWith('.woff2') && !queryWoff2) {
         throw new Error(
           `[tss-fonts] ${fam.name}: css2 returned a non-WOFF2 font URL: ${src}. ` +

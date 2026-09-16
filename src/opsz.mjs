@@ -26,9 +26,42 @@
 // Only ~29 of 1,942 Google families carry opsz (1.5%) — but the list includes Inter,
 // DM Sans, Playfair, Literata, Nunito Sans, Merriweather and Fraunces.
 
+function parseAxisSpec(axes) {
+  if (typeof axes !== 'string') return null
+  const at = axes.indexOf('@')
+  const names = axes.slice(0, at === -1 ? axes.length : at).split(',')
+  const opszIndex = names.indexOf('opsz')
+  return {
+    at,
+    opszIndex,
+    tuples:
+      at === -1
+        ? []
+        : axes
+            .slice(at + 1)
+            .split(';')
+            .map((tuple) => tuple.split(',')),
+  }
+}
+
 /** Does this css2 axis spec declare an `opsz` axis? Free to check — no download needed. */
 export function hasOpszAxis(axes) {
-  return /(^|,)opsz/.test(axes)
+  return (parseAxisSpec(axes)?.opszIndex ?? -1) !== -1
+}
+
+/** Whether any tuple leaves opsz variable rather than fixing it by hand. */
+export function hasRangedOpszAxis(axes) {
+  const parsed = parseAxisSpec(axes)
+  if (!parsed || parsed.opszIndex === -1) return false
+  return parsed.tuples.some((tuple) => tuple[parsed.opszIndex]?.includes('..'))
+}
+
+/** Verify the actual Google css2 request rather than trusting the source configuration. */
+export function requestHasRangedOpsz(requestUrl) {
+  const url = new URL(requestUrl)
+  return url.searchParams
+    .getAll('family')
+    .some((family) => hasRangedOpszAxis(family.slice(family.indexOf(':') + 1)))
 }
 
 /**
@@ -40,23 +73,21 @@ export function hasOpszAxis(axes) {
  * keep the axis alive on the wire, which is exactly what pinning exists to remove.
  */
 export function pinOpsz(axes, pin, { replaceFixed = false } = {}) {
-  const at = axes.indexOf('@')
-  if (at === -1) return axes
+  const parsed = parseAxisSpec(axes)
+  if (!parsed || parsed.at === -1 || parsed.opszIndex === -1) return axes
   // Axis tags are alphabetical in css2, so opsz is NOT always first — 'ital,opsz,wght'
   // puts it second. Pin the value at opsz's own position in each tuple.
-  const oi = axes.slice(0, at).split(',').indexOf('opsz')
-  if (oi === -1) return axes
-  const tuples = axes
-    .slice(at + 1)
-    .split(';')
-    .map((t) => {
-      const parts = t.split(',')
-      if (parts[oi] !== undefined && (replaceFixed || parts[oi].includes('..'))) {
-        parts[oi] = String(pin)
-      }
-      return parts.join(',')
-    })
-  return axes.slice(0, at) + '@' + tuples.join(';')
+  const tuples = parsed.tuples.map((parts) => {
+    const next = [...parts]
+    if (
+      next[parsed.opszIndex] !== undefined &&
+      (replaceFixed || next[parsed.opszIndex].includes('..'))
+    ) {
+      next[parsed.opszIndex] = String(pin)
+    }
+    return next.join(',')
+  })
+  return axes.slice(0, parsed.at) + '@' + tuples.join(';')
 }
 
 /** Whether hand-fixed tuple values prevent a family-wide pin from taking effect. */

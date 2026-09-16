@@ -1,34 +1,19 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { assertFontHost } from './font-host.mjs'
 import { detectTailwindEntry, themeBlocks } from './detect.mjs'
+import { runInDoctorContext } from './doctor-context.mjs'
+import { resolvePreloadDelivery } from './preload-delivery.mjs'
+import { requestHasRangedOpsz } from './opsz.mjs'
 
 const FONT_PLUGIN = 'tailwind-vite-font-kit'
 const TAILWIND_PLUGIN = '@tailwindcss/vite'
 
 const check = (status, message) => ({ status, message })
 
-function requestHasUnpinnedOpsz(requestUrl) {
-  const url = new URL(requestUrl)
-  for (const family of url.searchParams.getAll('family')) {
-    const spec = family.slice(family.indexOf(':') + 1)
-    const at = spec.indexOf('@')
-    if (at === -1) continue
-    const names = spec.slice(0, at).split(',')
-    const oi = names.indexOf('opsz')
-    if (oi === -1) continue
-    if (
-      spec
-        .slice(at + 1)
-        .split(';')
-        .some((tuple) => tuple.split(',')[oi]?.includes('..'))
-    )
-      return true
-  }
-  return false
-}
-
-async function preloadBytes(preloads, generation, fetchImpl) {
+async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
   const unique = [...new Set(preloads.map((preload) => preload.href))]
   let bytes = 0
   for (const href of unique) {
@@ -45,7 +30,10 @@ async function preloadBytes(preloads, generation, fetchImpl) {
       throw new Error(`generated preload asset ${name} has no recorded byte digest`)
     }
     assertFontHost(href, 'preload')
-    const response = await fetchImpl(href, { redirect: 'error' })
+    const response = await fetchImpl(href, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
     if (!response.ok) throw new Error(`${href} returned HTTP ${response.status}`)
     const body = Buffer.from(await response.arrayBuffer())
     if (body.length < 4 || body.subarray(0, 4).toString('ascii') !== 'wOF2') {
@@ -60,7 +48,11 @@ async function preloadBytes(preloads, generation, fetchImpl) {
  * Diagnose an already-resolved Vite config. Exported so the rules can be tested without
  * loading a fixture or touching the network.
  */
-export async function diagnoseResolvedConfig(root, resolved, { fetchImpl = fetch } = {}) {
+export async function diagnoseResolvedConfig(
+  root,
+  resolved,
+  { fetchImpl = fetch, preloadTimeoutMs = 60_000 } = {},
+) {
   const checks = []
   const plugins = resolved.plugins ?? []
   const fontPlugins = plugins.filter((plugin) => plugin.name === FONT_PLUGIN)
@@ -122,31 +114,37 @@ export async function diagnoseResolvedConfig(root, resolved, { fetchImpl = fetch
   }
 
   const preloads = generation.preloads ?? []
-  const htmlFallback =
-    options.preloadHtml === true ||
-    (options.preloadHtml === 'auto' &&
-      !diagnostics.hasNitro &&
-      options.preloadHeader !== false &&
-      preloads.length > 0)
+  const delivery =
+    diagnostics.delivery ??
+    resolvePreloadDelivery(options, {
+      preloadCount: preloads.length,
+      hasNitro: diagnostics.hasNitro,
+      htmlEntryDetected: false,
+    })
   if (!preloads.length) {
     checks.push(check('pass', `no font preloads are configured`))
-  } else if (diagnostics.hasNitro && options.preloadHeader !== false) {
+  } else if (delivery.headerActive) {
     checks.push(
       check(
         'pass',
-        htmlFallback
+        delivery.htmlInjectionEnabled
           ? `Nitro Link headers and explicit HTML preload injection are enabled`
           : `Nitro will deliver the font preload Link header`,
       ),
     )
-  } else if (htmlFallback) {
+  } else if (delivery.htmlInjectionEnabled && diagnostics.hasNitro) {
+    checks.push(check('pass', `explicit HTML preload injection is enabled with Nitro`))
+  } else if (delivery.htmlInjectionEnabled && delivery.htmlEntryDetected) {
+    checks.push(check('warning', `Nitro is absent; Vite HTML preload injection is configured`))
+  } else if (delivery.htmlInjectionEnabled) {
     checks.push(
-      check('warning', `Nitro is absent; built HTML will carry the generated font preloads`),
+      check(
+        'warning',
+        `explicit HTML preload injection is enabled, but no conventional Vite HTML entry was detected`,
+      ),
     )
-  } else if (options.preloadHeader === false && options.preloadHtml === 'auto') {
-    checks.push(
-      check('warning', `automatic preloading is disabled for the manual-preload escape hatch`),
-    )
+  } else if (delivery.manualOptOut) {
+    checks.push(check('warning', `manual font preload delivery is configured`))
   } else {
     checks.push(check('failure', `font preloads have no automatic Nitro or HTML delivery path`))
   }
@@ -167,7 +165,7 @@ export async function diagnoseResolvedConfig(root, resolved, { fetchImpl = fetch
 
   const requests = generation.sourceRequests ?? []
   for (const request of requests.filter((item) => item.hasOpsz)) {
-    if (requestHasUnpinnedOpsz(request.url)) {
+    if (requestHasRangedOpsz(request.url)) {
       checks.push(check('failure', `${request.family} still requests a variable opsz range`))
     } else if (request.implicitOpszPin) {
       checks.push(check('warning', `${request.family} uses the implicit opsz pin of 16`))
@@ -190,7 +188,7 @@ export async function diagnoseResolvedConfig(root, resolved, { fetchImpl = fetch
 
   if (preloads.length) {
     try {
-      const measured = await preloadBytes(preloads, generation, fetchImpl)
+      const measured = await preloadBytes(preloads, generation, fetchImpl, preloadTimeoutMs)
       const kib = measured.bytes / 1024
       if (
         options.preloadBudgetKb !== undefined &&
@@ -218,11 +216,21 @@ export async function diagnoseResolvedConfig(root, resolved, { fetchImpl = fetch
     }
   }
 
-  for (const warning of diagnostics.warnings ?? []) {
-    // Delivery and host-caching warnings above are more actionable and avoid printing
-    // the same condition twice. Preserve every other generator/plugin warning.
-    if (/no Nitro plugin found|Production immutable caching/.test(warning)) continue
-    checks.push(check('warning', warning.replace(/\n\s*/g, ' ')))
+  const coveredWarningCodes = new Set([
+    'NO_NITRO_HTML_FALLBACK',
+    'MANUAL_PRELOAD_DELIVERY',
+    'NO_AUTOMATIC_PRELOAD_PATH',
+    'EXTERNAL_FONT_HEADERS',
+  ])
+  if (Array.isArray(diagnostics.warningEvents)) {
+    for (const event of diagnostics.warningEvents) {
+      if (coveredWarningCodes.has(event.code)) continue
+      checks.push(check('warning', event.message.replace(/\n\s*/g, ' ')))
+    }
+  } else {
+    for (const warning of diagnostics.warnings ?? []) {
+      checks.push(check('warning', warning.replace(/\n\s*/g, ' ')))
+    }
   }
   return checks
 }
@@ -240,21 +248,30 @@ export function renderDoctor(checks, write = (line) => console.log(line)) {
   return failures ? 1 : 0
 }
 
-/** @param {{root?: string, resolveConfigFn?: Function, fetchImpl?: typeof fetch}} [options] */
-export async function runDoctor({ root = process.cwd(), resolveConfigFn, fetchImpl = fetch } = {}) {
+export async function loadProjectVite(projectRoot) {
+  const projectRequire = createRequire(join(projectRoot, 'package.json'))
+  const entry = projectRequire.resolve('vite')
+  return import(pathToFileURL(entry).href)
+}
+
+/** @param {{root?: string, resolveConfigFn?: Function, fetchImpl?: typeof fetch,
+ * preloadTimeoutMs?: number}} [options] */
+export async function runDoctor({
+  root = process.cwd(),
+  resolveConfigFn,
+  fetchImpl = fetch,
+  preloadTimeoutMs = 60_000,
+} = {}) {
   const projectRoot = resolve(root)
-  const previous = process.env.TSS_FONTS_DOCTOR
-  process.env.TSS_FONTS_DOCTOR = '1'
   let checks
   try {
-    const resolveVite = resolveConfigFn ?? (await import('vite')).resolveConfig
-    const resolved = await resolveVite({ root: projectRoot }, 'build', 'production')
-    checks = await diagnoseResolvedConfig(projectRoot, resolved, { fetchImpl })
+    checks = await runInDoctorContext(async () => {
+      const resolveVite = resolveConfigFn ?? (await loadProjectVite(projectRoot)).resolveConfig
+      const resolved = await resolveVite({ root: projectRoot }, 'build', 'production')
+      return diagnoseResolvedConfig(projectRoot, resolved, { fetchImpl, preloadTimeoutMs })
+    })
   } catch (error) {
     checks = [check('failure', `could not resolve and generate the Vite project: ${error.message}`)]
-  } finally {
-    if (previous === undefined) delete process.env.TSS_FONTS_DOCTOR
-    else process.env.TSS_FONTS_DOCTOR = previous
   }
   return { checks, exitCode: renderDoctor(checks) }
 }
