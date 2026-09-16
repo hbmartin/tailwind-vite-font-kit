@@ -285,6 +285,14 @@ test('check-cls gates preload and font response delivery headers', (t) => {
       (audit) => (audit.headerPreloadFontLinks = ['</fonts/manrope.woff2>; rel=preload; as=font']),
       /missing crossorigin/,
     ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = [
+          '</fonts/manrope.woff2>; rel=preload; as=font; crossorigin',
+          '</fonts/display.woff2>; rel=preload; as=font',
+        ]),
+      /missing crossorigin/,
+    ],
     [(audit) => (audit.sampleFontResponse.status = 404), /returned HTTP 404/],
     [(audit) => (audit.sampleFontResponse.cacheControl = 'public'), /immutable cache-control/],
     [(audit) => (audit.sampleFontResponse.cors = ''), /missing CORS/],

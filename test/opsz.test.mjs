@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { googleUrl, hasOpszAxis, opszPinIsOverridden, pinOpsz } from '../src/opsz.mjs'
+import {
+  googleUrl,
+  hasOpszAxis,
+  hasRangedOpszAxis,
+  opszPinIsOverridden,
+  pinOpsz,
+  requestHasRangedOpsz,
+} from '../src/opsz.mjs'
 
 test('detects an opsz axis from the css2 spec, without downloading anything', () => {
   assert.ok(hasOpszAxis('opsz,wght@9..144,500;9..144,700'))
@@ -8,6 +15,24 @@ test('detects an opsz axis from the css2 spec, without downloading anything', ()
   assert.ok(!hasOpszAxis('wght@400;700'))
   // must not false-positive on a family whose axis merely contains the letters
   assert.ok(!hasOpszAxis('wdth,wght@75..100,400'))
+})
+
+test('distinguishes ranged opsz tuples from hand-fixed values', () => {
+  assert.equal(hasRangedOpszAxis('opsz,wght@9..144,400;9..144,700'), true)
+  assert.equal(hasRangedOpszAxis('opsz,wght@48,400;48,700'), false)
+  assert.equal(hasRangedOpszAxis('opsz,wght@48,400;9..144,700'), true)
+  assert.equal(hasRangedOpszAxis('wght@400;700'), false)
+})
+
+test('detects a ranged opsz axis in the final Google request URL', () => {
+  assert.equal(
+    requestHasRangedOpsz('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700'),
+    true,
+  )
+  assert.equal(
+    requestHasRangedOpsz('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@48,700'),
+    false,
+  )
 })
 
 test('pinOpsz replaces the range in every weight tuple', () => {

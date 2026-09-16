@@ -130,9 +130,10 @@ export interface FontsOptions {
    */
   preloadHeader?: boolean | { exclude?: string[] }
   /**
-   * Inject font preload links into built HTML. `'auto'` (default) does so for plain
-   * Vite when Nitro is absent, preloads were generated, and `preloadHeader` is enabled.
-   * `true` always injects; `false` never does.
+   * Inject font preload links into built HTML. `'auto'` (default) does so for a non-SSR,
+   * non-custom Vite app with an index.html or HTML Rollup input when Nitro is absent,
+   * preloads were generated, and `preloadHeader` is enabled. `true` injects whenever a
+   * framework invokes Vite's HTML transform hook; `false` never does.
    */
   preloadHtml?: 'auto' | boolean
   /**
@@ -154,6 +155,10 @@ export interface FontsOptions {
    * metric fallbacks, and +0.02–0.06 if you do not.
    */
   leadingUtilities?: boolean
+  /**
+   * Suppress normal build narration. Delivery, correctness, and production-header warnings
+   * remain visible because they can describe behavior outside the plugin's control.
+   */
   silent?: boolean
 }
 

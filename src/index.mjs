@@ -23,24 +23,16 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve, posix } from 'node:path'
 import { CSS_NAME_RE, generate } from './generate.mjs'
 import { assertConfigShape, loadFontsConfig, validateFamilies, validateOptions } from './config.mjs'
+import { isDoctorContext } from './doctor-context.mjs'
+import {
+  hasConventionalHtmlEntry,
+  normalizeHtmlFontPreloads,
+  resolvePreloadDelivery,
+} from './preload-delivery.mjs'
 
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
 const FULL_URL_BASE_RE = /^(?:https?:)?\/\//
-
-function htmlFontPreloadHrefs(html) {
-  const hrefs = new Set()
-  for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
-    const tag = match[0]
-    const attr = (name) =>
-      new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(tag)?.[1]?.toLowerCase()
-    if (attr('rel') === 'preload' && attr('as') === 'font') {
-      const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]
-      if (href) hrefs.add(href.replace(/&(?:amp|#0*38|#x0*26);/gi, '&'))
-    }
-  }
-  return hrefs
-}
 
 /** Turn a user-facing URL prefix into one absolute directory path. `'/'` is legal —
  *  fonts then live at the bundle root, which worked before base handling existed. */
@@ -176,15 +168,15 @@ export function fonts(userOptions = {}) {
   })
   /** @param {string} m */
   const capturedWarnings = []
-  const doctorMode = () => process.env.TSS_FONTS_DOCTOR === '1'
+  const warningEvents = []
+  const doctorMode = () => isDoctorContext()
   const log = (m) => !opts.silent && !doctorMode() && console.log(`[tss-fonts] ${m}`)
-  // Deliberately NOT gated on `silent`. `silent` means "stop narrating a build that is
-  // going fine", not "hide it when the metric fallbacks — the entire reason this package
-  // exists — were silently not emitted". Everything routed here is a case where the build
-  // succeeds and the result is wrong.
+  // Deliberately NOT gated on `silent`. `silent` means "stop narrating a build", not
+  // "hide delivery, correctness, or production-header conditions that still need review".
   /** @param {string} m */
-  const warn = (m) => {
+  const warn = (m, code = 'GENERAL') => {
     capturedWarnings.push(m)
+    warningEvents.push({ code, message: m })
     if (!doctorMode()) console.warn(`[tss-fonts] ${m}`)
   }
 
@@ -264,6 +256,12 @@ export function fonts(userOptions = {}) {
   /** @type {string | null} */
   let configFile = null
   let hasNitro = false
+  let htmlEntryDetected = false
+  let htmlTransforms = 0
+  let fontPathPrefix = '/fonts/'
+  let generatedFiles = new Set()
+  let fontRulesAreScoped = true
+  let warnedMissingHtmlTransform = false
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -275,28 +273,35 @@ export function fonts(userOptions = {}) {
         options: opts,
         generation: gen,
         warnings: [...capturedWarnings],
+        warningEvents: warningEvents.map((event) => ({ ...event })),
         hasNitro,
         selfHosts,
         entrySeen,
         configFile,
         paths: { assetPath, routePath, publicPath },
+        delivery: resolvePreloadDelivery(opts, {
+          preloadCount: gen?.preloads.length ?? 0,
+          hasNitro,
+          htmlEntryDetected,
+          htmlTransforms,
+        }),
       }
     },
   }
 
-  const shouldInjectHtml = () =>
-    opts.preloadHtml === true ||
-    (opts.preloadHtml === 'auto' &&
-      !hasNitro &&
-      opts.preloadHeader !== false &&
-      Boolean(gen?.preloads.length))
+  const currentDelivery = () =>
+    resolvePreloadDelivery(opts, {
+      preloadCount: gen?.preloads.length ?? 0,
+      hasNitro,
+      htmlEntryDetected,
+      htmlTransforms,
+    })
 
   const fontRequestName = (rawUrl) => {
     const url = (rawUrl || '').split('?')[0]
-    const prefix = routePath.replace(/\/$/, '') + '/'
-    if (!url.startsWith(prefix)) return null
-    const name = url.slice(prefix.length)
-    return new Set(gen?.files ?? []).has(name) ? name : null
+    if (!url.startsWith(fontPathPrefix)) return null
+    const name = url.slice(fontPathPrefix.length)
+    return generatedFiles.has(name) ? name : null
   }
 
   const setFontHeaders = (res) => {
@@ -314,6 +319,10 @@ export function fonts(userOptions = {}) {
     sharedDuringBuild: true,
 
     async config(config, env) {
+      hasNitro = false
+      htmlEntryDetected = false
+      htmlTransforms = 0
+      warnedMissingHtmlTransform = false
       isServe = env.command === 'serve'
       isSsrBuild = env.command === 'build' && Boolean(config.build?.ssr)
       root = resolve(config.root ?? process.cwd())
@@ -332,6 +341,7 @@ export function fonts(userOptions = {}) {
       // When assets emit at the bundle root, font filenames and documents share one
       // namespace. No route pattern can select only the fonts without also selecting HTML.
       const fontsShareDocumentNamespace = paths.assetPath === '/'
+      fontRulesAreScoped = !fontsShareDocumentNamespace
       // Paths that must NOT carry the preload header. Defaults cover the two that
       // dominate an SSR page's response count: the hashed build output and the fonts
       // themselves (which would otherwise preload themselves). A non-array (a string is
@@ -373,6 +383,8 @@ export function fonts(userOptions = {}) {
 
       const t0 = Date.now()
       gen = await generate({ ...opts, publicPath, output: generationOutput }, outDir, log, warn)
+      fontPathPrefix = routePath.replace(/\/$/, '') + '/'
+      generatedFiles = new Set(gen.files)
       if (!gen.fromCache) log(`generation took ${Date.now() - t0}ms`)
 
       // If the user asked for real files on disk, write them HERE, not in buildStart.
@@ -559,34 +571,43 @@ export function fonts(userOptions = {}) {
         warn(`${msg} (Only route-rule patterns are affected — the font URLs point at Google.)`)
       }
       hasNitro = Boolean(resolved.plugins?.some((p) => p.name?.includes('nitro')))
-      if (hasNitro) return
-      const htmlFallback = shouldInjectHtml() && Boolean(gen?.preloads.length)
-      if (gen?.preloads.length && htmlFallback) {
+      htmlEntryDetected = hasConventionalHtmlEntry(root, resolved, {
+        isSsrBuild: finalIsSsrBuild,
+      })
+      const delivery = currentDelivery()
+      if (!hasNitro && delivery.htmlInjectionEnabled) {
         warn(
-          `no Nitro plugin found; generated font preloads will be injected into HTML.` +
-            (selfHosts
-              ? ` Production immutable caching on ${publicPath}/ remains the deployment host's ` +
-                `responsibility (Vite dev and preview set it locally).`
-              : ''),
+          `no Nitro plugin found; generated font preloads are configured for Vite HTML injection.`,
+          'NO_NITRO_HTML_FALLBACK',
         )
-      } else if (gen?.preloads.length && opts.preloadHeader !== false) {
+      } else if (!hasNitro && delivery.manualOptOut) {
         warn(
-          `no Nitro plugin found and HTML preload injection is disabled, so no automatic font ` +
-            `preloads will be delivered. Render \`fontPreloads\` from \`virtual:fonts\` yourself.`,
+          `automatic font preloading is disabled by configuration. Render \`fontPreloads\` ` +
+            `from \`virtual:fonts\` yourself.`,
+          'MANUAL_PRELOAD_DELIVERY',
         )
-      } else if (selfHosts) {
+      } else if (!hasNitro && gen?.preloads.length) {
         warn(
-          `no Nitro plugin found. Production immutable caching on ${publicPath}/ is the ` +
+          `no Nitro plugin and no conventional Vite HTML entry were found, so no automatic ` +
+            `font preloads will be delivered. Render \`fontPreloads\` from \`virtual:fonts\` yourself.`,
+          'NO_AUTOMATIC_PRELOAD_PATH',
+        )
+      }
+      if (selfHosts && (!hasNitro || !fontRulesAreScoped)) {
+        warn(
+          `Production immutable caching on ${publicPath}/ is the ` +
             `deployment host's responsibility (Vite dev and preview set it locally).`,
+          'EXTERNAL_FONT_HEADERS',
         )
       }
     },
 
     transformIndexHtml(html) {
-      if (!shouldInjectHtml() || !gen?.preloads.length) return
-      const present = htmlFontPreloadHrefs(html)
+      if (!currentDelivery().htmlInjectionEnabled || !gen?.preloads.length) return
+      htmlTransforms++
+      const normalized = normalizeHtmlFontPreloads(html, gen.preloads)
       const tags = gen.preloads
-        .filter((preload) => !present.has(preload.href))
+        .filter((preload) => !normalized.present.has(preload.href))
         .map((preload) => ({
           tag: 'link',
           attrs: {
@@ -598,7 +619,8 @@ export function fonts(userOptions = {}) {
           },
           injectTo: /** @type {const} */ ('head-prepend'),
         }))
-      return tags.length ? tags : undefined
+      if (!normalized.changed && !tags.length) return
+      return { html: normalized.html, tags }
     },
 
     configureServer(server) {
@@ -624,10 +646,37 @@ export function fonts(userOptions = {}) {
     },
 
     configurePreviewServer(server) {
-      // Preview serves the built asset itself. This middleware only supplies the same
-      // headers as dev/Nitro before Vite's static middleware handles the body.
       server.middlewares.use((req, res, next) => {
-        if (fontRequestName(req.url)) setFontHeaders(res)
+        if (!fontRequestName(req.url) || typeof res.writeHead !== 'function') return next()
+        const writeHead = res.writeHead
+        res.writeHead = function (statusCode, ...args) {
+          const headers = typeof args[0] === 'string' ? args[1] : args[0]
+          const headerValue = (name) => {
+            if (headers && typeof headers === 'object') {
+              const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name)
+              if (key) return headers[key]
+            }
+            return this.getHeader?.(name)
+          }
+          const contentType = String(headerValue('content-type') ?? '')
+          if (
+            (statusCode === 200 || statusCode === 206) &&
+            /^font\/woff2(?:;|$)/i.test(contentType)
+          ) {
+            setFontHeaders(this)
+            if (headers && typeof headers === 'object') {
+              const set = (name, value) => {
+                const key = Object.keys(headers).find(
+                  (candidate) => candidate.toLowerCase() === name,
+                )
+                headers[key ?? name] = value
+              }
+              set('access-control-allow-origin', '*')
+              set('cache-control', 'public, max-age=31536000, immutable')
+            }
+          }
+          return writeHead.call(this, statusCode, ...args)
+        }
         next()
       })
     },
@@ -724,6 +773,28 @@ export function fonts(userOptions = {}) {
             '@theme block was NOT injected and no fonts were applied.\n' +
             '  - Is fonts() listed BEFORE tailwindcss() in your plugins array?\n' +
             '  - Is your Tailwind entry actually imported by the app?',
+        )
+      }
+    },
+
+    closeBundle() {
+      // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
+      // valid HTML build is not reported missing merely because its transform ran later.
+      if (isSsrBuild) return
+      if (this.environment && this.environment.config?.consumer !== 'client') return
+      const delivery = currentDelivery()
+      if (
+        !isServe &&
+        delivery.htmlInjectionEnabled &&
+        !delivery.headerActive &&
+        delivery.htmlTransforms === 0 &&
+        !warnedMissingHtmlTransform
+      ) {
+        warnedMissingHtmlTransform = true
+        warn(
+          `HTML preload injection was enabled, but Vite transformed no HTML entry. No automatic ` +
+            `font preloads were emitted; render \`fontPreloads\` from \`virtual:fonts\` yourself.`,
+          'NO_AUTOMATIC_PRELOAD_PATH',
         )
       }
     },

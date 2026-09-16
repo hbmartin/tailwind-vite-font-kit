@@ -120,12 +120,18 @@ the fonts share a namespace with documents, so the plugin deliberately omits its
 Nitro caching/CORS rule and font-response preload exclusion rather than matching the whole app.
 
 **Nitro is the automatic production-header path.** It delivers the `Link:` header and
-`immutable`/CORS headers on `/fonts/**`. In a plain Vite app, `preloadHtml: 'auto'` injects
-the same generated preloads into built HTML. Vite dev serves generated font bytes with the
-right headers, and `vite preview` adds them before serving built assets; production cache
-headers are still the deployment host's responsibility. `preloadHtml: true` injects even
-with Nitro, while `false` never does. `preloadHeader: false` plus the default HTML behavior
-preserves the manual escape hatch: render `fontPreloads` from `virtual:fonts` yourself.
+`immutable`/CORS headers on `/fonts/**`. In a plain, non-SSR Vite app with an `index.html`
+or HTML Rollup input, `preloadHtml: 'auto'` injects the same generated preloads into built
+HTML. Frameworks that render HTML outside Vite should use `preloadHtml: true` only when they
+invoke Vite's HTML transform hook; otherwise render `fontPreloads` from `virtual:fonts`.
+Vite dev serves generated font bytes with the right headers, and `vite preview` adds them
+only to successful built-font responses; production cache headers are still the deployment
+host's responsibility. `preloadHtml: true` injects even with Nitro, while `false` never does.
+`preloadHeader: false` preserves the manual escape hatch.
+
+Delivery and production-header warnings are intentionally visible even with `silent: true`:
+`silent` suppresses normal build narration, not conditions that can leave preloads or cache
+headers outside the plugin's control.
 
 ---
 
@@ -192,12 +198,13 @@ npx tss-fonts doctor
 npx tss-fonts doctor --cwd path/to/app
 ```
 
-Doctor resolves the project's real Vite build config and generates/downloads what the build
+Doctor resolves Vite from the selected project root, loads that project's real build config,
+and generates/downloads what the build
 would use. It checks plugin presence and order, Tailwind entry discovery, `@theme inline`
 conflicts, Nitro/HTML preload delivery, production caching boundaries, `opsz` requests,
 generated assets, and exact unique preload bytes. Definite failures exit nonzero; valid
-plain-Vite fallbacks, host-controlled production caching, and implicit `opsz` defaults are
-warnings.
+plain-Vite fallbacks, deliberate manual preload delivery, host-controlled production caching,
+and implicit `opsz` defaults are warnings.
 
 ### opsz
 
