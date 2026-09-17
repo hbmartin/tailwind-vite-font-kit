@@ -103,6 +103,58 @@ test('static audit follows stylesheet-relative imports and samples the preloaded
   assert.match(audit.sampleFontResponse.cacheControl, /immutable/)
 })
 
+test('static audit follows async CSS and noscript fallbacks without promoting inert preloads', async () => {
+  const calls = []
+  const documentUrl = 'https://site.test/'
+  const appCssUrl = 'https://site.test/app.css'
+  const fallbackCssUrl = 'https://site.test/fallback.css'
+  const lateCssUrl = 'https://site.test/late.css'
+  const fontUrl = 'https://site.test/fonts/target.woff2'
+  const audit = await staticAudit(documentUrl, {
+    fetchImpl: async (url) => {
+      const current = String(url)
+      calls.push(current)
+      if (current === documentUrl) {
+        return response(
+          documentUrl,
+          `<link rel=preload as=style href=/app.css onload="this.rel='stylesheet'">
+           <noscript>
+             <link rel=stylesheet href=/app.css>
+             <link rel=stylesheet href=/fallback.css>
+             <link rel=preload as=style href=/inert.css>
+             <link rel=preload as=font href=/fonts/inert.woff2 crossorigin>
+           </noscript>
+           <link rel=stylesheet href=/late.css>
+           <link rel=preload as=font href=/fonts/target.woff2 crossorigin>`,
+        )
+      }
+      if (current === appCssUrl) {
+        return response(
+          current,
+          `@font-face { font-family: Target; src: url(/fonts/target.woff2) }`,
+        )
+      }
+      if (current === fallbackCssUrl) {
+        return response(
+          current,
+          `@font-face { font-family: Fallback; src: url(/fonts/fallback.woff2) }`,
+        )
+      }
+      if (current === lateCssUrl) return response(current, 'body { color: inherit }')
+      if (current === fontUrl) return response(current, 'wOF2font')
+      throw new Error(`unexpected fetch: ${url}`)
+    },
+  })
+
+  assert.deepEqual(audit.stylesheetHrefs, ['/app.css', '/fallback.css', '/late.css'])
+  assert.equal(calls.filter((url) => url === appCssUrl).length, 1)
+  assert.equal(calls.filter((url) => url === fallbackCssUrl).length, 1)
+  assert.equal(audit.totalFontFaceBlocks, 2)
+  assert.equal(audit.headPreloadFontLinks.length, 1)
+  assert.doesNotMatch(audit.headPreloadFontLinks.join('\n'), /inert\.woff2/)
+  assert.equal(audit.sampleFontResponse.url, fontUrl)
+})
+
 test('static audit does not substitute an unrelated face when no preload matches', async () => {
   const audit = await staticAudit('https://site.test/', {
     fetchImpl: async (url) => {

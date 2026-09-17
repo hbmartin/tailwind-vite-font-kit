@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { init, parse } from 'es-module-lexer'
@@ -9,18 +9,17 @@ import { DEFAULT_SKIP_DIRS, detectTailwindEntry, themeBlocks, walk } from './det
 import { runInDoctorContext } from './doctor-context.mjs'
 import { resolvePreloadDelivery } from './preload-delivery.mjs'
 import { requestHasRangedOpsz } from './opsz.mjs'
+import { escapeRegExp } from './string.mjs'
 
 const FONT_PLUGIN = 'tailwind-vite-font-kit'
 const TAILWIND_PLUGIN = '@tailwindcss/vite'
 const SERVER_ENTRY_SPECIFIER = 'tailwind-vite-font-kit/start-server'
 const START_SERVER_ENTRY_ALIAS = 'virtual:tanstack-start-server-entry'
-const SERVER_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.tsx', '.jsx']
+const SERVER_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.cts', '.cjs', '.tsx', '.jsx']
 
 await init
 
 const check = (status, message) => ({ status, message })
-
-const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 function closingParen(masked, open) {
   let depth = 1
@@ -80,17 +79,23 @@ function classifyServerOptions(source) {
   return 'early-hints'
 }
 
-function classifyServerEntrySource(source) {
+function analyzeServerModule(source) {
+  try {
+    const [imports] = parse(source)
+    return { active: mask(source), imports }
+  } catch {
+    return null
+  }
+}
+
+function classifyServerEntrySource(source, analysis) {
   // Most application files never mention the server helper. Avoid invoking the lexer for
   // those files; custom-entry discovery may inspect a large source tree.
   if (!source.includes(SERVER_ENTRY_SPECIFIER)) return null
 
-  let imports
-  try {
-    ;[imports] = parse(source)
-  } catch {
-    return 'unknown'
-  }
+  analysis ??= analyzeServerModule(source)
+  if (!analysis) return 'unknown'
+  const { active, imports } = analysis
   const serverImports = imports.filter(
     (entry) => entry.n === SERVER_ENTRY_SPECIFIER && entry.d === -1,
   )
@@ -105,9 +110,8 @@ function classifyServerEntrySource(source) {
   // factory binding and therefore cannot make this file a server-entry candidate.
   if (!bindings.length) return null
 
-  const active = mask(source)
   for (const binding of bindings) {
-    const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
+    const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
     const call = new RegExp(`\\bexport\\s+default\\s+${expression}\\s*\\(`).exec(active)
     if (!call) continue
     const open = call.index + call[0].lastIndexOf('(')
@@ -126,13 +130,6 @@ const isFile = (file) => {
   } catch {
     return false
   }
-}
-
-function inputValues(input) {
-  if (typeof input === 'string') return [input]
-  if (Array.isArray(input)) return input
-  if (input && typeof input === 'object') return Object.values(input)
-  return []
 }
 
 function configuredAliases(resolved) {
@@ -163,54 +160,87 @@ function inputFile(root, input, resolved) {
 }
 
 function resolvedServerEntry(root, resolved) {
-  const ssrBuild = resolved.environments?.ssr?.build
-  const rawInputs = [
-    ...inputValues(ssrBuild?.rollupOptions?.input),
-    ...inputValues(ssrBuild?.rolldownOptions?.input),
-  ]
-  const inputMetadataPresent = rawInputs.length > 0
-  const inputFiles = [
-    ...new Set(rawInputs.map((input) => inputFile(root, input, resolved)).filter(Boolean)),
-  ]
-  if (inputFiles.length === 1) return { available: true, file: inputFiles[0] }
-  if (inputFiles.length > 1 || inputMetadataPresent) return { available: true, file: null }
-
   const alias = configuredAliases(resolved).find(
     (candidate) => candidate.find === START_SERVER_ENTRY_ALIAS,
   )
-  if (!alias) return { available: false, file: null }
+  if (!alias) return { available: false, file: null, package: false }
+  const replacement =
+    typeof alias.replacement === 'string' ? alias.replacement.split(/[?#]/, 1)[0] : ''
+  const virtualTarget = /^(?:\0|virtual:)/.test(replacement)
+  const packageTarget =
+    replacement &&
+    !virtualTarget &&
+    !isAbsolute(replacement) &&
+    !replacement.startsWith('.') &&
+    !replacement.startsWith('/')
   return {
     available: true,
-    file: inputFile(root, alias.replacement, resolved),
+    file: packageTarget || virtualTarget ? null : inputFile(root, alias.replacement, resolved),
+    package: Boolean(packageTarget),
   }
 }
 
-function withinRoot(root, file) {
+function isApplicationFile(root, file) {
   const path = relative(root, file)
-  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+  return (
+    path !== '..' &&
+    !path.startsWith(`..${sep}`) &&
+    !isAbsolute(path) &&
+    !path.split(sep).includes('node_modules')
+  )
 }
 
-function localModuleFile(root, importer, specifier, resolved) {
+const TYPESCRIPT_SUBSTITUTIONS = new Map([
+  ['.js', ['.ts', '.tsx', '.js']],
+  ['.jsx', ['.tsx', '.jsx']],
+  ['.mjs', ['.mts', '.mjs']],
+  ['.cjs', ['.cts', '.cjs']],
+])
+
+function localModuleTarget(root, importer, specifier, resolved) {
   let candidate
   if (specifier.startsWith('.')) candidate = resolve(dirname(importer), specifier)
   else if (specifier.startsWith('/')) candidate = resolve(root, `.${specifier}`)
   else {
     const aliased = applyStringAlias(specifier, resolved)
-    if (aliased === specifier) return null
+    if (aliased === specifier) return { kind: 'package' }
+    if (/^(?:\0|virtual:)/.test(aliased)) return { kind: 'missing' }
     candidate = isAbsolute(aliased) ? aliased : resolve(root, aliased)
   }
-  if (!withinRoot(root, candidate)) return null
+  if (!isApplicationFile(root, candidate)) return { kind: 'package' }
 
-  const candidates = [
-    candidate,
-    ...SERVER_EXTENSIONS.map((extension) => candidate + extension),
-    ...SERVER_EXTENSIONS.map((extension) => join(candidate, `index${extension}`)),
-  ]
-  return candidates.find(isFile) ?? null
+  const extension = extname(candidate)
+  const substitutions = TYPESCRIPT_SUBSTITUTIONS.get(extension)
+  const candidates = substitutions
+    ? substitutions.map((replacement) => candidate.slice(0, -extension.length) + replacement)
+    : [
+        candidate,
+        ...SERVER_EXTENSIONS.map((candidateExtension) => candidate + candidateExtension),
+        ...SERVER_EXTENSIONS.map((candidateExtension) =>
+          join(candidate, `index${candidateExtension}`),
+        ),
+      ]
+  const file = candidates.find(isFile)
+  if (!file) return { kind: 'missing' }
+  return isApplicationFile(root, file) ? { kind: 'file', file } : { kind: 'package' }
 }
 
-function defaultExportTarget(source, imports) {
-  const active = mask(source)
+function exportsBindingAsDefault(active, binding) {
+  const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
+  if (new RegExp(`\\bexport\\s+default\\s+${expression}\\b`).test(active)) return true
+  if (binding.includes('.')) return false
+
+  for (const match of active.matchAll(/\bexport\s*\{([\s\S]*?)\}(?!\s*from\b)/g)) {
+    for (const raw of match[1].split(',')) {
+      if (new RegExp(`^\\s*${escapeRegExp(binding)}\\s+as\\s+default\\s*$`).test(raw)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function defaultExportTarget(source, { active, imports }) {
   const targets = []
   for (const entry of imports) {
     if (entry.d !== -1 || !entry.n) continue
@@ -230,15 +260,11 @@ function defaultExportTarget(source, imports) {
     }
 
     const bindings = staticImportBindings(statement, {
-      namedExports: [],
-      namespaceExports: [],
+      namedExports: ['default'],
+      namespaceExports: ['default'],
     })
     for (const binding of bindings) {
-      const expression = escapeRe(binding)
-      if (
-        new RegExp(`\\bexport\\s+default\\s+${expression}\\b`).test(active) ||
-        new RegExp(`\\bexport\\s*\\{\\s*${expression}\\s+as\\s+default\\s*\\}`).test(active)
-      ) {
+      if (exportsBindingAsDefault(active, binding)) {
         targets.push({ specifier: entry.n, supported: true })
       }
     }
@@ -249,6 +275,9 @@ function defaultExportTarget(source, imports) {
 function classifyServerEntryFile(root, file, resolved, seen = new Set(), depth = 0) {
   if (depth > 12 || seen.has(file)) return 'unknown'
   seen.add(file)
+  // Package defaults are authoritative, but their implementation graph is not application
+  // wiring and should not be searched for this package's helper.
+  if (!isApplicationFile(root, file)) return 'none'
   let source
   try {
     source = readFileSync(file, 'utf8')
@@ -256,33 +285,27 @@ function classifyServerEntryFile(root, file, resolved, seen = new Set(), depth =
     return 'unknown'
   }
 
-  const direct = classifyServerEntrySource(source)
+  const analysis = analyzeServerModule(source)
+  if (!analysis) return 'unknown'
+  const direct = classifyServerEntrySource(source, analysis)
   if (direct) return direct
-  // Package defaults are authoritative, but their internal implementation graph is not
-  // application wiring and should not be searched for this package's helper.
-  if (!withinRoot(root, file)) return 'none'
-
-  let imports
-  try {
-    ;[imports] = parse(source)
-  } catch {
-    return 'unknown'
-  }
-  const targets = defaultExportTarget(source, imports)
+  const targets = defaultExportTarget(source, analysis)
   if (!targets.length) {
-    const hasDynamicImport = imports.some((entry) => entry.d !== -1)
-    const hasDefaultExport = /\bexport\s+default\b/.test(mask(source))
+    const hasDynamicImport = analysis.imports.some((entry) => entry.d >= 0)
+    const hasDefaultExport = /\bexport\s+default\b/.test(analysis.active)
     return hasDynamicImport && hasDefaultExport ? 'unknown' : 'none'
   }
   if (targets.length !== 1 || !targets[0].supported) return 'unknown'
-  const target = localModuleFile(root, file, targets[0].specifier, resolved)
-  if (!target) return 'unknown'
-  return classifyServerEntryFile(root, target, resolved, seen, depth + 1)
+  const target = localModuleTarget(root, file, targets[0].specifier, resolved)
+  if (target.kind === 'package') return 'none'
+  if (target.kind === 'missing') return 'unknown'
+  return classifyServerEntryFile(root, target.file, resolved, seen, depth + 1)
 }
 
 function detectServerEntryDelivery(root, resolved) {
   const authoritative = resolvedServerEntry(root, resolved)
   if (authoritative.available) {
+    if (authoritative.package) return 'none'
     return authoritative.file
       ? classifyServerEntryFile(root, authoritative.file, resolved)
       : 'unknown'
@@ -290,7 +313,7 @@ function detectServerEntryDelivery(root, resolved) {
 
   const conventional = SERVER_EXTENSIONS.map((extension) =>
     join(root, 'src', `server${extension}`),
-  ).filter(existsSync)
+  ).filter(isFile)
   const ignoredDirectories = new Set([
     ...DEFAULT_SKIP_DIRS,
     'test',
@@ -306,27 +329,26 @@ function detectServerEntryDelivery(root, resolved) {
     'cypress',
     'playwright',
   ])
-  if (conventional.length) {
-    const candidates = conventional.map((file) => ({
-      file,
-      delivery: classifyServerEntryFile(root, file, resolved),
-    }))
-    return candidates.length === 1 ? candidates[0].delivery : 'unknown'
-  }
+  if (conventional.length > 1) return 'unknown'
+  if (conventional.length === 1) return classifyServerEntryFile(root, conventional[0], resolved)
 
   const files = walk(root, SERVER_EXTENSIONS, { skipDirs: ignoredDirectories })
   const namedServerEntries = files.filter((file) =>
     /^server\.(?:[cm]?[jt]sx?)$/.test(basename(file)),
   )
-  if (namedServerEntries.length) {
-    return namedServerEntries.length === 1
-      ? classifyServerEntryFile(root, namedServerEntries[0], resolved)
-      : 'unknown'
+  /** @type {'disabled' | 'early-hints' | 'link-header' | 'unknown' | null} */
+  let namedDelivery = null
+  for (const file of namedServerEntries) {
+    const delivery = classifyServerEntryFile(root, file, resolved)
+    if (delivery === 'none') continue
+    if (namedDelivery !== null) return 'unknown'
+    namedDelivery = delivery
   }
+  if (namedDelivery !== null) return namedDelivery
   const candidates = []
 
   for (const file of files) {
-    if (!existsSync(file)) continue
+    if (!isFile(file)) continue
     let source
     try {
       source = readFileSync(file, 'utf8')

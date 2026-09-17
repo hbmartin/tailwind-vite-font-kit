@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { escapeRegExp } from './string.mjs'
 
 const HTML_INPUT_RE = /\.html(?:$|[?#])/i
 
@@ -64,7 +65,7 @@ export function resolvePreloadDelivery(
 
 export const decodeHtmlHref = (href) => href.replace(/&(?:amp|#0*38|#x0*26);/gi, '&')
 
-const SPACE_RE = /\s/
+const ASCII_WHITESPACE_RE = /[\t\n\f\r ]/
 const RAW_TEXT_ELEMENTS = new Set([
   'script',
   'style',
@@ -80,13 +81,11 @@ const RAW_TEXT_ELEMENTS = new Set([
 const asciiLower = (value) =>
   value.replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32))
 
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
 function parseStartTag(html, tagStart, nameEnd, name) {
   const attributes = new Map()
   let index = nameEnd
   while (index < html.length) {
-    while (index < html.length && SPACE_RE.test(html[index])) index++
+    while (index < html.length && ASCII_WHITESPACE_RE.test(html[index])) index++
     if (index >= html.length) return null
     if (html[index] === '>') {
       const end = index + 1
@@ -98,7 +97,11 @@ function parseStartTag(html, tagStart, nameEnd, name) {
     }
 
     const start = index
-    while (index < html.length && !SPACE_RE.test(html[index]) && !/[=/>]/.test(html[index])) {
+    while (
+      index < html.length &&
+      !ASCII_WHITESPACE_RE.test(html[index]) &&
+      !/[=/>]/.test(html[index])
+    ) {
       index++
     }
     if (index === start) {
@@ -107,12 +110,12 @@ function parseStartTag(html, tagStart, nameEnd, name) {
     }
     const attributeName = asciiLower(html.slice(start, index))
     let attributeEnd = index
-    while (index < html.length && SPACE_RE.test(html[index])) index++
+    while (index < html.length && ASCII_WHITESPACE_RE.test(html[index])) index++
 
     let value
     if (html[index] === '=') {
       index++
-      while (index < html.length && SPACE_RE.test(html[index])) index++
+      while (index < html.length && ASCII_WHITESPACE_RE.test(html[index])) index++
       const quote = html[index] === '"' || html[index] === "'" ? html[index++] : null
       const valueStart = index
       if (quote) {
@@ -127,7 +130,13 @@ function parseStartTag(html, tagStart, nameEnd, name) {
         // Quotes inside an unquoted value are parse errors in HTML, but browsers retain
         // them as ordinary value characters. Treating one as a delimiter can consume the
         // rest of the document and move a repair onto an unrelated closing tag.
-        while (index < html.length && !SPACE_RE.test(html[index]) && html[index] !== '>') index++
+        while (
+          index < html.length &&
+          !ASCII_WHITESPACE_RE.test(html[index]) &&
+          html[index] !== '>'
+        ) {
+          index++
+        }
         value = html.slice(valueStart, index)
       }
       attributeEnd = index
@@ -146,6 +155,34 @@ function parseStartTag(html, tagStart, nameEnd, name) {
   return null
 }
 
+function commentEnd(html, start) {
+  // Abrupt empty-comment forms have dedicated tokenizer transitions.
+  if (html[start + 4] === '>') return start + 5
+  if (html[start + 4] === '-' && html[start + 5] === '>') return start + 6
+
+  let index = start + 4
+  while ((index = html.indexOf('--', index)) !== -1) {
+    if (html[index + 2] === '>') return index + 3
+    if (html[index + 2] === '!' && html[index + 3] === '>') return index + 4
+    index += 2
+  }
+  return -1
+}
+
+function declarationEnd(html, start) {
+  let quote = null
+  for (let index = start; index < html.length; index++) {
+    if (quote) {
+      if (html[index] === quote) quote = null
+    } else if (html[index] === '"' || html[index] === "'") {
+      quote = html[index]
+    } else if (html[index] === '>') {
+      return index + 1
+    }
+  }
+  return -1
+}
+
 /**
  * Scan the HTML once without mistaking quoted tag-shaped text, comments, or raw-text
  * contents for live elements. Source ranges are absolute offsets into `html` so callers
@@ -154,21 +191,49 @@ function parseStartTag(html, tagStart, nameEnd, name) {
 export function scanHtml(html) {
   const links = []
   const styles = []
+  const noscripts = []
   let index = 0
+  let templateDepth = 0
   while ((index = html.indexOf('<', index)) !== -1) {
     if (html.startsWith('<!--', index)) {
-      // The HTML tokenizer closes these empty-comment forms at their first `>`.
-      if (html[index + 4] === '>') {
-        index += 5
-        continue
-      }
-      if (html[index + 4] === '-' && html[index + 5] === '>') {
-        index += 6
-        continue
-      }
-      const end = html.indexOf('-->', index + 4)
+      const end = commentEnd(html, index)
       if (end === -1) break
-      index = end + 3
+      index = end
+      continue
+    }
+
+    // Processing instructions and unknown declarations become bogus comments in HTML and
+    // consume their contents through the first `>`. DOCTYPE is the one declaration whose
+    // quoted identifiers need their delimiters preserved.
+    if (html[index + 1] === '?' || html[index + 1] === '!') {
+      const isDoctype =
+        asciiLower(html.slice(index + 2, index + 9)) === 'doctype' &&
+        (ASCII_WHITESPACE_RE.test(html[index + 9] ?? '') || html[index + 9] === '>')
+      const end = isDoctype ? declarationEnd(html, index + 2) : html.indexOf('>', index + 2) + 1
+      if (end <= 0) break
+      index = end
+      continue
+    }
+
+    if (html[index + 1] === '/') {
+      if (!/[A-Za-z]/.test(html[index + 2] ?? '')) {
+        index++
+        continue
+      }
+      let nameEnd = index + 3
+      while (
+        nameEnd < html.length &&
+        !ASCII_WHITESPACE_RE.test(html[nameEnd]) &&
+        html[nameEnd] !== '/' &&
+        html[nameEnd] !== '>'
+      ) {
+        nameEnd++
+      }
+      const name = asciiLower(html.slice(index + 2, nameEnd))
+      const tag = parseStartTag(html, index, nameEnd, name)
+      if (!tag) break
+      if (name === 'template' && templateDepth > 0) templateDepth--
+      index = tag.end
       continue
     }
 
@@ -181,7 +246,7 @@ export function scanHtml(html) {
     let nameEnd = index + 2
     while (
       nameEnd < html.length &&
-      !SPACE_RE.test(html[nameEnd]) &&
+      !ASCII_WHITESPACE_RE.test(html[nameEnd]) &&
       html[nameEnd] !== '/' &&
       html[nameEnd] !== '>'
     ) {
@@ -192,31 +257,38 @@ export function scanHtml(html) {
     // A genuinely unclosed quote in live markup keeps the browser in the tag's
     // attribute-value state, so later tag-shaped text is not another element.
     if (!tag) break
-    if (name === 'link') links.push(tag)
+    if (name === 'link' && templateDepth === 0) links.push(tag)
+
+    if (name === 'template') {
+      templateDepth++
+      index = tag.end
+      continue
+    }
+    if (name === 'plaintext') break
 
     if (RAW_TEXT_ELEMENTS.has(name)) {
       // Search the original source. Case-folding a copy can change its length (`İ` is the
       // smallest counterexample) and makes every later source position unsafe.
-      const closing = new RegExp(`</${escapeRegExp(name)}(?=[\\s/>])`, 'gi')
+      const closing = new RegExp(`</${escapeRegExp(name)}(?=[\\t\\n\\f\\r />])`, 'gi')
       closing.lastIndex = tag.end
       const match = closing.exec(html)
       if (!match) {
-        if (name === 'style') {
-          styles.push({ text: html.slice(tag.end), start: tag.end, end: html.length })
-        }
+        const record = { text: html.slice(tag.end), start: tag.end, end: html.length }
+        if (name === 'style' && templateDepth === 0) styles.push(record)
+        if (name === 'noscript' && templateDepth === 0) noscripts.push(record)
         break
       }
-      if (name === 'style') {
-        styles.push({ text: html.slice(tag.end, match.index), start: tag.end, end: match.index })
-      }
-      const closingEnd = html.indexOf('>', match.index + match[0].length)
-      if (closingEnd === -1) break
-      index = closingEnd + 1
+      const record = { text: html.slice(tag.end, match.index), start: tag.end, end: match.index }
+      if (name === 'style' && templateDepth === 0) styles.push(record)
+      if (name === 'noscript' && templateDepth === 0) noscripts.push(record)
+      const closingTag = parseStartTag(html, match.index, match.index + 2 + name.length, name)
+      if (!closingTag) break
+      index = closingTag.end
     } else {
       index = tag.end
     }
   }
-  return { links, styles }
+  return { links, styles, noscripts }
 }
 
 export const parseHtmlLinks = (html) => scanHtml(html).links
@@ -314,7 +386,11 @@ export function parseLinkHeader(value) {
   return entries
 }
 
-const relationTokens = (value) => value?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+const relationTokens = (value) =>
+  value
+    ?.toLowerCase()
+    .split(/[\t\n\f\r ]+/)
+    .filter(Boolean) ?? []
 const isFontPreload = (rel, as) => relationTokens(rel).includes('preload') && as === 'font'
 const hasAnonymousValue = (values) => {
   const crossorigin = values.get('crossorigin')
@@ -343,7 +419,7 @@ function crossoriginEdit(html, link) {
 
   let at = link.end - 1
   let before = at - 1
-  while (before >= link.start && SPACE_RE.test(html[before])) before--
+  while (before >= link.start && ASCII_WHITESPACE_RE.test(html[before])) before--
   if (html[before] === '/') at = before
   return { start: at, end: at, text: ' crossorigin="anonymous"' }
 }

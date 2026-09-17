@@ -272,6 +272,10 @@ export function fonts(userOptions = {}) {
   let warnedMissingHtmlTransform = false
   let failedBuildEnvironments = new WeakSet()
   let buildFailedWithoutEnvironment = false
+  // Vite 8 resolves the top-level config and then resolves each environment again on the
+  // same shared plugin. The raw config passed to those later calls does not identify the
+  // environment, so client HTML state must stay sticky until this build actually finishes.
+  let resetHtmlStateOnNextConfig = true
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -288,6 +292,27 @@ export function fonts(userOptions = {}) {
     if (!gen) throw new Error('[tss-fonts] font generation has not completed')
     return gen
   }
+
+  const isClientBuildContext = (context) => {
+    const consumer = context.environment?.config?.consumer
+    if (consumer !== undefined) return consumer === 'client'
+    const environmentSsr = context.environment?.config?.build?.ssr
+    return environmentSsr !== undefined ? !environmentSsr : !isSsrBuild
+  }
+
+  const clearBuildFailure = (environment) => {
+    if (environment) failedBuildEnvironments.delete(environment)
+    else buildFailedWithoutEnvironment = false
+  }
+
+  const recordBuildFailure = (environment) => {
+    if (environment) failedBuildEnvironments.add(environment)
+    else buildFailedWithoutEnvironment = true
+    resetHtmlStateOnNextConfig = true
+  }
+
+  const buildFailed = (environment) =>
+    environment ? failedBuildEnvironments.has(environment) : buildFailedWithoutEnvironment
 
   const api = {
     getDiagnostics() {
@@ -335,14 +360,14 @@ export function fonts(userOptions = {}) {
     sharedDuringBuild: true,
 
     async config(config, env) {
-      const configuringSsr = env.command === 'build' && Boolean(config.build?.ssr)
       // A restart creates and configures its replacement server before the old server
-      // closes. Reset client state at the start of the replacement configuration instead
-      // of relying on closeBundle, while preserving it across this run's later SSR pass.
-      if (!configuringSsr) {
+      // closes, so every serve config starts fresh. Build configs instead reset only once:
+      // createBuilder's later client/SSR config calls belong to the same run.
+      if (env.command === 'serve' || resetHtmlStateOnNextConfig) {
         htmlEntryDetected = false
         htmlTransforms = 0
         warnedMissingHtmlTransform = false
+        resetHtmlStateOnNextConfig = false
       }
       for (const key of Object.keys(opts)) delete opts[key]
       assignDefined(opts, defaultOptions(), userOptions)
@@ -357,7 +382,7 @@ export function fonts(userOptions = {}) {
       generatedFiles = new Set()
       fontRulesAreScoped = true
       isServe = env.command === 'serve'
-      isSsrBuild = configuringSsr
+      isSsrBuild = env.command === 'build' && Boolean(config.build?.ssr)
       isLibraryBuild = env.command === 'build' && Boolean(config.build?.lib)
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
@@ -544,17 +569,11 @@ export function fonts(userOptions = {}) {
     // outDir at `.output/public`, so `fileName: 'fonts/x.woff2'` lands at
     // `.output/public/fonts/x.woff2` and serves at `/fonts/x.woff2`.
     buildStart() {
-      if (this.environment) failedBuildEnvironments.delete(this.environment)
-      else buildFailedWithoutEnvironment = false
+      clearBuildFailure(this.environment)
       // emitFile throws "not supported in serve mode"; buildStart still runs for the dev
       // module graph. Dev is covered by the middleware below.
       if (isServe) return
-      if (
-        this.environment?.config?.consumer !== undefined &&
-        this.environment.config.consumer !== 'client'
-      ) {
-        return
-      }
+      if (!isClientBuildContext(this)) return
 
       // Directory mode already wrote the files in config(); publicDir handles serving.
       if (opts.assets !== 'emit') return
@@ -822,23 +841,16 @@ export function fonts(userOptions = {}) {
 
     buildEnd(error) {
       if (error) {
-        if (this.environment) failedBuildEnvironments.add(this.environment)
-        else buildFailedWithoutEnvironment = true
+        recordBuildFailure(this.environment)
         return
       }
       // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
       // an SSR/nitro pass that never transforms CSS must not report a false failure.
-      if (
-        this.environment?.config?.consumer !== undefined &&
-        this.environment.config.consumer !== 'client'
-      ) {
-        return
-      }
+      if (!isClientBuildContext(this)) return
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {
-        if (this.environment) failedBuildEnvironments.add(this.environment)
-        else buildFailedWithoutEnvironment = true
+        recordBuildFailure(this.environment)
         this.error(
           "[tss-fonts] never saw a stylesheet containing `@import 'tailwindcss'`, so the " +
             '@theme block was NOT injected and no fonts were applied.\n' +
@@ -849,6 +861,7 @@ export function fonts(userOptions = {}) {
     },
 
     closeBundle() {
+      resetHtmlStateOnNextConfig = true
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
       const environmentBuild = this.environment?.config?.build
@@ -856,16 +869,9 @@ export function fonts(userOptions = {}) {
         environmentBuild?.ssr !== undefined ? Boolean(environmentBuild.ssr) : isSsrBuild
       const environmentIsLibraryBuild =
         environmentBuild?.lib !== undefined ? Boolean(environmentBuild.lib) : isLibraryBuild
-      const environmentBuildFailed = this.environment
-        ? failedBuildEnvironments.has(this.environment)
-        : buildFailedWithoutEnvironment
+      const environmentBuildFailed = buildFailed(this.environment)
       if (environmentIsSsrBuild || environmentIsLibraryBuild || environmentBuildFailed) return
-      if (
-        this.environment?.config?.consumer !== undefined &&
-        this.environment.config.consumer !== 'client'
-      ) {
-        return
-      }
+      if (!isClientBuildContext(this)) return
       const delivery = currentDelivery()
       if (
         !isServe &&

@@ -46,13 +46,45 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const headerFontPreloads = headerLinks.filter(isHeaderFontPreload)
   const rawHeaderPreloadFontLinks = headerFontPreloads.map((link) => link.raw)
   const headerPreloadFontLinks = [...rawHeaderPreloadFontLinks]
-  const { links: htmlLinks, styles: inlineStyleRecords } = scanHtml(html)
+  const { links: htmlLinks, styles: liveStyleRecords, noscripts } = scanHtml(html)
+  const noscriptScans = noscripts.map((record) => ({ record, scan: scanHtml(record.text) }))
+  const fallbackLinks = noscriptScans.flatMap(({ record, scan }) =>
+    scan.links.map((link) => ({ link, start: record.start + link.start })),
+  )
+  const inlineStyleRecords = [
+    ...liveStyleRecords,
+    ...noscriptScans.flatMap(({ record, scan }) =>
+      scan.styles.map((style) => ({
+        ...style,
+        start: record.start + style.start,
+        end: record.start + style.end,
+      })),
+    ),
+  ].sort((left, right) => left.start - right.start)
   const htmlFontPreloads = htmlLinks.filter(isHtmlFontPreload)
-  const hrefs = htmlLinks
-    .filter(
-      (link) => htmlLinkRelTokens(link).includes('stylesheet') && htmlLinkAttribute(link, 'href'),
-    )
-    .map((link) => decodeHtmlHref(htmlLinkAttribute(link, 'href')))
+  const stylesheetHref = (link, includeStylePreloads) => {
+    const relations = htmlLinkRelTokens(link)
+    const as = htmlLinkAttribute(link, 'as')?.toLowerCase()
+    if (
+      !relations.includes('stylesheet') &&
+      !(includeStylePreloads && relations.includes('preload') && as === 'style')
+    ) {
+      return null
+    }
+    const href = htmlLinkAttribute(link, 'href')
+    return href ? decodeHtmlHref(href) : null
+  }
+  const hrefs = [
+    ...new Set(
+      [
+        ...htmlLinks.map((link) => ({ link, start: link.start, includeStylePreloads: true })),
+        ...fallbackLinks.map((record) => ({ ...record, includeStylePreloads: false })),
+      ]
+        .sort((left, right) => left.start - right.start)
+        .map(({ link, includeStylePreloads }) => stylesheetHref(link, includeStylePreloads))
+        .filter((href) => typeof href === 'string'),
+    ),
+  ]
   const inlineStyles = inlineStyleRecords.map((style) => style.text)
   const rawHeadPreloadFontLinks = htmlFontPreloads.map((link) => link.raw)
   const headPreloadFontLinks = [...rawHeadPreloadFontLinks]

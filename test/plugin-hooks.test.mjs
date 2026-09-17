@@ -764,6 +764,58 @@ test('HTML preload parsing keeps browser source positions across tokenizer edge 
   assert.equal(hidden.tags.length, 1, 'a scripting-enabled page needs a live preload')
 })
 
+test('HTML preload parsing uses HTML comment endings and ASCII whitespace', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+
+  assert.equal(plugin.transformIndexHtml(`<!-- draft --!>${preload}`), undefined)
+  for (const whitespace of ['\u00a0', '\u2028', '\ufeff']) {
+    const tagNameResult = plugin.transformIndexHtml(
+      `<link${whitespace}rel=preload as=font href="${attrs.href}" crossorigin>`,
+    )
+    assert.equal(
+      tagNameResult.tags.length,
+      1,
+      `non-ASCII tag delimiter ${whitespace.codePointAt(0)}`,
+    )
+
+    const attributeResult = plugin.transformIndexHtml(
+      `<link rel${whitespace}=preload as=font href="${attrs.href}" crossorigin>`,
+    )
+    assert.equal(
+      attributeResult.tags.length,
+      1,
+      `non-ASCII attribute delimiter ${whitespace.codePointAt(0)}`,
+    )
+  }
+})
+
+test('HTML preload parsing ignores links in every supported inert construct', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+  const inertDocuments = [
+    `<?draft ${preload}>`,
+    `<!draft ${preload}>`,
+    `</div data-draft="${preload}">`,
+    `<template>${preload}<template>${preload}</template></template>`,
+    `<plaintext>${preload}`,
+  ]
+  for (const html of inertDocuments) {
+    const result = plugin.transformIndexHtml(html)
+    assert.equal(result.tags.length, 1, html)
+  }
+
+  for (const inert of inertDocuments.slice(0, -1)) {
+    assert.equal(plugin.transformIndexHtml(`${inert}${preload}`), undefined, inert)
+  }
+})
+
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t)
@@ -832,7 +884,9 @@ test('a shared server config cannot disable automatic client HTML injection', as
   const { plugin, root } = await routeRules(t)
   await plugin.config({ root }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'spa', build: { ssr: false } })
-  await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
+  // Vite 8 patches the resolved build for each environment only after config(), so the
+  // SSR environment's raw config is indistinguishable from the client's here.
+  await plugin.config({ root }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
   assert.equal(htmlTags(plugin.transformIndexHtml('<head></head>')).length, 1)
 
@@ -939,6 +993,26 @@ test('buildStart emits through a legacy hook context without an environment', as
   const emitted = []
   plugin.buildStart.call({ emitFile: (asset) => emitted.push(asset) })
   assert.equal(emitted.length, 1)
+})
+
+test('legacy SSR hook contexts neither emit fonts nor enforce the client CSS entry', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [selfHosted], silent: true })
+  await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
+  plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
+
+  plugin.buildStart.call({
+    emitFile() {
+      assert.fail('a legacy SSR build must not emit client font assets')
+    },
+  })
+  assert.doesNotThrow(() =>
+    plugin.buildEnd.call({
+      error(message) {
+        throw new Error(message)
+      },
+    }),
+  )
 })
 
 test('buildStart emits nothing in serve mode', async (t) => {
