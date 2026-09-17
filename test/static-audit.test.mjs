@@ -5,6 +5,7 @@ import {
   hasAnonymousHeaderCrossorigin,
   isHeaderFontPreload,
   parseLinkHeader,
+  scanHtml,
 } from '../src/preload-delivery.mjs'
 
 const response = (url, body, { status = 200, headers = {} } = {}) => ({
@@ -49,6 +50,26 @@ test('Link parsing deliberately rejects malformed Chromium extensions', () => {
     '</fonts/font.woff2>; rel=preload; as=font; crossorigin=',
   ]) {
     assert.equal(parseLinkHeader(header).filter(isHeaderFontPreload).length, 0, header)
+  }
+})
+
+test('HTML scanning keeps inline styles after malformed tokenizer constructs', () => {
+  const liveStyle = '<style>.live { color: green }</style>'
+  for (const prefix of [
+    '<!-- note --->',
+    '<!-- note ---->',
+    '<!-- note --!>',
+    '<!DOCTYPE html PUBLIC "quoted>identifier">',
+    '<!DOCTYPE html PUBLIC "unterminated>',
+    '</ <style>.hidden { color: red }</style>>',
+    '</1 <style>.hidden { color: red }</style>>',
+  ]) {
+    const { styles } = scanHtml(prefix + liveStyle)
+    assert.deepEqual(
+      styles.map((style) => style.text),
+      ['.live { color: green }'],
+      prefix,
+    )
   }
 })
 
@@ -103,7 +124,7 @@ test('static audit follows stylesheet-relative imports and samples the preloaded
   assert.match(audit.sampleFontResponse.cacheControl, /immutable/)
 })
 
-test('static audit follows async CSS and noscript fallbacks without promoting inert preloads', async () => {
+test('static audit models JavaScript-on CSS without noscript or inert style preloads', async () => {
   const calls = []
   const documentUrl = 'https://site.test/'
   const appCssUrl = 'https://site.test/app.css'
@@ -125,6 +146,7 @@ test('static audit follows async CSS and noscript fallbacks without promoting in
              <link rel=preload as=font href=/fonts/inert.woff2 crossorigin>
            </noscript>
            <link rel=stylesheet href=/late.css>
+           <link rel=preload as=style href=/unused.css>
            <link rel=preload as=font href=/fonts/target.woff2 crossorigin>`,
         )
       }
@@ -146,13 +168,64 @@ test('static audit follows async CSS and noscript fallbacks without promoting in
     },
   })
 
-  assert.deepEqual(audit.stylesheetHrefs, ['/app.css', '/fallback.css', '/late.css'])
+  assert.deepEqual(audit.stylesheetHrefs, ['/app.css', '/late.css'])
   assert.equal(calls.filter((url) => url === appCssUrl).length, 1)
-  assert.equal(calls.filter((url) => url === fallbackCssUrl).length, 1)
-  assert.equal(audit.totalFontFaceBlocks, 2)
+  assert.equal(calls.filter((url) => url === fallbackCssUrl).length, 0)
+  assert.equal(calls.includes('https://site.test/unused.css'), false)
+  assert.equal(audit.totalFontFaceBlocks, 1)
   assert.equal(audit.headPreloadFontLinks.length, 1)
   assert.doesNotMatch(audit.headPreloadFontLinks.join('\n'), /inert\.woff2/)
   assert.equal(audit.sampleFontResponse.url, fontUrl)
+})
+
+test('static audit includes active declarative shadow-root styles exactly once', async () => {
+  const documentUrl = 'https://site.test/'
+  const shadowCssUrl = 'https://site.test/shadow.css'
+  const closedCssUrl = 'https://site.test/closed.css'
+  const audit = await staticAudit(documentUrl, {
+    fetchImpl: async (url) => {
+      const current = String(url)
+      if (current === documentUrl) {
+        return response(
+          documentUrl,
+          `<template>
+             <style>@font-face { font-family: Inert; src: url(/inert.woff2) }</style>
+             <template shadowrootmode=open><link rel=stylesheet href=/nested-inert.css></template>
+           </template>
+           <template shadowrootmode=open>
+             <style>@font-face { font-family: InlineShadow; src: url(/inline.woff2) }</style>
+             <link rel=stylesheet href=/shadow.css>
+           </template>
+           <template shadowrootmode=closed>
+             <link rel=preload as=style href=/closed.css
+               onload="this.setAttribute('rel', 'stylesheet')">
+           </template>`,
+        )
+      }
+      if (current === shadowCssUrl) {
+        return response(
+          current,
+          `@font-face { font-family: LinkedShadow; src: url(/linked.woff2) }`,
+        )
+      }
+      if (current === closedCssUrl) {
+        return response(
+          current,
+          `@font-face { font-family: ClosedShadow; src: url(/closed.woff2) }`,
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    },
+  })
+
+  assert.deepEqual(audit.stylesheetHrefs, ['/shadow.css', '/closed.css'])
+  assert.equal(audit.inlineStyleTags, 1)
+  assert.equal(audit.totalFontFaceBlocks, 3)
+  assert.deepEqual(audit.fontFamiliesDeclared.sort(), [
+    'ClosedShadow',
+    'InlineShadow',
+    'LinkedShadow',
+  ])
 })
 
 test('static audit does not substitute an unrelated face when no preload matches', async () => {

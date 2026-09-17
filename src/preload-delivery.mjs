@@ -162,23 +162,11 @@ function commentEnd(html, start) {
 
   let index = start + 4
   while ((index = html.indexOf('--', index)) !== -1) {
-    if (html[index + 2] === '>') return index + 3
-    if (html[index + 2] === '!' && html[index + 3] === '>') return index + 4
-    index += 2
-  }
-  return -1
-}
-
-function declarationEnd(html, start) {
-  let quote = null
-  for (let index = start; index < html.length; index++) {
-    if (quote) {
-      if (html[index] === quote) quote = null
-    } else if (html[index] === '"' || html[index] === "'") {
-      quote = html[index]
-    } else if (html[index] === '>') {
-      return index + 1
-    }
+    let end = index + 2
+    while (html[end] === '-') end++
+    if (html[end] === '>') return end + 1
+    if (html[end] === '!' && html[end + 1] === '>') return end + 2
+    index = end
   }
   return -1
 }
@@ -193,7 +181,8 @@ export function scanHtml(html) {
   const styles = []
   const noscripts = []
   let index = 0
-  let templateDepth = 0
+  const templateStack = []
+  let inertTemplateDepth = 0
   while ((index = html.indexOf('<', index)) !== -1) {
     if (html.startsWith('<!--', index)) {
       const end = commentEnd(html, index)
@@ -202,14 +191,10 @@ export function scanHtml(html) {
       continue
     }
 
-    // Processing instructions and unknown declarations become bogus comments in HTML and
-    // consume their contents through the first `>`. DOCTYPE is the one declaration whose
-    // quoted identifiers need their delimiters preserved.
+    // Processing instructions, declarations, and DOCTYPE all return to the data state at
+    // their first `>`. Quotes inside a DOCTYPE identifier do not protect that delimiter.
     if (html[index + 1] === '?' || html[index + 1] === '!') {
-      const isDoctype =
-        asciiLower(html.slice(index + 2, index + 9)) === 'doctype' &&
-        (ASCII_WHITESPACE_RE.test(html[index + 9] ?? '') || html[index + 9] === '>')
-      const end = isDoctype ? declarationEnd(html, index + 2) : html.indexOf('>', index + 2) + 1
+      const end = html.indexOf('>', index + 2) + 1
       if (end <= 0) break
       index = end
       continue
@@ -217,7 +202,11 @@ export function scanHtml(html) {
 
     if (html[index + 1] === '/') {
       if (!/[A-Za-z]/.test(html[index + 2] ?? '')) {
-        index++
+        // An invalid end-tag opener becomes a bogus comment. Tag-shaped text before the
+        // next `>` is comment data, not another live element.
+        const end = html.indexOf('>', index + 2)
+        if (end === -1) break
+        index = end + 1
         continue
       }
       let nameEnd = index + 3
@@ -232,7 +221,9 @@ export function scanHtml(html) {
       const name = asciiLower(html.slice(index + 2, nameEnd))
       const tag = parseStartTag(html, index, nameEnd, name)
       if (!tag) break
-      if (name === 'template' && templateDepth > 0) templateDepth--
+      if (name === 'template' && templateStack.length) {
+        if (templateStack.pop()) inertTemplateDepth--
+      }
       index = tag.end
       continue
     }
@@ -257,10 +248,14 @@ export function scanHtml(html) {
     // A genuinely unclosed quote in live markup keeps the browser in the tag's
     // attribute-value state, so later tag-shaped text is not another element.
     if (!tag) break
-    if (name === 'link' && templateDepth === 0) links.push(tag)
+    if (name === 'link' && inertTemplateDepth === 0) links.push(tag)
 
     if (name === 'template') {
-      templateDepth++
+      const shadowRootMode = asciiLower(tag.attributes.get('shadowrootmode')?.value ?? '')
+      const inert =
+        inertTemplateDepth > 0 || (shadowRootMode !== 'open' && shadowRootMode !== 'closed')
+      templateStack.push(inert)
+      if (inert) inertTemplateDepth++
       index = tag.end
       continue
     }
@@ -274,13 +269,13 @@ export function scanHtml(html) {
       const match = closing.exec(html)
       if (!match) {
         const record = { text: html.slice(tag.end), start: tag.end, end: html.length }
-        if (name === 'style' && templateDepth === 0) styles.push(record)
-        if (name === 'noscript' && templateDepth === 0) noscripts.push(record)
+        if (name === 'style' && inertTemplateDepth === 0) styles.push(record)
+        if (name === 'noscript' && inertTemplateDepth === 0) noscripts.push(record)
         break
       }
       const record = { text: html.slice(tag.end, match.index), start: tag.end, end: match.index }
-      if (name === 'style' && templateDepth === 0) styles.push(record)
-      if (name === 'noscript' && templateDepth === 0) noscripts.push(record)
+      if (name === 'style' && inertTemplateDepth === 0) styles.push(record)
+      if (name === 'noscript' && inertTemplateDepth === 0) noscripts.push(record)
       const closingTag = parseStartTag(html, match.index, match.index + 2 + name.length, name)
       if (!closingTag) break
       index = closingTag.end
