@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { init, parse } from 'es-module-lexer'
+import { mask } from './codemod-vite.mjs'
 import { assertFontHost } from './font-host.mjs'
 import { detectTailwindEntry, themeBlocks } from './detect.mjs'
 import { runInDoctorContext } from './doctor-context.mjs'
@@ -10,8 +12,121 @@ import { requestHasRangedOpsz } from './opsz.mjs'
 
 const FONT_PLUGIN = 'tailwind-vite-font-kit'
 const TAILWIND_PLUGIN = '@tailwindcss/vite'
+const SERVER_ENTRY_SPECIFIER = 'tailwind-vite-font-kit/start-server'
+
+await init
 
 const check = (status, message) => ({ status, message })
+
+const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function serverEntryBindings(statement) {
+  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(statement)
+  if (!match || /^type\b/.test(match[1].trim())) return []
+  const clause = match[1].trim()
+  const bindings = []
+  const defaultBinding = /^([\w$]+)(?:\s*,|$)/.exec(clause)?.[1]
+  if (defaultBinding) bindings.push(defaultBinding)
+  const named = /\{([\s\S]*?)\}/.exec(clause)?.[1]
+  if (named) {
+    for (const raw of named.split(',')) {
+      const imported = /^createFontsServerEntry(?:\s+as\s+([\w$]+))?$/.exec(raw.trim())
+      if (imported) bindings.push(imported[1] ?? 'createFontsServerEntry')
+      const importedDefault = /^default\s+as\s+([\w$]+)$/.exec(raw.trim())
+      if (importedDefault) bindings.push(importedDefault[1])
+    }
+  }
+  const namespace = /\*\s+as\s+([\w$]+)/.exec(clause)?.[1]
+  if (namespace) bindings.push(`${namespace}.createFontsServerEntry`, `${namespace}.default`)
+  return bindings
+}
+
+function closingParen(masked, open) {
+  let depth = 1
+  for (let index = open + 1; index < masked.length; index++) {
+    if (masked[index] === '(') depth++
+    if (masked[index] === ')' && --depth === 0) return index
+  }
+  return -1
+}
+
+function classifyServerOptions(source) {
+  if (!source.trim()) return 'early-hints'
+  const masked = mask(source)
+  const first = masked.search(/\S/)
+  if (first === -1) return 'early-hints'
+  const last = masked.search(/\s*$/)
+  const active = masked.slice(first, last)
+  const originalSource = source.slice(first, last)
+  if (!active.startsWith('{') || !active.endsWith('}')) return 'unknown'
+
+  const ranges = []
+  let start = 1
+  let depth = 0
+  for (let index = 1; index < active.length - 1; index++) {
+    if ('{[('.includes(active[index])) depth++
+    else if ('}])'.includes(active[index])) depth--
+    else if (active[index] === ',' && depth === 0) {
+      ranges.push([start, index])
+      start = index + 1
+    }
+  }
+  ranges.push([start, active.length - 1])
+
+  let linkHeader
+  let earlyHints
+  for (const [from, to] of ranges) {
+    const property = active.slice(from, to)
+    const original = originalSource.slice(from, to)
+    if (/^\s*(?:\.\.\.|\[)/.test(property)) return 'unknown'
+    for (const name of ['linkHeader', 'earlyHints']) {
+      const found = new RegExp(`^\\s*${name}\\s*:\\s*(true|false)\\b`).exec(property)
+      const quoted = new RegExp(`^\\s*(["'])${name}\\1\\s*:\\s*(true|false)\\b`).exec(original)
+      if (found || quoted) {
+        const value = (found?.[1] ?? quoted?.[2]) === 'true'
+        if (name === 'linkHeader') linkHeader = value
+        else earlyHints = value
+      } else if (
+        new RegExp(`^\\s*${name}\\b`).test(property) ||
+        new RegExp(`^\\s*(["'])${name}\\1\\s*:`).test(original)
+      ) {
+        return 'unknown'
+      }
+    }
+  }
+  if (linkHeader === true) return 'link-header'
+  if (earlyHints === false) return 'disabled'
+  return 'early-hints'
+}
+
+function detectServerEntryDelivery(root) {
+  const file = join(root, 'src', 'server.ts')
+  if (!existsSync(file)) return 'none'
+  const source = readFileSync(file, 'utf8')
+  let imports
+  try {
+    ;[imports] = parse(source)
+  } catch {
+    return source.includes(SERVER_ENTRY_SPECIFIER) ? 'unknown' : 'none'
+  }
+  const bindings = imports.flatMap((entry) => {
+    if (entry.n !== SERVER_ENTRY_SPECIFIER || entry.d !== -1) return []
+    return serverEntryBindings(source.slice(entry.ss, entry.se))
+  })
+  if (!bindings.length) return 'none'
+
+  const active = mask(source)
+  for (const binding of bindings) {
+    const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
+    const call = new RegExp(`\\bexport\\s+default\\s+${expression}\\s*\\(`).exec(active)
+    if (!call) continue
+    const open = call.index + call[0].lastIndexOf('(')
+    const close = closingParen(active, open)
+    if (close === -1) return 'unknown'
+    return classifyServerOptions(source.slice(open + 1, close))
+  }
+  return 'none'
+}
 
 async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
   const unique = [...new Set(preloads.map((preload) => preload.href))]
@@ -114,6 +229,9 @@ export async function diagnoseResolvedConfig(
   }
 
   const preloads = generation.preloads ?? []
+  const isSsrBuild = diagnostics.isSsrBuild ?? Boolean(resolved.build?.ssr)
+  const isLibraryBuild = diagnostics.isLibraryBuild ?? Boolean(resolved.build?.lib)
+  const serverDelivery = preloads.length ? detectServerEntryDelivery(root) : 'none'
   const delivery =
     diagnostics.delivery ??
     resolvePreloadDelivery(options, {
@@ -123,6 +241,8 @@ export async function diagnoseResolvedConfig(
     })
   if (!preloads.length) {
     checks.push(check('pass', `no font preloads are configured`))
+  } else if (isLibraryBuild) {
+    checks.push(check('pass', `library builds do not produce a document preload response`))
   } else if (delivery.headerActive) {
     checks.push(
       check(
@@ -132,8 +252,33 @@ export async function diagnoseResolvedConfig(
           : `Nitro will deliver the font preload Link header`,
       ),
     )
+  } else if (isSsrBuild) {
+    checks.push(
+      check('pass', `SSR build defers document preload delivery to its client or server output`),
+    )
+  } else if (serverDelivery === 'link-header') {
+    checks.push(check('pass', `the Start server entry will deliver font preload Link headers`))
+  } else if (serverDelivery === 'early-hints') {
+    checks.push(
+      check(
+        'warning',
+        `the Start server entry enables Early Hints without a Link-header fallback; delivery depends on the runtime and protocol`,
+      ),
+    )
+  } else if (serverDelivery === 'unknown') {
+    checks.push(
+      check(
+        'warning',
+        `the Start server entry's font preload delivery options could not be verified`,
+      ),
+    )
   } else if (delivery.htmlInjectionEnabled && diagnostics.hasNitro) {
-    checks.push(check('pass', `explicit HTML preload injection is enabled with Nitro`))
+    checks.push(
+      check(
+        'warning',
+        `explicit HTML preload injection is enabled with Nitro, but Nitro production HTML does not use Vite's HTML transform`,
+      ),
+    )
   } else if (delivery.htmlInjectionEnabled && delivery.htmlEntryDetected) {
     checks.push(check('warning', `Nitro is absent; Vite HTML preload injection is configured`))
   } else if (delivery.htmlInjectionEnabled) {

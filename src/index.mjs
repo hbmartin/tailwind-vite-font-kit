@@ -7,7 +7,7 @@
 //   config()          fetch css2 + download woff2 (cached), write fonts.gen.css, and hand
 //                     Nitro two route rules: `immutable` on the fonts, and a `Link:`
 //                     preload header on documents. `config` is the earliest async hook
-//                     and runs ONCE per process — `buildStart` fires per-environment and
+//                     and runs once per config resolution — `buildStart` fires per-environment and
 //                     would race Tailwind's transform in a multi-environment build.
 //   transform()       rewrite the Tailwind ENTRY in-memory to `@import` that file.
 //                     Tailwind bypasses Vite for its own @imports, so the target must be
@@ -27,12 +27,31 @@ import { isDoctorContext } from './doctor-context.mjs'
 import {
   hasConventionalHtmlEntry,
   normalizeHtmlFontPreloads,
+  preloadHeaderEnabled,
   resolvePreloadDelivery,
 } from './preload-delivery.mjs'
 
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
 const FULL_URL_BASE_RE = /^(?:https?:)?\/\//
+const DEFAULT_OPTIONS = {
+  subsets: ['latin'],
+  publicPath: '/fonts',
+  assets: 'emit',
+  output: 'cache',
+  preloadHeader: true,
+  preloadHtml: 'auto',
+  silent: false,
+}
+
+function assignDefined(target, ...sources) {
+  for (const source of sources) {
+    for (const [key, value] of Object.entries(source ?? {})) {
+      if (value !== undefined) target[key] = value
+    }
+  }
+  return target
+}
 
 /** Turn a user-facing URL prefix into one absolute directory path. `'/'` is legal —
  *  fonts then live at the bundle root, which worked before base handling existed. */
@@ -151,23 +170,9 @@ function publicPathsForVite(base, publicPath, { selfHost = true, warn = () => {}
 export function fonts(userOptions = {}) {
   // `families` is filled in by resolveFamilies() below, which throws if neither the
   // call site nor fonts.config.mjs supplied any — so every hook can assume it is set.
-  const opts = /** @type {import('./generate.mjs').ResolvedOptions} */ ({
-    subsets: ['latin'],
-    publicPath: '/fonts',
-    // 'emit' (default) — Rollup emits the woff2 into the client bundle; nothing lands
-    // in your source tree. Any other value is a directory path relative to the project
-    // root (e.g. 'public/fonts'), for when you want real files you can inspect or serve
-    // without the plugin. Note that committing those files does NOT make builds
-    // hermetic — the generated CSS still lives in `output`. Use output:'commit' for that.
-    assets: 'emit',
-    output: 'cache', // 'cache' | 'commit'
-    preloadHeader: true,
-    preloadHtml: 'auto',
-    silent: false,
-    ...userOptions,
-  })
-  /** @param {string} m */
-  const capturedWarnings = []
+  const opts = /** @type {import('./generate.mjs').ResolvedOptions} */ (
+    assignDefined({}, DEFAULT_OPTIONS, userOptions)
+  )
   const warningEvents = []
   const doctorMode = () => isDoctorContext()
   const log = (m) => !opts.silent && !doctorMode() && console.log(`[tss-fonts] ${m}`)
@@ -175,7 +180,6 @@ export function fonts(userOptions = {}) {
   // "hide delivery, correctness, or production-header conditions that still need review".
   /** @param {string} m */
   const warn = (m, code = 'GENERAL') => {
-    capturedWarnings.push(m)
     warningEvents.push({ code, message: m })
     if (!doctorMode()) console.warn(`[tss-fonts] ${m}`)
   }
@@ -207,7 +211,7 @@ export function fonts(userOptions = {}) {
       // before merging: spreading an array (or a string) into `opts` produces index keys
       // and no `families`, which would end at the misleading "no families configured".
       const cfg = assertConfigShape(await loadFontsConfig(p), name)
-      Object.assign(opts, { ...cfg, ...userOptions })
+      assignDefined(opts, cfg, userOptions)
       configFile = p
       log(`loaded ${name}`)
       // Validate only once families are known to be present — a config file with no
@@ -229,6 +233,7 @@ export function fonts(userOptions = {}) {
   let root = process.cwd()
   let isServe = false
   let isSsrBuild = false
+  let isLibraryBuild = false
   // The URL in generated CSS includes Vite's base; emitted Rollup filenames must not.
   let assetPath = '/fonts'
   // The server-side request path for fonts — Nitro patterns and the dev middleware use
@@ -249,7 +254,7 @@ export function fonts(userOptions = {}) {
   // when the final public href is unchanged because publicPath already contained the base.
   let generatedBasePath = ''
   // Assigned in config(), which is the earliest async hook; every other hook runs after.
-  /** @type {Awaited<ReturnType<typeof generate>>} */
+  /** @type {Awaited<ReturnType<typeof generate>> | undefined} */
   let gen
   let entrySeen = 0
   let warnedConflict = false
@@ -262,32 +267,10 @@ export function fonts(userOptions = {}) {
   let generatedFiles = new Set()
   let fontRulesAreScoped = true
   let warnedMissingHtmlTransform = false
+  let buildFailed = false
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
-
-  const api = {
-    getDiagnostics() {
-      return {
-        root,
-        options: opts,
-        generation: gen,
-        warnings: [...capturedWarnings],
-        warningEvents: warningEvents.map((event) => ({ ...event })),
-        hasNitro,
-        selfHosts,
-        entrySeen,
-        configFile,
-        paths: { assetPath, routePath, publicPath },
-        delivery: resolvePreloadDelivery(opts, {
-          preloadCount: gen?.preloads.length ?? 0,
-          hasNitro,
-          htmlEntryDetected,
-          htmlTransforms,
-        }),
-      }
-    },
-  }
 
   const currentDelivery = () =>
     resolvePreloadDelivery(opts, {
@@ -297,6 +280,31 @@ export function fonts(userOptions = {}) {
       htmlTransforms,
     })
 
+  const requireGeneration = () => {
+    if (!gen) throw new Error('[tss-fonts] font generation has not completed')
+    return gen
+  }
+
+  const api = {
+    getDiagnostics() {
+      return {
+        root,
+        options: opts,
+        generation: gen,
+        warnings: warningEvents.map((event) => event.message),
+        warningEvents: warningEvents.map((event) => ({ ...event })),
+        hasNitro,
+        isSsrBuild,
+        isLibraryBuild,
+        selfHosts,
+        entrySeen,
+        configFile,
+        paths: { assetPath, routePath, publicPath },
+        delivery: currentDelivery(),
+      }
+    },
+  }
+
   const fontRequestName = (rawUrl) => {
     const url = (rawUrl || '').split('?')[0]
     if (!url.startsWith(fontPathPrefix)) return null
@@ -304,10 +312,14 @@ export function fonts(userOptions = {}) {
     return generatedFiles.has(name) ? name : null
   }
 
-  const setFontHeaders = (res) => {
-    res.setHeader('content-type', 'font/woff2')
+  const setFontPolicyHeaders = (res) => {
     res.setHeader('access-control-allow-origin', '*')
     res.setHeader('cache-control', 'public, max-age=31536000, immutable')
+  }
+
+  const setFontHeaders = (res) => {
+    res.setHeader('content-type', 'font/woff2')
+    setFontPolicyHeaders(res)
   }
 
   return {
@@ -319,12 +331,23 @@ export function fonts(userOptions = {}) {
     sharedDuringBuild: true,
 
     async config(config, env) {
+      for (const key of Object.keys(opts)) delete opts[key]
+      assignDefined(opts, DEFAULT_OPTIONS, userOptions)
+      warningEvents.length = 0
+      entrySeen = 0
+      warnedConflict = false
+      configFile = null
       hasNitro = false
       htmlEntryDetected = false
       htmlTransforms = 0
       warnedMissingHtmlTransform = false
+      buildFailed = false
+      gen = undefined
+      generatedFiles = new Set()
+      fontRulesAreScoped = true
       isServe = env.command === 'serve'
       isSsrBuild = env.command === 'build' && Boolean(config.build?.ssr)
+      isLibraryBuild = env.command === 'build' && Boolean(config.build?.lib)
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
       validateOptions(opts, configFile ? relative(root, configFile) : 'fonts() options')
@@ -382,10 +405,16 @@ export function fonts(userOptions = {}) {
       mkdirSync(outDir, { recursive: true })
 
       const t0 = Date.now()
-      gen = await generate({ ...opts, publicPath, output: generationOutput }, outDir, log, warn)
+      const generated = await generate(
+        { ...opts, publicPath, output: generationOutput },
+        outDir,
+        log,
+        warn,
+      )
+      gen = generated
       fontPathPrefix = routePath.replace(/\/$/, '') + '/'
-      generatedFiles = new Set(gen.files)
-      if (!gen.fromCache) log(`generation took ${Date.now() - t0}ms`)
+      generatedFiles = new Set(generated.files)
+      if (!generated.fromCache) log(`generation took ${Date.now() - t0}ms`)
 
       // If the user asked for real files on disk, write them HERE, not in buildStart.
       // Vite/Nitro copy publicDir before buildStart runs, so writing later means the
@@ -395,9 +424,9 @@ export function fonts(userOptions = {}) {
         mkdirSync(dir, { recursive: true })
         let written = 0
         let repaired = 0
-        for (const f of gen.files) {
+        for (const f of generated.files) {
           const dest = join(dir, f)
-          const source = readFileSync(join(gen.filesDir, f))
+          const source = readFileSync(join(generated.filesDir, f))
           if (!existsSync(dest)) {
             writeFileSync(dest, source)
             written++
@@ -422,12 +451,12 @@ export function fonts(userOptions = {}) {
         const orphans = readdirSync(dir).filter(
           (f) =>
             f.endsWith('.woff2') &&
-            !gen.files.includes(f) &&
+            !generated.files.includes(f) &&
             slugs.some((s) => f.startsWith(`${s}-`)),
         )
 
         log(
-          `${opts.assets}/: ${written} new, ${repaired} repaired, ${gen.files.length} total. ` +
+          `${opts.assets}/: ${written} new, ${repaired} repaired, ${generated.files.length} total. ` +
             `Committing them is optional and does NOT make builds offline — use output:'commit'.`,
         )
         if (orphans.length) {
@@ -463,8 +492,8 @@ export function fonts(userOptions = {}) {
         }
       }
 
-      if (opts.preloadHeader && gen.preloads.length) {
-        const link = gen.preloads
+      if (preloadHeaderEnabled(opts) && generated.preloads.length) {
+        const link = generated.preloads
           .map((p) => `<${p.href}>; rel=preload; as=font; type=${p.type}; crossorigin`)
           .join(', ')
         routeRules['/**'] = { headers: { link } }
@@ -512,14 +541,15 @@ export function fonts(userOptions = {}) {
       // Directory mode already wrote the files in config(); publicDir handles serving.
       if (opts.assets !== 'emit') return
 
-      for (const f of gen.files) {
+      const generated = requireGeneration()
+      for (const f of generated.files) {
         this.emitFile({
           type: 'asset',
           fileName: posix.join(assetPath.replace(/^\//, ''), f),
-          source: readFileSync(join(gen.filesDir, f)),
+          source: readFileSync(join(generated.filesDir, f)),
         })
       }
-      log(`emitted ${gen.files.length} woff2 into the client bundle`)
+      log(`emitted ${generated.files.length} woff2 into the client bundle`)
     },
 
     // Dev has no bundle, so serve the same bytes off the generated dir.
@@ -540,6 +570,9 @@ export function fonts(userOptions = {}) {
       const finalIsSsrBuild =
         finalCommand === 'build' &&
         (resolved.build?.ssr !== undefined ? Boolean(resolved.build.ssr) : isSsrBuild)
+      const finalIsLibraryBuild =
+        finalCommand === 'build' &&
+        (resolved.build?.lib !== undefined ? Boolean(resolved.build.lib) : isLibraryBuild)
       const finalBase = viteBaseForCommand(resolved.base, {
         isServe: finalIsServe,
         isSsrBuild: finalIsSsrBuild,
@@ -571,27 +604,32 @@ export function fonts(userOptions = {}) {
         warn(`${msg} (Only route-rule patterns are affected — the font URLs point at Google.)`)
       }
       hasNitro = Boolean(resolved.plugins?.some((p) => p.name?.includes('nitro')))
+      isSsrBuild = finalIsSsrBuild
+      isLibraryBuild = finalIsLibraryBuild
       htmlEntryDetected = hasConventionalHtmlEntry(root, resolved, {
         isSsrBuild: finalIsSsrBuild,
+        isLibraryBuild: finalIsLibraryBuild,
       })
       const delivery = currentDelivery()
-      if (!hasNitro && delivery.htmlInjectionEnabled) {
-        warn(
-          `no Nitro plugin found; generated font preloads are configured for Vite HTML injection.`,
-          'NO_NITRO_HTML_FALLBACK',
-        )
-      } else if (!hasNitro && delivery.manualOptOut) {
-        warn(
-          `automatic font preloading is disabled by configuration. Render \`fontPreloads\` ` +
-            `from \`virtual:fonts\` yourself.`,
-          'MANUAL_PRELOAD_DELIVERY',
-        )
-      } else if (!hasNitro && gen?.preloads.length) {
-        warn(
-          `no Nitro plugin and no conventional Vite HTML entry were found, so no automatic ` +
-            `font preloads will be delivered. Render \`fontPreloads\` from \`virtual:fonts\` yourself.`,
-          'NO_AUTOMATIC_PRELOAD_PATH',
-        )
+      if (!finalIsSsrBuild && !finalIsLibraryBuild) {
+        if (!hasNitro && delivery.htmlInjectionEnabled) {
+          warn(
+            `no Nitro plugin found; generated font preloads are configured for Vite HTML injection.`,
+            'NO_NITRO_HTML_FALLBACK',
+          )
+        } else if (!hasNitro && delivery.manualOptOut) {
+          warn(
+            `automatic font preloading is disabled by configuration. Render \`fontPreloads\` ` +
+              `from \`virtual:fonts\` yourself.`,
+            'MANUAL_PRELOAD_DELIVERY',
+          )
+        } else if (!hasNitro && gen?.preloads.length) {
+          warn(
+            `no Nitro plugin and no conventional Vite HTML entry were found, so no automatic ` +
+              `font preloads will be delivered. Render \`fontPreloads\` from \`virtual:fonts\` yourself.`,
+            'NO_AUTOMATIC_PRELOAD_PATH',
+          )
+        }
       }
       if (selfHosts && (!hasNitro || !fontRulesAreScoped)) {
         warn(
@@ -624,6 +662,7 @@ export function fonts(userOptions = {}) {
     },
 
     configureServer(server) {
+      const generated = requireGeneration()
       // Generation happens once, in config() — a config-file edit needs a restart, and
       // configFileDependencies does not cover files loaded by a plugin, so watch it here.
       if (configFile) {
@@ -641,7 +680,7 @@ export function fonts(userOptions = {}) {
         const name = fontRequestName(req.url)
         if (!name) return next()
         setFontHeaders(res)
-        res.end(readFileSync(join(gen.filesDir, name)))
+        res.end(readFileSync(join(generated.filesDir, name)))
       })
     },
 
@@ -650,30 +689,28 @@ export function fonts(userOptions = {}) {
         if (!fontRequestName(req.url) || typeof res.writeHead !== 'function') return next()
         const writeHead = res.writeHead
         res.writeHead = function (statusCode, ...args) {
-          const headers = typeof args[0] === 'string' ? args[1] : args[0]
-          const headerValue = (name) => {
-            if (headers && typeof headers === 'object') {
-              const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name)
-              if (key) return headers[key]
-            }
-            return this.getHeader?.(name)
+          const candidate = typeof args[0] === 'string' ? args[1] : args[0]
+          const headers =
+            candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+              ? candidate
+              : null
+          const keyFor = (name) =>
+            headers && Object.keys(headers).find((key) => key.toLowerCase() === name)
+          const get = (name) => {
+            const key = keyFor(name)
+            return key ? headers[key] : this.getHeader?.(name)
           }
-          const contentType = String(headerValue('content-type') ?? '')
-          if (
-            (statusCode === 200 || statusCode === 206) &&
-            /^font\/woff2(?:;|$)/i.test(contentType)
-          ) {
-            setFontHeaders(this)
-            if (headers && typeof headers === 'object') {
-              const set = (name, value) => {
-                const key = Object.keys(headers).find(
-                  (candidate) => candidate.toLowerCase() === name,
-                )
-                headers[key ?? name] = value
-              }
-              set('access-control-allow-origin', '*')
-              set('cache-control', 'public, max-age=31536000, immutable')
-            }
+          const set = (name, value) => {
+            if (headers) headers[keyFor(name) ?? name] = value
+            else this.setHeader(name, value)
+          }
+          const contentType = String(get('content-type') ?? '')
+          const isFontResponse =
+            statusCode === 304 ||
+            ((statusCode === 200 || statusCode === 206) && /^font\/woff2(?:;|$)/i.test(contentType))
+          if (isFontResponse) {
+            set('access-control-allow-origin', '*')
+            set('cache-control', 'public, max-age=31536000, immutable')
           }
           return writeHead.call(this, statusCode, ...args)
         }
@@ -687,8 +724,9 @@ export function fonts(userOptions = {}) {
     load(id) {
       // Escape hatch for JSX preloads or typed handles. Not needed on the default path.
       if (id === RESOLVED_VIRTUAL_ID) {
+        const generated = requireGeneration()
         return (
-          `export const fontPreloads = ${JSON.stringify(gen.preloads)}\n` +
+          `export const fontPreloads = ${JSON.stringify(generated.preloads)}\n` +
           `export const fontFamilies = ${JSON.stringify(
             Object.fromEntries(opts.families.map((f) => [f.themeVar, f.name])),
           )}\n`
@@ -752,7 +790,7 @@ export function fonts(userOptions = {}) {
 
         // Tailwind resolves @imports with enhanced-resolve from the IMPORTING FILE's
         // directory, so the specifier must be relative to the entry, not the root.
-        let spec = relative(dirname(id.split('?')[0]), gen.cssPath)
+        let spec = relative(dirname(id.split('?')[0]), requireGeneration().cssPath)
           .split(/[\\/]/)
           .join('/')
         if (!spec.startsWith('.')) spec = './' + spec
@@ -761,13 +799,18 @@ export function fonts(userOptions = {}) {
       },
     },
 
-    buildEnd() {
+    buildEnd(error) {
+      if (error) {
+        buildFailed = true
+        return
+      }
       // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
       // an SSR/nitro pass that never transforms CSS must not report a false failure.
       if (this.environment && this.environment.config?.consumer !== 'client') return
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {
+        buildFailed = true
         this.error(
           "[tss-fonts] never saw a stylesheet containing `@import 'tailwindcss'`, so the " +
             '@theme block was NOT injected and no fonts were applied.\n' +
@@ -780,7 +823,7 @@ export function fonts(userOptions = {}) {
     closeBundle() {
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
-      if (isSsrBuild) return
+      if (isSsrBuild || isLibraryBuild || buildFailed) return
       if (this.environment && this.environment.config?.consumer !== 'client') return
       const delivery = currentDelivery()
       if (

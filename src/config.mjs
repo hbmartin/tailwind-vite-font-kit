@@ -153,6 +153,15 @@ export function validateOptions(options, source) {
     throw new Error(`[tss-fonts] ${source}: ${msg}`)
   }
   if (
+    options.preloadHeader !== undefined &&
+    typeof options.preloadHeader !== 'boolean' &&
+    (options.preloadHeader === null ||
+      typeof options.preloadHeader !== 'object' ||
+      Array.isArray(options.preloadHeader))
+  ) {
+    fail(`\`preloadHeader\` must be true, false, or an options object.`)
+  }
+  if (
     options.preloadHtml !== undefined &&
     options.preloadHtml !== 'auto' &&
     typeof options.preloadHtml !== 'boolean'
