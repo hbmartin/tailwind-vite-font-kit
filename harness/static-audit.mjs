@@ -6,8 +6,8 @@ import {
   htmlLinkRelTokens,
   isHeaderFontPreload,
   isHtmlFontPreload,
-  parseHtmlLinks,
   parseLinkHeader,
+  scanHtml,
 } from '../src/preload-delivery.mjs'
 
 export function emptyStaticAudit(error) {
@@ -46,16 +46,14 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const headerFontPreloads = headerLinks.filter(isHeaderFontPreload)
   const rawHeaderPreloadFontLinks = headerFontPreloads.map((link) => link.raw)
   const headerPreloadFontLinks = [...rawHeaderPreloadFontLinks]
-  const htmlLinks = parseHtmlLinks(html)
+  const { links: htmlLinks, styles: inlineStyleRecords } = scanHtml(html)
   const htmlFontPreloads = htmlLinks.filter(isHtmlFontPreload)
   const hrefs = htmlLinks
     .filter(
       (link) => htmlLinkRelTokens(link).includes('stylesheet') && htmlLinkAttribute(link, 'href'),
     )
     .map((link) => decodeHtmlHref(htmlLinkAttribute(link, 'href')))
-  const inlineStyles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(
-    (match) => match[1],
-  )
+  const inlineStyles = inlineStyleRecords.map((style) => style.text)
   const rawHeadPreloadFontLinks = htmlFontPreloads.map((link) => link.raw)
   const headPreloadFontLinks = [...rawHeadPreloadFontLinks]
   const auditErrors = []

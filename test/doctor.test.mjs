@@ -265,6 +265,200 @@ test('doctor discovers supported server-entry extensions and custom source paths
   }
 })
 
+test('doctor follows the resolved Start entry through a local default re-export', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'src/server.ts')
+  const implementation = join(item.root, 'src/font-server.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `export { default } from './font-server'\n`)
+  writeFileSync(
+    implementation,
+    `import {createFontsServerEntry}from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.environments = {
+    ssr: { build: { rollupOptions: { input: 'virtual:tanstack-start-server-entry' } } },
+  }
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+    ),
+  )
+})
+
+test('doctor follows root-absolute and string-alias default-export chains', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  const bridge = join(item.root, 'src/bridge.ts')
+  const implementation = join(item.root, 'src/font-server.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  mkdirSync(dirname(bridge), { recursive: true })
+  writeFileSync(entry, `export { default } from '#server/bridge'\n`)
+  writeFileSync(
+    bridge,
+    `import implementation from '/src/font-server'\nexport default implementation\n`,
+  )
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.environments = {
+    ssr: { build: { rollupOptions: { input: entry } } },
+  }
+  item.resolved.resolve = {
+    alias: [{ find: '#server', replacement: join(item.root, 'src') }],
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+    ),
+  )
+})
+
+test('the resolved Start entry is authoritative over unrelated helper users', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/server.ts')
+  const unrelated = join(item.root, 'application/preview.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  mkdirSync(dirname(unrelated), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  writeFileSync(
+    unrelated,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry()\n`,
+  )
+  item.resolved.environments = {
+    ssr: { build: { rolldownOptions: { input: { index: entry } } } },
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+    ),
+  )
+})
+
+test('filesystem fallback prefers a server-named helper entry', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/server.ts')
+  const implementation = join(item.root, 'app/font-server.ts')
+  const unrelated = join(item.root, 'application/preview.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  mkdirSync(dirname(unrelated), { recursive: true })
+  writeFileSync(entry, `export { default } from './font-server'\n`)
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  writeFileSync(
+    unrelated,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry()\n`,
+  )
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+    ),
+  )
+})
+
+test('dynamic authoritative default-export flows are uncertain rather than absent', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'src/server.ts')
+  const implementation = join(item.root, 'src/font-server.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `export default import('./font-server').then((module) => module.default)\n`)
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.environments = {
+    ssr: { build: { rollupOptions: { input: entry } } },
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'warning' && /could not be verified/.test(check.message),
+    ),
+  )
+  assert.equal(
+    checks.some((check) => /no automatic Nitro or HTML delivery path/.test(check.message)),
+    false,
+  )
+})
+
+test('unresolvable authoritative Start entries are uncertain rather than absent', async (t) => {
+  const item = fixture(t)
+  item.resolved.environments = {
+    ssr: { build: { rollupOptions: { input: join(item.root, 'missing-server.ts') } } },
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'warning' && /could not be verified/.test(check.message),
+    ),
+  )
+  assert.equal(
+    checks.some((check) => /no automatic Nitro or HTML delivery path/.test(check.message)),
+    false,
+  )
+})
+
 test('a conventional server entry is authoritative over a wired example', async (t) => {
   const item = fixture(t)
   mkdirSync(join(item.root, 'src'))
@@ -351,6 +545,10 @@ test('ignored source trees cannot make a valid custom server entry ambiguous', a
     'docs',
     'public',
     '.cache',
+    'scripts',
+    'e2e',
+    'cypress',
+    'playwright',
   ]) {
     const ignored = join(item.root, directory, 'server.ts')
     mkdirSync(dirname(ignored), { recursive: true })

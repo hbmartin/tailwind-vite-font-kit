@@ -41,6 +41,17 @@ test('Link parsing uses exact tokens, preserves quoted commas, and rejects malfo
   assert.deepEqual(parseLinkHeader(null), [])
 })
 
+test('Link parsing deliberately rejects malformed Chromium extensions', () => {
+  for (const header of [
+    '</fonts/font.woff2>; rel=preload; as=font; crossorigin;',
+    "</fonts/font.woff2>; rel='preload'; as=font; crossorigin",
+    '</fonts/font.woff2>; rel=preload; as=font; title=My Font; crossorigin',
+    '</fonts/font.woff2>; rel=preload; as=font; crossorigin=',
+  ]) {
+    assert.equal(parseLinkHeader(header).filter(isHeaderFontPreload).length, 0, header)
+  }
+})
+
 test('static audit follows stylesheet-relative imports and samples the preloaded face', async () => {
   const calls = []
   const pages = new Map([
@@ -105,6 +116,30 @@ test('static audit does not substitute an unrelated face when no preload matches
     },
   })
   assert.equal(audit.sampleFontResponse, null)
+})
+
+test('static audit reads only live inline style elements case-insensitively', async () => {
+  const documentUrl = 'https://site.test/'
+  const fontUrl = 'https://site.test/fonts/target.woff2'
+  const audit = await staticAudit(documentUrl, {
+    fetchImpl: async (url) => {
+      if (String(url) === documentUrl) {
+        return response(
+          documentUrl,
+          `<script>const fake = '<style>@font-face { src: url(/fonts/script.woff2) }</style>'</script>
+           <!-- <style>@font-face { src: url(/fonts/comment.woff2) }</style> -->
+           <STYLE>@font-face { font-family: Target; src: url(/fonts/target.woff2) }</STYLE>
+           <link rel=preload as=font href=/fonts/target.woff2 crossorigin>`,
+        )
+      }
+      if (String(url) === fontUrl) return response(fontUrl, 'wOF2font')
+      throw new Error(`unexpected fetch: ${url}`)
+    },
+  })
+
+  assert.equal(audit.inlineStyleTags, 1)
+  assert.equal(audit.totalFontFaceBlocks, 1)
+  assert.equal(audit.sampleFontResponse.url, fontUrl)
 })
 
 test('static audit parses unquoted links, preserves long links, and records malformed URLs', async () => {

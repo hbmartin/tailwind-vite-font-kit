@@ -743,6 +743,27 @@ test('malformed link-shaped text in comments and raw-text elements does not hide
   assert.equal(plugin.transformIndexHtml(html), undefined)
 })
 
+test('HTML preload parsing keeps browser source positions across tokenizer edge cases', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+  const cases = [
+    `<title>İstanbul</title>${preload}`,
+    `<meta name=description content=Don't>${preload}`,
+    `<!-->${preload}`,
+    `<!--->${preload}`,
+    `<my-el_x data-t="<script>">${preload}<script></script>`,
+    `<my.el data-t="<script>">${preload}<script></script>`,
+    `<my-é data-t="<script>">${preload}<script></script>`,
+  ]
+  for (const html of cases) assert.equal(plugin.transformIndexHtml(html), undefined, html)
+
+  const hidden = plugin.transformIndexHtml(`<noscript>${preload}</noscript>`)
+  assert.equal(hidden.tags.length, 1, 'a scripting-enabled page needs a live preload')
+})
+
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t)
@@ -833,6 +854,30 @@ test('closeBundle suppresses missing-HTML warnings after a failed build', async 
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 
+test('legacy hook contexts preserve the original failed-build signal', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t, { preloadHtml: true })
+  plugin.configResolved({ plugins: [], appType: 'custom' })
+  assert.doesNotThrow(() => plugin.buildEnd.call({}, new Error('the real build failure')))
+  plugin.closeBundle.call({})
+  assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
+})
+
+test('a replacement dev server resets HTML detection before the old server closes', async (t) => {
+  captureWarnings(t)
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  await plugin.config({ root }, { command: 'serve' })
+  plugin.configResolved({ plugins: [], appType: 'spa' })
+  assert.equal(htmlTags(plugin.transformIndexHtml('<head></head>')).length, 1)
+
+  rmSync(join(root, 'index.html'))
+  await plugin.config({ root }, { command: 'serve' })
+  plugin.configResolved({ plugins: [], appType: 'spa' })
+  plugin.closeBundle.call({})
+  assert.equal(plugin.transformIndexHtml('<head></head>'), undefined)
+})
+
 test('buildStart clears a previous watch rebuild failure for the same environment', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t, { preloadHtml: true })
@@ -887,6 +932,13 @@ test('buildStart emits nothing outside the client environment', async (t) => {
   const plugin = await built(t)
   const emitFile = () => assert.fail('the SSR and nitro passes must not emit the fonts again')
   plugin.buildStart.call({ environment: { config: { consumer: 'server' } }, emitFile })
+})
+
+test('buildStart emits through a legacy hook context without an environment', async (t) => {
+  const plugin = await built(t)
+  const emitted = []
+  plugin.buildStart.call({ emitFile: (asset) => emitted.push(asset) })
+  assert.equal(emitted.length, 1)
 })
 
 test('buildStart emits nothing in serve mode', async (t) => {

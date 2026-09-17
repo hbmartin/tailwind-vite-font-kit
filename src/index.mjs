@@ -271,11 +271,7 @@ export function fonts(userOptions = {}) {
   let fontRulesAreScoped = true
   let warnedMissingHtmlTransform = false
   let failedBuildEnvironments = new WeakSet()
-  // Vite 8 can call config() again for each environment on one shared plugin instance.
-  // Client HTML capability must remain sticky throughout that configuration run. A
-  // completed or failed build arms the reset for the next run without changing the
-  // current run's already-resolved delivery state.
-  let resetHtmlEntryOnNextConfig = true
+  let buildFailedWithoutEnvironment = false
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -339,9 +335,14 @@ export function fonts(userOptions = {}) {
     sharedDuringBuild: true,
 
     async config(config, env) {
-      if (resetHtmlEntryOnNextConfig) {
+      const configuringSsr = env.command === 'build' && Boolean(config.build?.ssr)
+      // A restart creates and configures its replacement server before the old server
+      // closes. Reset client state at the start of the replacement configuration instead
+      // of relying on closeBundle, while preserving it across this run's later SSR pass.
+      if (!configuringSsr) {
         htmlEntryDetected = false
-        resetHtmlEntryOnNextConfig = false
+        htmlTransforms = 0
+        warnedMissingHtmlTransform = false
       }
       for (const key of Object.keys(opts)) delete opts[key]
       assignDefined(opts, defaultOptions(), userOptions)
@@ -350,14 +351,13 @@ export function fonts(userOptions = {}) {
       warnedConflict = false
       configFile = null
       hasNitro = false
-      htmlTransforms = 0
-      warnedMissingHtmlTransform = false
       failedBuildEnvironments = new WeakSet()
+      buildFailedWithoutEnvironment = false
       gen = undefined
       generatedFiles = new Set()
       fontRulesAreScoped = true
       isServe = env.command === 'serve'
-      isSsrBuild = env.command === 'build' && Boolean(config.build?.ssr)
+      isSsrBuild = configuringSsr
       isLibraryBuild = env.command === 'build' && Boolean(config.build?.lib)
       root = resolve(config.root ?? process.cwd())
       await resolveFamilies(root)
@@ -544,11 +544,17 @@ export function fonts(userOptions = {}) {
     // outDir at `.output/public`, so `fileName: 'fonts/x.woff2'` lands at
     // `.output/public/fonts/x.woff2` and serves at `/fonts/x.woff2`.
     buildStart() {
-      failedBuildEnvironments.delete(this.environment)
+      if (this.environment) failedBuildEnvironments.delete(this.environment)
+      else buildFailedWithoutEnvironment = false
       // emitFile throws "not supported in serve mode"; buildStart still runs for the dev
       // module graph. Dev is covered by the middleware below.
       if (isServe) return
-      if (this.environment.config.consumer !== 'client') return
+      if (
+        this.environment?.config?.consumer !== undefined &&
+        this.environment.config.consumer !== 'client'
+      ) {
+        return
+      }
 
       // Directory mode already wrote the files in config(); publicDir handles serving.
       if (opts.assets !== 'emit') return
@@ -816,18 +822,23 @@ export function fonts(userOptions = {}) {
 
     buildEnd(error) {
       if (error) {
-        failedBuildEnvironments.add(this.environment)
-        resetHtmlEntryOnNextConfig = true
+        if (this.environment) failedBuildEnvironments.add(this.environment)
+        else buildFailedWithoutEnvironment = true
         return
       }
       // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
       // an SSR/nitro pass that never transforms CSS must not report a false failure.
-      if (this.environment.config.consumer !== 'client') return
+      if (
+        this.environment?.config?.consumer !== undefined &&
+        this.environment.config.consumer !== 'client'
+      ) {
+        return
+      }
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {
-        failedBuildEnvironments.add(this.environment)
-        resetHtmlEntryOnNextConfig = true
+        if (this.environment) failedBuildEnvironments.add(this.environment)
+        else buildFailedWithoutEnvironment = true
         this.error(
           "[tss-fonts] never saw a stylesheet containing `@import 'tailwindcss'`, so the " +
             '@theme block was NOT injected and no fonts were applied.\n' +
@@ -838,17 +849,23 @@ export function fonts(userOptions = {}) {
     },
 
     closeBundle() {
-      resetHtmlEntryOnNextConfig = true
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
-      const environmentBuild = this.environment.config.build
+      const environmentBuild = this.environment?.config?.build
       const environmentIsSsrBuild =
         environmentBuild?.ssr !== undefined ? Boolean(environmentBuild.ssr) : isSsrBuild
       const environmentIsLibraryBuild =
         environmentBuild?.lib !== undefined ? Boolean(environmentBuild.lib) : isLibraryBuild
-      const environmentBuildFailed = failedBuildEnvironments.has(this.environment)
+      const environmentBuildFailed = this.environment
+        ? failedBuildEnvironments.has(this.environment)
+        : buildFailedWithoutEnvironment
       if (environmentIsSsrBuild || environmentIsLibraryBuild || environmentBuildFailed) return
-      if (this.environment.config.consumer !== 'client') return
+      if (
+        this.environment?.config?.consumer !== undefined &&
+        this.environment.config.consumer !== 'client'
+      ) {
+        return
+      }
       const delivery = currentDelivery()
       if (
         !isServe &&

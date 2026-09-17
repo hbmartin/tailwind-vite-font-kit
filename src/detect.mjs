@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
-const SKIP_DIRS = new Set([
+export const DEFAULT_SKIP_DIRS = new Set([
   'node_modules',
   '.git',
   'dist',
@@ -16,22 +16,26 @@ const SKIP_DIRS = new Set([
   '.vercel',
 ])
 
-export function walk(dir, exts, out = [], depth = 0) {
-  if (depth > 6) return out
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return out
-  }
-  for (const e of entries) {
-    if (e.isDirectory()) {
-      if (SKIP_DIRS.has(e.name)) continue
-      walk(join(dir, e.name), exts, out, depth + 1)
-    } else if (exts.some((x) => e.name.endsWith(x))) {
-      out.push(join(dir, e.name))
+export function walk(dir, exts, { skipDirs = DEFAULT_SKIP_DIRS, maxDepth = 6 } = {}) {
+  const out = []
+  const visit = (current, depth) => {
+    if (depth > maxDepth) return
+    let entries
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) continue
+        visit(join(current, entry.name), depth + 1)
+      } else if (exts.some((extension) => entry.name.endsWith(extension))) {
+        out.push(join(current, entry.name))
+      }
     }
   }
+  visit(dir, 0)
   return out
 }
 
