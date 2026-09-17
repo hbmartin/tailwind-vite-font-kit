@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { emptyStaticAudit, staticAudit } from '../harness/static-audit.mjs'
+import {
+  hasAnonymousHeaderCrossorigin,
+  isHeaderFontPreload,
+  parseLinkHeader,
+} from '../src/preload-delivery.mjs'
 
 const response = (url, body, { status = 200, headers = {} } = {}) => ({
   url,
@@ -16,6 +21,24 @@ test('empty static audits carry one explicit unavailability reason', () => {
   assert.deepEqual(audit.errors, [])
   assert.deepEqual(audit.headerPreloadFontLinks, [])
   assert.equal(audit.sampleFontResponse, null)
+  for (const unhelpful of ['', null, undefined, {}]) {
+    assert.ok(emptyStaticAudit(unhelpful).unavailableReason.length > 0)
+  }
+})
+
+test('Link parsing uses exact tokens, preserves quoted commas, and rejects malformed input', () => {
+  const header =
+    '</fonts/ok.woff2>; rel="preload alternate"; as=font; title="a,b"; crossorigin=true, ' +
+    '</fonts/not-rel.woff2?rel=preload&as=font>; title=query, ' +
+    '</fonts/prefix.woff2>; rel=preloadx; as=font; crossorigin, ' +
+    '</fonts/malformed.woff2; rel=preload; as=font'
+  const parsed = parseLinkHeader(header)
+  const preloads = parsed.filter(isHeaderFontPreload)
+  assert.equal(preloads.length, 1)
+  assert.equal(preloads[0].target, '/fonts/ok.woff2')
+  assert.match(preloads[0].raw, /title="a,b"/)
+  assert.equal(hasAnonymousHeaderCrossorigin(preloads[0]), true)
+  assert.deepEqual(parseLinkHeader(null), [])
 })
 
 test('static audit follows stylesheet-relative imports and samples the preloaded face', async () => {

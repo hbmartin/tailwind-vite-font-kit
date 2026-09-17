@@ -631,7 +631,7 @@ test('library builds ignore a local index.html as a document delivery path', asy
   const build = { lib: { entry: join(root, 'src', 'index.js') } }
   await plugin.config({ root, build }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'spa', build })
-  plugin.closeBundle.call({})
+  plugin.closeBundle.call({ environment: { config: { consumer: 'client', build } } })
   assert.equal(plugin.transformIndexHtml('<head></head>'), undefined)
   assert.doesNotMatch(warned.join('\n'), /no automatic font preloads|Vite transformed no HTML/)
 })
@@ -656,6 +656,19 @@ test('HTML preload deduplication repairs an incompatible crossorigin value', asy
   assert.equal(repaired.tags.length, 0)
   assert.match(repaired.html, /crossorigin="anonymous"/)
   assert.doesNotMatch(repaired.html, /use-credentials/)
+})
+
+test('HTML preload deduplication accepts every present non-credential crossorigin value', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  for (const value of ['', 'anonymous', 'true', 'unexpected']) {
+    const result = plugin.transformIndexHtml(
+      `<link href="${attrs.href}" as="font" rel="preload" crossorigin="${value}">`,
+    )
+    assert.equal(result, undefined, value)
+  }
 })
 
 test('HTML preload deduplication understands escaped query-string hrefs', async (t) => {
@@ -716,6 +729,20 @@ test('HTML preload parsing does not repair across an unclosed quoted attribute',
   assert.equal(result.tags.length, 1, 'Vite can inject a separate well-formed preload safely')
 })
 
+test('malformed link-shaped text in comments and raw-text elements does not hide a preload', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const html =
+    `<!-- <link title="draft -->` +
+    `<script>const draft = '<link title="draft'</script>` +
+    `<style>.sample::after { content: '<link title="draft'; }</style>` +
+    `<textarea><link title="draft</textarea>` +
+    `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+  assert.equal(plugin.transformIndexHtml(html), undefined)
+})
+
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t)
@@ -747,7 +774,9 @@ test('closeBundle never warns about HTML transforms for an SSR-only build', asyn
   const plugin = fonts({ families: [FAMILY], preloadHtml: true, silent: true })
   await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
-  plugin.closeBundle.call({})
+  plugin.closeBundle.call({
+    environment: { config: { consumer: 'server', build: { ssr: true } } },
+  })
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 
@@ -779,18 +808,28 @@ test('a shared server config cannot hide the client environment HTML warning', a
 
 test('a shared server config cannot disable automatic client HTML injection', async (t) => {
   captureWarnings(t)
-  const { plugin } = await routeRules(t)
+  const { plugin, root } = await routeRules(t)
+  await plugin.config({ root }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'spa', build: { ssr: false } })
+  await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
   assert.equal(htmlTags(plugin.transformIndexHtml('<head></head>')).length, 1)
+
+  plugin.closeBundle.call({
+    environment: { config: { consumer: 'client', build: { ssr: false } } },
+  })
+  await plugin.config({ root }, { command: 'build' })
+  plugin.configResolved({ plugins: [], appType: 'custom' })
+  assert.equal(plugin.transformIndexHtml('<head></head>'), undefined)
 })
 
 test('closeBundle suppresses missing-HTML warnings after a failed build', async (t) => {
   const warned = captureWarnings(t)
   const { plugin } = await routeRules(t, { preloadHtml: true })
   plugin.configResolved({ plugins: [], appType: 'custom' })
-  plugin.buildEnd.call({}, new Error('the real build failure'))
-  plugin.closeBundle.call({})
+  const environment = { config: { consumer: 'client', build: {} } }
+  plugin.buildEnd.call({ environment }, new Error('the real build failure'))
+  plugin.closeBundle.call({ environment })
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 

@@ -4,12 +4,20 @@ import {
   decodeHtmlHref,
   htmlLinkAttribute,
   htmlLinkRelTokens,
+  isHeaderFontPreload,
   isHtmlFontPreload,
   parseHtmlLinks,
+  parseLinkHeader,
 } from '../src/preload-delivery.mjs'
 
 export function emptyStaticAudit(error) {
-  const unavailableReason = String(error?.message || error)
+  const suppliedReason =
+    typeof error?.message === 'string'
+      ? error.message.trim()
+      : typeof error === 'string'
+        ? error.trim()
+        : ''
+  const unavailableReason = suppliedReason || 'the static audit failed for an unknown reason'
   return {
     stylesheetHrefs: [],
     inlineStyleTags: 0,
@@ -34,10 +42,9 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const html = await response.text()
   const documentUrl = response.url || url
   const navigationLinkHeader = response.headers.get('link') || ''
-  const rawHeaderPreloadFontLinks = navigationLinkHeader
-    .split(/,(?=\s*<)/)
-    .filter((link) => /\brel\s*=\s*["']?preload/i.test(link) && /\bas\s*=\s*["']?font/i.test(link))
-    .map((link) => link.trim())
+  const headerLinks = parseLinkHeader(navigationLinkHeader)
+  const headerFontPreloads = headerLinks.filter(isHeaderFontPreload)
+  const rawHeaderPreloadFontLinks = headerFontPreloads.map((link) => link.raw)
   const headerPreloadFontLinks = [...rawHeaderPreloadFontLinks]
   const htmlLinks = parseHtmlLinks(html)
   const htmlFontPreloads = htmlLinks.filter(isHtmlFontPreload)
@@ -93,8 +100,8 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   )
   const faceBlocks = faceRecords.map((face) => face.block)
   const preloadUrls = new Set()
-  for (const link of rawHeaderPreloadFontLinks) {
-    const href = /<([^>]+)>/.exec(link)?.[1]
+  for (const link of headerFontPreloads) {
+    const href = link.target
     if (href) {
       try {
         preloadUrls.add(new URL(href, documentUrl).href)
