@@ -1,6 +1,7 @@
 // Codemod for the Tailwind entry CSS. String surgery, but every edit is guarded by a
 // structural check and every edit is idempotent.
 import { themeBlocks } from './detect.mjs'
+import { escapeRegExp } from './string.mjs'
 
 const GOOGLE_IMPORT_LINE =
   /^[ \t]*@import\s+(?:url\(\s*)?["']?https:\/\/fonts\.googleapis\.com\/[^"')\n]+["']?\s*\)?\s*;?[ \t]*\r?\n?/gm
@@ -40,7 +41,7 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
 
   // 2. Optional physical @import. Off by default — see the param doc above.
   if (addImport && genCssBasename) {
-    if (!new RegExp(`@import\\s+["'][^"']*${escapeRe(genCssBasename)}["']`).test(out)) {
+    if (!new RegExp(`@import\\s+["'][^"']*${escapeRegExp(genCssBasename)}["']`).test(out)) {
       const tw = /@import\s+["']tailwindcss["'][^;\n]*;?/.exec(out)
       if (!tw) return { ok: false, reason: "no `@import 'tailwindcss'` in the entry", css, changes }
       const at = tw.index + tw[0].length
@@ -56,7 +57,7 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
     const body = out.slice(blk.bodyStart, blk.end - 1)
     let newBody = body
     for (const v of ownedVars) {
-      const re = new RegExp(`^[ \\t]*${escapeRe(v)}\\s*:[^;]*;[ \\t]*\\r?\\n?`, 'gm')
+      const re = new RegExp(`^[ \\t]*${escapeRegExp(v)}\\s*:[^;]*;[ \\t]*\\r?\\n?`, 'gm')
       if (re.test(newBody)) {
         newBody = newBody.replace(re, '')
         changes.push(
@@ -74,7 +75,7 @@ export function codemodCss(css, { genCssBasename, ownedVars, rewriteUsages, addI
     const inTheme = (i) => blocks.some((b) => i >= b.start && i < b.end)
     for (const { family, themeVar } of rewriteUsages) {
       const re = new RegExp(
-        `(font-family\\s*:\\s*)(['"]?)${escapeRe(family)}\\2\\s*(,[^;}]*)?(?=[;}])`,
+        `(font-family\\s*:\\s*)(['"]?)${escapeRegExp(family)}\\2\\s*(,[^;}]*)?(?=[;}])`,
         'gi',
       )
       let m
@@ -100,8 +101,4 @@ function isInsideFontFace(css, index) {
   if (before === -1) return false
   const close = css.indexOf('}', before)
   return close > index
-}
-
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

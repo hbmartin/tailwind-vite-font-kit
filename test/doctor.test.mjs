@@ -61,6 +61,18 @@ function fixture(t, overrides = {}) {
   }
 }
 
+function disableAutomaticDelivery(item) {
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+}
+
+const hasCheck = (checks, status, message) =>
+  checks.some((check) => check.status === status && message.test(check.message))
+
 test('doctor passes generation checks and warns for valid plain-Vite fallbacks', async (t) => {
   const { root, resolved } = fixture(t)
   const checks = await diagnoseResolvedConfig(root, resolved)
@@ -239,7 +251,13 @@ test('doctor recognizes the package Start server entry and classifies its guaran
 })
 
 test('doctor discovers supported server-entry extensions and custom source paths', async (t) => {
-  for (const relativePath of ['src/server.tsx', 'src/server.mts', 'application/http-entry.jsx']) {
+  for (const relativePath of [
+    'src/server.tsx',
+    'src/server.mts',
+    'src/server.cts',
+    'src/server.cjs',
+    'application/http-entry.jsx',
+  ]) {
     const item = fixture(t)
     const file = join(item.root, relativePath)
     mkdirSync(dirname(file), { recursive: true })
@@ -318,7 +336,10 @@ test('doctor follows root-absolute and string-alias default-export chains', asyn
     ssr: { build: { rollupOptions: { input: entry } } },
   }
   item.resolved.resolve = {
-    alias: [{ find: '#server', replacement: join(item.root, 'src') }],
+    alias: [
+      { find: 'virtual:tanstack-start-server-entry', replacement: entry },
+      { find: '#server', replacement: join(item.root, 'src') },
+    ],
   }
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
@@ -353,6 +374,9 @@ test('the resolved Start entry is authoritative over unrelated helper users', as
   )
   item.resolved.environments = {
     ssr: { build: { rolldownOptions: { input: { index: entry } } } },
+  }
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
@@ -416,6 +440,9 @@ test('dynamic authoritative default-export flows are uncertain rather than absen
   item.resolved.environments = {
     ssr: { build: { rollupOptions: { input: entry } } },
   }
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -437,8 +464,13 @@ test('dynamic authoritative default-export flows are uncertain rather than absen
 
 test('unresolvable authoritative Start entries are uncertain rather than absent', async (t) => {
   const item = fixture(t)
-  item.resolved.environments = {
-    ssr: { build: { rollupOptions: { input: join(item.root, 'missing-server.ts') } } },
+  item.resolved.resolve = {
+    alias: [
+      {
+        find: 'virtual:tanstack-start-server-entry',
+        replacement: join(item.root, 'missing-server.ts'),
+      },
+    ],
   }
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
@@ -457,6 +489,148 @@ test('unresolvable authoritative Start entries are uncertain rather than absent'
     checks.some((check) => /no automatic Nitro or HTML delivery path/.test(check.message)),
     false,
   )
+})
+
+test('generic SSR inputs do not masquerade as the resolved Start server entry', async (t) => {
+  for (const [name, input] of [
+    ['copied HTML input', 'index.html'],
+    ['unrelated virtual input', 'virtual:other-framework-server'],
+  ]) {
+    const item = fixture(t)
+    const entry = join(item.root, 'application/http-entry.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(join(item.root, 'index.html'), '<!doctype html><title>app</title>')
+    writeFileSync(
+      entry,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry({ linkHeader: true })\n`,
+    )
+    item.resolved.environments = {
+      ssr: { build: { rollupOptions: { input } } },
+    }
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), name)
+  }
+})
+
+test('unrelated server-named files do not hide a uniquely wired custom entry', async (t) => {
+  const item = fixture(t)
+  for (const relativePath of ['app/server.ts', 'lib/server.js']) {
+    const file = join(item.root, relativePath)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `export default function unrelated() {}\n`)
+  }
+  const entry = join(item.root, 'application/http-entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
+test('default-as imports, mixed export lists, and TypeScript substitutions are followed', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  const implementation = join(item.root, 'app/handler.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { default as handler } from './handler.js'\n` +
+      `const other = 1\n` +
+      `export { other, handler as default }\n`,
+  )
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
+test('import.meta is not mistaken for an unresolved dynamic default export', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `const here = import.meta.url\nexport default function handler() {}\n`)
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/))
+  assert.equal(hasCheck(checks, 'warning', /could not be verified/), false)
+})
+
+test('bare-package and node_modules server defaults count as no application delivery', async (t) => {
+  for (const source of [
+    `export { default } from '@tanstack/react-start/server'\n`,
+    `export { default } from 'example-server-entry'\n`,
+  ]) {
+    const item = fixture(t)
+    const entry = join(item.root, 'app/entry.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(entry, source)
+    item.resolved.resolve = {
+      alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+    }
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/), source)
+    assert.equal(hasCheck(checks, 'warning', /could not be verified/), false, source)
+  }
+
+  const item = fixture(t)
+  const dependencyEntry = join(item.root, 'node_modules/example-server-entry/server.js')
+  mkdirSync(dirname(dependencyEntry), { recursive: true })
+  writeFileSync(
+    dependencyEntry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: dependencyEntry }],
+  }
+  disableAutomaticDelivery(item)
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/))
+})
+
+test('conventional candidates must be files and multiple real candidates stay uncertain', async (t) => {
+  const directoryItem = fixture(t)
+  mkdirSync(join(directoryItem.root, 'src/server.ts'), { recursive: true })
+  const customEntry = join(directoryItem.root, 'application/http-entry.ts')
+  mkdirSync(dirname(customEntry), { recursive: true })
+  writeFileSync(
+    customEntry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  disableAutomaticDelivery(directoryItem)
+  const directoryChecks = await diagnoseResolvedConfig(directoryItem.root, directoryItem.resolved)
+  assert.ok(hasCheck(directoryChecks, 'pass', /deliver font preload Link headers/))
+
+  const ambiguousItem = fixture(t)
+  mkdirSync(join(ambiguousItem.root, 'src'))
+  writeFileSync(join(ambiguousItem.root, 'src/server.ts'), `export default function first() {}\n`)
+  writeFileSync(join(ambiguousItem.root, 'src/server.js'), `export default function second() {}\n`)
+  disableAutomaticDelivery(ambiguousItem)
+  const ambiguousChecks = await diagnoseResolvedConfig(ambiguousItem.root, ambiguousItem.resolved)
+  assert.ok(hasCheck(ambiguousChecks, 'warning', /could not be verified/))
 })
 
 test('a conventional server entry is authoritative over a wired example', async (t) => {

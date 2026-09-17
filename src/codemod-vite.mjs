@@ -7,6 +7,7 @@
 // the CLI prints the manual snippet instead of writing a broken config.
 
 import { init, parse } from 'es-module-lexer'
+import { escapeRegExp } from './string.mjs'
 
 // One initialization for the process. Unlike the hand-written masking below, this lexer
 // understands the complete import grammar and never mistakes import-shaped string or regex
@@ -202,8 +203,6 @@ export function mask(src, { keepStrings = false } = {}) {
   return keepStrings ? views.withStrings : views.active
 }
 
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
 /**
  * Local expressions introduced by one visible static import. The caller names which
  * exports are callable; keeping the import grammar here prevents every static analyzer
@@ -357,7 +356,7 @@ export function analyzeFontsPluginWiring(source) {
   const commonJs = commonJsWiring(source, active)
   bindings.push(...commonJs.bindings.filter((binding) => !bindings.includes(binding)))
   const calledBindings = bindings.filter((binding) => {
-    const expression = binding.split('.').map(escapeRe).join('\\s*\\.\\s*')
+    const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
     return new RegExp(`(?<![\\w$.])${expression}\\s*\\(`).test(active)
   })
   calledBindings.push(...commonJs.directCalls)
