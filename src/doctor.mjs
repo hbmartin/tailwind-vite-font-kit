@@ -159,16 +159,25 @@ async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
       throw new Error(`generated preload asset ${name} has no recorded byte digest`)
     }
     assertFontHost(href, 'preload')
-    const response = await fetchImpl(href, {
-      redirect: 'error',
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (!response.ok) throw new Error(`${href} returned HTTP ${response.status}`)
-    const body = Buffer.from(await response.arrayBuffer())
-    if (body.length < 4 || body.subarray(0, 4).toString('ascii') !== 'wOF2') {
-      throw new Error(`${href} did not return WOFF2 bytes`)
+    const controller = new AbortController()
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`preload measurement timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    )
+    try {
+      const response = await fetchImpl(href, {
+        redirect: 'error',
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`${href} returned HTTP ${response.status}`)
+      const body = Buffer.from(await response.arrayBuffer())
+      if (body.length < 4 || body.subarray(0, 4).toString('ascii') !== 'wOF2') {
+        throw new Error(`${href} did not return WOFF2 bytes`)
+      }
+      bytes += body.length
+    } finally {
+      clearTimeout(timeout)
     }
-    bytes += body.length
   }
   return { bytes, count: unique.length }
 }
