@@ -1,11 +1,97 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { diagnoseResolvedConfig, loadProjectVite } from '../src/doctor.mjs'
 import { isDoctorContext, runInDoctorContext } from '../src/doctor-context.mjs'
 import { resolvePreloadDelivery } from '../src/preload-delivery.mjs'
+
+const VITE_EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json']
+
+function fixtureFile(candidate) {
+  const exact = (() => {
+    try {
+      return statSync(candidate).isFile() ? candidate : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  if (exact) return exact
+
+  const extension = extname(candidate)
+  const replacements =
+    extension === '.js'
+      ? ['.ts', '.tsx']
+      : extension === '.mjs'
+        ? ['.mts']
+        : extension === '.cjs'
+          ? ['.cts']
+          : extension === '.jsx'
+            ? ['.tsx']
+            : []
+  for (const replacement of replacements) {
+    const file = candidate.slice(0, -extension.length) + replacement
+    if (existsSync(file)) return file
+  }
+  if (!extension) {
+    for (const suffix of VITE_EXTENSIONS) {
+      const file = candidate + suffix
+      if (existsSync(file)) return file
+    }
+    for (const suffix of VITE_EXTENSIONS) {
+      const file = join(candidate, `index${suffix}`)
+      if (existsSync(file)) return file
+    }
+  }
+  return undefined
+}
+
+function fixtureResolver(root, config) {
+  return async (specifier, importer) => {
+    let id = specifier
+    let aliasApplied = false
+    const configured = config.resolve?.alias
+    const aliases = Array.isArray(configured)
+      ? configured
+      : configured && typeof configured === 'object'
+        ? Object.entries(configured).map(([find, replacement]) => ({ find, replacement }))
+        : []
+    for (const alias of aliases) {
+      const matches =
+        typeof alias.find === 'string'
+          ? id === alias.find || id.startsWith(`${alias.find}/`)
+          : (() => {
+              alias.find.lastIndex = 0
+              return alias.find.test(id)
+            })()
+      if (!matches) continue
+      if (alias.find instanceof RegExp) alias.find.lastIndex = 0
+      id = id.replace(alias.find, alias.replacement)
+      aliasApplied = true
+      break
+    }
+
+    if (/^(?:\0|virtual:)/.test(id)) return aliasApplied ? id : undefined
+    if (id.startsWith('node:')) return id
+    const clean = id.split(/[?#]/, 1)[0]
+    let candidate
+    if (isAbsolute(clean)) {
+      candidate = fixtureFile(clean) ? clean : resolve(root, `.${clean}`)
+    } else if (clean.startsWith('./') || clean.startsWith('../')) {
+      candidate = resolve(importer ? dirname(importer) : root, clean)
+    } else if (aliasApplied) {
+      candidate = resolve(root, clean)
+    } else {
+      const packageName = clean.startsWith('@')
+        ? clean.split('/').slice(0, 2).join('/')
+        : clean.split('/', 1)[0]
+      const packageSubpath = clean.slice(packageName.length).replace(/^\//, '')
+      candidate = join(root, 'node_modules', packageName, packageSubpath)
+    }
+    return fixtureFile(candidate)
+  }
+}
 
 function fixture(t, overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), 'tss-fonts-doctor-'))
@@ -54,10 +140,12 @@ function fixture(t, overrides = {}) {
     name: 'tailwind-vite-font-kit',
     api: { getDiagnostics: () => diagnostics },
   }
+  const resolved = { plugins: [font, { name: '@tailwindcss/vite:scan' }] }
+  resolved.createResolver = () => fixtureResolver(root, resolved)
   return {
     root,
     font,
-    resolved: { plugins: [font, { name: '@tailwindcss/vite:scan' }] },
+    resolved,
   }
 }
 
@@ -356,6 +444,75 @@ test('doctor follows root-absolute and string-alias default-export chains', asyn
   )
 })
 
+test('the authoritative Start alias accepts Vite replacement path forms and queries', async (t) => {
+  for (const replacement of ['src/entry.ts', './src/entry.ts', '/src/entry.ts', 'absolute']) {
+    const item = fixture(t)
+    const entry = join(item.root, 'src/entry.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(
+      entry,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry({ linkHeader: true })\n`,
+    )
+    item.resolved.resolve = {
+      alias: [
+        {
+          find: 'virtual:tanstack-start-server-entry',
+          replacement: `${replacement === 'absolute' ? entry : replacement}?server-entry`,
+        },
+      ],
+    }
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), replacement)
+  }
+})
+
+test('configured local aliases are followed through the Vite resolver', async (t) => {
+  for (const alias of ['~', '@', '#server']) {
+    const item = fixture(t)
+    const entry = join(item.root, 'src/entry.ts')
+    const implementation = join(item.root, 'src/handler.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(entry, `export { default } from '${alias}/handler'\n`)
+    writeFileSync(
+      implementation,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry({ linkHeader: true })\n`,
+    )
+    item.resolved.resolve = {
+      alias: [
+        { find: 'virtual:tanstack-start-server-entry', replacement: entry },
+        { find: alias, replacement: join(item.root, 'src') },
+      ],
+    }
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), alias)
+  }
+})
+
+test('an authoritative entry in a sibling workspace package is inspected', async (t) => {
+  const item = fixture(t)
+  const sibling = mkdtempSync(join(tmpdir(), 'tss-fonts-sibling-'))
+  t.after(() => rmSync(sibling, { recursive: true, force: true }))
+  const entry = join(sibling, 'server.ts')
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
 test('the resolved Start entry is authoritative over unrelated helper users', async (t) => {
   const item = fixture(t)
   const entry = join(item.root, 'app/server.ts')
@@ -515,7 +672,30 @@ test('generic SSR inputs do not masquerade as the resolved Start server entry', 
   }
 })
 
-test('unrelated server-named files do not hide a uniquely wired custom entry', async (t) => {
+test('TanStack Start SSR input is a gated fallback when the virtual alias is unavailable', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'application/http-entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.plugins.push({ name: 'tanstack-start:config' })
+  item.resolved.environments = {
+    ssr: { build: { rollupOptions: { input: 'application/http-entry.ts' } } },
+  }
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+
+  item.resolved.environments.ssr.build.rolldownOptions = { input: entry }
+  const ambiguous = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(ambiguous, 'warning', /could not be verified/))
+})
+
+test('an absent named entry plus a generic helper candidate is uncertain', async (t) => {
   const item = fixture(t)
   for (const relativePath of ['app/server.ts', 'lib/server.js']) {
     const file = join(item.root, relativePath)
@@ -532,20 +712,23 @@ test('unrelated server-named files do not hide a uniquely wired custom entry', a
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
-  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+  assert.ok(hasCheck(checks, 'warning', /could not be verified/))
+  assert.equal(hasCheck(checks, 'pass', /deliver font preload Link headers/), false)
 })
 
-test('default-as imports, mixed export lists, and TypeScript substitutions are followed', async (t) => {
+test('default-as imports, separate export lists, and TypeScript substitutions are followed', async (t) => {
   const item = fixture(t)
   const entry = join(item.root, 'app/entry.ts')
   const implementation = join(item.root, 'app/handler.ts')
+  const util = join(item.root, 'app/util.ts')
   mkdirSync(dirname(entry), { recursive: true })
   writeFileSync(
     entry,
     `import { default as handler } from './handler.js'\n` +
-      `const other = 1\n` +
-      `export { other, handler as default }\n`,
+      `export { helper } from './util.js'\n` +
+      `export { handler as default }\n`,
   )
+  writeFileSync(util, `export const helper = true\n`)
   writeFileSync(
     implementation,
     `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
@@ -558,6 +741,27 @@ test('default-as imports, mixed export lists, and TypeScript substitutions are f
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
+test('literal JavaScript targets win over TypeScript substitutions', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `export { default } from './handler.js'\n`)
+  writeFileSync(join(item.root, 'app/handler.js'), `export default function handler() {}\n`)
+  writeFileSync(
+    join(item.root, 'app/handler.ts'),
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/))
+  assert.equal(hasCheck(checks, 'pass', /deliver font preload Link headers/), false)
 })
 
 test('import.meta is not mistaken for an unresolved dynamic default export', async (t) => {
@@ -575,10 +779,13 @@ test('import.meta is not mistaken for an unresolved dynamic default export', asy
   assert.equal(hasCheck(checks, 'warning', /could not be verified/), false)
 })
 
-test('bare-package and node_modules server defaults count as no application delivery', async (t) => {
+test('unresolved package-like defaults are uncertain and resolved dependencies are absent', async (t) => {
   for (const source of [
     `export { default } from '@tanstack/react-start/server'\n`,
     `export { default } from 'example-server-entry'\n`,
+    `export { default } from '~/server'\n`,
+    `export { default } from '@/server'\n`,
+    `export { default } from '#server'\n`,
   ]) {
     const item = fixture(t)
     const entry = join(item.root, 'app/entry.ts')
@@ -590,8 +797,8 @@ test('bare-package and node_modules server defaults count as no application deli
     disableAutomaticDelivery(item)
 
     const checks = await diagnoseResolvedConfig(item.root, item.resolved)
-    assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/), source)
-    assert.equal(hasCheck(checks, 'warning', /could not be verified/), false, source)
+    assert.ok(hasCheck(checks, 'warning', /could not be verified/), source)
+    assert.equal(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/), false)
   }
 
   const item = fixture(t)

@@ -276,6 +276,8 @@ export function fonts(userOptions = {}) {
   // same shared plugin. The raw config passed to those later calls does not identify the
   // environment, so client HTML state must stay sticky until this build actually finishes.
   let resetHtmlStateOnNextConfig = true
+  /** @type {'serve' | 'build' | undefined} */
+  let previousConfigCommand
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -363,12 +365,15 @@ export function fonts(userOptions = {}) {
       // A restart creates and configures its replacement server before the old server
       // closes, so every serve config starts fresh. Build configs instead reset only once:
       // createBuilder's later client/SSR config calls belong to the same run.
-      if (env.command === 'serve' || resetHtmlStateOnNextConfig) {
+      const commandChanged =
+        previousConfigCommand !== undefined && previousConfigCommand !== env.command
+      if (env.command === 'serve' || commandChanged || resetHtmlStateOnNextConfig) {
         htmlEntryDetected = false
         htmlTransforms = 0
         warnedMissingHtmlTransform = false
         resetHtmlStateOnNextConfig = false
       }
+      previousConfigCommand = env.command
       for (const key of Object.keys(opts)) delete opts[key]
       assignDefined(opts, defaultOptions(), userOptions)
       warningEvents.length = 0
@@ -864,14 +869,14 @@ export function fonts(userOptions = {}) {
       resetHtmlStateOnNextConfig = true
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
+      // Prefer the hook's explicit environment identity before shared config fallback state:
+      // a later SSR config pass must not turn the client closeBundle hook into an SSR hook.
+      if (!isClientBuildContext(this)) return
       const environmentBuild = this.environment?.config?.build
-      const environmentIsSsrBuild =
-        environmentBuild?.ssr !== undefined ? Boolean(environmentBuild.ssr) : isSsrBuild
       const environmentIsLibraryBuild =
         environmentBuild?.lib !== undefined ? Boolean(environmentBuild.lib) : isLibraryBuild
       const environmentBuildFailed = buildFailed(this.environment)
-      if (environmentIsSsrBuild || environmentIsLibraryBuild || environmentBuildFailed) return
-      if (!isClientBuildContext(this)) return
+      if (environmentIsLibraryBuild || environmentBuildFailed) return
       const delivery = currentDelivery()
       if (
         !isServe &&

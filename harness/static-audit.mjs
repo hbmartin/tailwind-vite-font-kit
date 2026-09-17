@@ -46,28 +46,18 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const headerFontPreloads = headerLinks.filter(isHeaderFontPreload)
   const rawHeaderPreloadFontLinks = headerFontPreloads.map((link) => link.raw)
   const headerPreloadFontLinks = [...rawHeaderPreloadFontLinks]
-  const { links: htmlLinks, styles: liveStyleRecords, noscripts } = scanHtml(html)
-  const noscriptScans = noscripts.map((record) => ({ record, scan: scanHtml(record.text) }))
-  const fallbackLinks = noscriptScans.flatMap(({ record, scan }) =>
-    scan.links.map((link) => ({ link, start: record.start + link.start })),
-  )
-  const inlineStyleRecords = [
-    ...liveStyleRecords,
-    ...noscriptScans.flatMap(({ record, scan }) =>
-      scan.styles.map((style) => ({
-        ...style,
-        start: record.start + style.start,
-        end: record.start + style.end,
-      })),
-    ),
-  ].sort((left, right) => left.start - right.start)
+  const { links: htmlLinks, styles: inlineStyleRecords } = scanHtml(html)
   const htmlFontPreloads = htmlLinks.filter(isHtmlFontPreload)
-  const stylesheetHref = (link, includeStylePreloads) => {
+  const stylesheetHref = (link) => {
     const relations = htmlLinkRelTokens(link)
     const as = htmlLinkAttribute(link, 'as')?.toLowerCase()
+    const onload = htmlLinkAttribute(link, 'onload') ?? ''
+    const promotesPreload =
+      /\bthis\s*\.\s*rel\s*=\s*(['"])stylesheet\1/i.test(onload) ||
+      /\bthis\s*\.\s*setAttribute\s*\(\s*(['"])rel\1\s*,\s*(['"])stylesheet\2\s*\)/i.test(onload)
     if (
       !relations.includes('stylesheet') &&
-      !(includeStylePreloads && relations.includes('preload') && as === 'style')
+      !(relations.includes('preload') && as === 'style' && promotesPreload)
     ) {
       return null
     }
@@ -76,12 +66,9 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   }
   const hrefs = [
     ...new Set(
-      [
-        ...htmlLinks.map((link) => ({ link, start: link.start, includeStylePreloads: true })),
-        ...fallbackLinks.map((record) => ({ ...record, includeStylePreloads: false })),
-      ]
+      htmlLinks
         .sort((left, right) => left.start - right.start)
-        .map(({ link, includeStylePreloads }) => stylesheetHref(link, includeStylePreloads))
+        .map((link) => stylesheetHref(link))
         .filter((href) => typeof href === 'string'),
     ),
   ]

@@ -771,7 +771,20 @@ test('HTML preload parsing uses HTML comment endings and ASCII whitespace', asyn
   const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
   const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
 
-  assert.equal(plugin.transformIndexHtml(`<!-- draft --!>${preload}`), undefined)
+  for (const comment of [
+    '<!-- draft --!>',
+    '<!-- draft --->',
+    '<!-- draft ---->',
+    '<!-- draft ---!>',
+    '<!-- draft -----x -->',
+  ]) {
+    assert.equal(plugin.transformIndexHtml(`${comment}${preload}`), undefined, comment)
+    const repaired = plugin.transformIndexHtml(
+      `${comment}<link rel="preload" as="font" href="${attrs.href}">`,
+    )
+    assert.equal(repaired.tags.length, 0, comment)
+    assert.match(repaired.html, /crossorigin="anonymous"/, comment)
+  }
   for (const whitespace of ['\u00a0', '\u2028', '\ufeff']) {
     const tagNameResult = plugin.transformIndexHtml(
       `<link${whitespace}rel=preload as=font href="${attrs.href}" crossorigin>`,
@@ -790,6 +803,31 @@ test('HTML preload parsing uses HTML comment endings and ASCII whitespace', asyn
       1,
       `non-ASCII attribute delimiter ${whitespace.codePointAt(0)}`,
     )
+  }
+})
+
+test('HTML declarations and bogus end tags stop at the browser delimiter', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+  const prefixes = [
+    '<!DOCTYPE html PUBLIC "quoted>identifier">',
+    '<!DOCTYPE html PUBLIC "unterminated>',
+    `</ ${preload}>`,
+    `</1 ${preload}>`,
+  ]
+
+  for (const prefix of prefixes) {
+    assert.equal(plugin.transformIndexHtml(`${prefix}${preload}`), undefined, prefix)
+    const hiddenOnly = plugin.transformIndexHtml(prefix)
+    assert.equal(hiddenOnly.tags.length, 1, prefix)
+    const repaired = plugin.transformIndexHtml(
+      `${prefix}<link rel="preload" as="font" href="${attrs.href}">`,
+    )
+    assert.equal(repaired.tags.length, 0, prefix)
+    assert.match(repaired.html, /crossorigin="anonymous"/, prefix)
   }
 })
 
@@ -814,6 +852,31 @@ test('HTML preload parsing ignores links in every supported inert construct', as
   for (const inert of inertDocuments.slice(0, -1)) {
     assert.equal(plugin.transformIndexHtml(`${inert}${preload}`), undefined, inert)
   }
+})
+
+test('declarative shadow roots are live unless nested in an inert template', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const preload = `<link rel="preload" as="font" href="${attrs.href}" crossorigin>`
+
+  for (const mode of ['open', 'closed']) {
+    assert.equal(
+      plugin.transformIndexHtml(`<template shadowrootmode=${mode}>${preload}</template>`),
+      undefined,
+      mode,
+    )
+    const nested = plugin.transformIndexHtml(
+      `<template><template shadowrootmode=${mode}>${preload}</template></template>`,
+    )
+    assert.equal(nested.tags.length, 1, mode)
+  }
+
+  const ordinaryNested = plugin.transformIndexHtml(
+    `<template shadowrootmode=open><template>${preload}</template></template>`,
+  )
+  assert.equal(ordinaryNested.tags.length, 1)
 })
 
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
@@ -868,7 +931,7 @@ test('a shared server config cannot hide the client environment HTML warning', a
     `@import 'tailwindcss';`,
     join(root, 'styles.css'),
   )
-  const environment = { config: { consumer: 'client', build: { ssr: false } } }
+  const environment = { config: { consumer: 'client', build: {} } }
   plugin.buildEnd.call({
     environment,
     error(message) {
@@ -876,6 +939,23 @@ test('a shared server config cannot hide the client environment HTML warning', a
     },
   })
   plugin.closeBundle.call({ environment })
+  assert.match(warned.join('\n'), /Vite transformed no HTML entry/)
+})
+
+test('serve-to-build reuse resets transformed HTML state', async (t) => {
+  const warned = captureWarnings(t)
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], preloadHtml: true, silent: true })
+
+  await plugin.config({ root }, { command: 'serve' })
+  plugin.configResolved({ plugins: [], appType: 'spa', command: 'serve' })
+  assert.equal(htmlTags(plugin.transformIndexHtml('<head></head>')).length, 1)
+
+  await plugin.config({ root }, { command: 'build' })
+  plugin.configResolved({ plugins: [], appType: 'custom', command: 'build' })
+  plugin.closeBundle.call({
+    environment: { config: { consumer: 'client', build: {} } },
+  })
   assert.match(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 
