@@ -23,6 +23,18 @@ const GOOD_STATIC_AUDIT = {
   },
 }
 
+test('weekly CLS stages the complete static-audit module graph', () => {
+  const workflow = readFileSync(join(root, '.github/workflows/cls-weekly.yml'), 'utf8')
+  for (const path of [
+    '../harness/sweep.mjs',
+    '../harness/static-audit.mjs',
+    '../src/preload-delivery.mjs',
+  ]) {
+    assert.ok(workflow.includes(path), `${path} is missing from the staged harness`)
+  }
+  assert.match(workflow, /node \.font-kit-ci\/harness\/sweep\.mjs/)
+})
+
 test('write-note keeps metrics and CLS histories on separate refs', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'font-kit-notes-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -292,6 +304,45 @@ test('check-cls gates preload and font response delivery headers', (t) => {
     [
       (audit) =>
         (audit.headerPreloadFontLinks = [
+          '</fonts/crossorigin/manrope.woff2>; rel=preload; as=font',
+        ]),
+      /missing crossorigin/,
+    ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = [
+          '</fonts/manrope.woff2>; rel=preload; as=font; title=crossorigin',
+        ]),
+      /missing crossorigin/,
+    ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = [
+          '</fonts/manrope.woff2>; rel=preload; as=font; crossorigin="use-credentials"',
+        ]),
+      /missing crossorigin/,
+    ],
+    [
+      (audit) => {
+        audit.headerPreloadFontLinks = []
+        audit.headPreloadFontLinks = [
+          '<link rel="preload" as="font" href="/fonts/manrope.woff2?crossorigin" title="crossorigin">',
+        ]
+      },
+      /missing crossorigin/,
+    ],
+    [
+      (audit) => {
+        audit.headerPreloadFontLinks = []
+        audit.headPreloadFontLinks = [
+          '<link rel="preload" as="font" href="/fonts/manrope.woff2" crossorigin="use-credentials">',
+        ]
+      },
+      /missing crossorigin/,
+    ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = [
           '</fonts/manrope.woff2>; rel=preload; as=font; crossorigin',
           '</fonts/display.woff2>; rel=preload; as=font',
         ]),
@@ -312,6 +363,27 @@ test('check-cls gates preload and font response delivery headers', (t) => {
     assert.equal(execute().status, 1)
     assert.match(JSON.parse(readFileSync(output)).gate.errors.join('\n'), expected)
   }
+
+  report.staticAudit = {
+    unavailableReason: 'navigation returned malformed HTML',
+    headerPreloadFontLinks: [],
+    headPreloadFontLinks: [],
+    sampleFontResponse: null,
+    errors: [],
+  }
+  assert.equal(execute().status, 1)
+  const unavailableErrors = JSON.parse(readFileSync(output)).gate.errors
+  assert.ok(
+    unavailableErrors.some((error) => /static font delivery audit is unavailable/.test(error)),
+  )
+  assert.equal(
+    unavailableErrors.some((error) => /document carries no font preload/.test(error)),
+    false,
+  )
+  assert.equal(
+    unavailableErrors.some((error) => /sample font response/.test(error)),
+    false,
+  )
 })
 
 test('environment capture records unavailable metadata without aborting', (t) => {

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { staticAudit } from '../harness/static-audit.mjs'
+import { emptyStaticAudit, staticAudit } from '../harness/static-audit.mjs'
 
 const response = (url, body, { status = 200, headers = {} } = {}) => ({
   url,
@@ -8,6 +8,14 @@ const response = (url, body, { status = 200, headers = {} } = {}) => ({
   headers: new Headers(headers),
   text: async () => body,
   arrayBuffer: async () => Buffer.from(body),
+})
+
+test('empty static audits carry one explicit unavailability reason', () => {
+  const audit = emptyStaticAudit(new Error('network failed'))
+  assert.equal(audit.unavailableReason, 'network failed')
+  assert.deepEqual(audit.errors, [])
+  assert.deepEqual(audit.headerPreloadFontLinks, [])
+  assert.equal(audit.sampleFontResponse, null)
 })
 
 test('static audit follows stylesheet-relative imports and samples the preloaded face', async () => {

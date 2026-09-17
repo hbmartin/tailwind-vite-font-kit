@@ -3,9 +3,9 @@ import { basename, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { init, parse } from 'es-module-lexer'
-import { mask } from './codemod-vite.mjs'
+import { mask, staticImportBindings } from './codemod-vite.mjs'
 import { assertFontHost } from './font-host.mjs'
-import { detectTailwindEntry, themeBlocks } from './detect.mjs'
+import { detectTailwindEntry, themeBlocks, walk } from './detect.mjs'
 import { runInDoctorContext } from './doctor-context.mjs'
 import { resolvePreloadDelivery } from './preload-delivery.mjs'
 import { requestHasRangedOpsz } from './opsz.mjs'
@@ -19,27 +19,6 @@ await init
 const check = (status, message) => ({ status, message })
 
 const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-function serverEntryBindings(statement) {
-  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(statement)
-  if (!match || /^type\b/.test(match[1].trim())) return []
-  const clause = match[1].trim()
-  const bindings = []
-  const defaultBinding = /^([\w$]+)(?:\s*,|$)/.exec(clause)?.[1]
-  if (defaultBinding) bindings.push(defaultBinding)
-  const named = /\{([\s\S]*?)\}/.exec(clause)?.[1]
-  if (named) {
-    for (const raw of named.split(',')) {
-      const imported = /^createFontsServerEntry(?:\s+as\s+([\w$]+))?$/.exec(raw.trim())
-      if (imported) bindings.push(imported[1] ?? 'createFontsServerEntry')
-      const importedDefault = /^default\s+as\s+([\w$]+)$/.exec(raw.trim())
-      if (importedDefault) bindings.push(importedDefault[1])
-    }
-  }
-  const namespace = /\*\s+as\s+([\w$]+)/.exec(clause)?.[1]
-  if (namespace) bindings.push(`${namespace}.createFontsServerEntry`, `${namespace}.default`)
-  return bindings
-}
 
 function closingParen(masked, open) {
   let depth = 1
@@ -99,21 +78,25 @@ function classifyServerOptions(source) {
   return 'early-hints'
 }
 
-function detectServerEntryDelivery(root) {
-  const file = join(root, 'src', 'server.ts')
-  if (!existsSync(file)) return 'none'
-  const source = readFileSync(file, 'utf8')
+function classifyServerEntrySource(source) {
   let imports
   try {
     ;[imports] = parse(source)
   } catch {
-    return source.includes(SERVER_ENTRY_SPECIFIER) ? 'unknown' : 'none'
+    return source.includes(SERVER_ENTRY_SPECIFIER) ? 'unknown' : null
   }
-  const bindings = imports.flatMap((entry) => {
+  const serverImports = imports.filter(
+    (entry) => entry.n === SERVER_ENTRY_SPECIFIER && entry.d === -1,
+  )
+  if (!serverImports.length) return null
+  const bindings = serverImports.flatMap((entry) => {
     if (entry.n !== SERVER_ENTRY_SPECIFIER || entry.d !== -1) return []
-    return serverEntryBindings(source.slice(entry.ss, entry.se))
+    return staticImportBindings(source.slice(entry.ss, entry.se), {
+      namedExports: ['createFontsServerEntry', 'default'],
+      namespaceExports: ['createFontsServerEntry', 'default'],
+    })
   })
-  if (!bindings.length) return 'none'
+  if (!bindings.length) return 'unknown'
 
   const active = mask(source)
   for (const binding of bindings) {
@@ -125,7 +108,38 @@ function detectServerEntryDelivery(root) {
     if (close === -1) return 'unknown'
     return classifyServerOptions(source.slice(open + 1, close))
   }
-  return 'none'
+  // The package is imported, but the value may flow through a local variable or helper.
+  // That is not proof that delivery is absent.
+  return 'unknown'
+}
+
+function detectServerEntryDelivery(root) {
+  const extensions = ['.ts', '.js', '.mts', '.mjs', '.tsx', '.jsx']
+  const conventional = extensions.map((extension) => join(root, 'src', `server${extension}`))
+  const files = [...new Set([...conventional, ...walk(root, extensions)])]
+  const candidates = []
+
+  for (const file of files) {
+    if (!existsSync(file)) continue
+    let source
+    try {
+      source = readFileSync(file, 'utf8')
+    } catch {
+      // A conventional or discovered source file that cannot be inspected is uncertainty,
+      // not grounds to abort every unrelated doctor check.
+      candidates.push({ file, delivery: 'unknown' })
+      continue
+    }
+    const delivery = classifyServerEntrySource(source)
+    if (delivery) candidates.push({ file, delivery })
+  }
+
+  if (!candidates.length) return 'none'
+  const namedServerEntries = candidates.filter((candidate) =>
+    /^server\.(?:[cm]?[jt]sx?)$/.test(basename(candidate.file)),
+  )
+  const plausibleEntries = namedServerEntries.length ? namedServerEntries : candidates
+  return plausibleEntries.length === 1 ? plausibleEntries[0].delivery : 'unknown'
 }
 
 async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
@@ -231,7 +245,9 @@ export async function diagnoseResolvedConfig(
   const preloads = generation.preloads ?? []
   const isSsrBuild = diagnostics.isSsrBuild ?? Boolean(resolved.build?.ssr)
   const isLibraryBuild = diagnostics.isLibraryBuild ?? Boolean(resolved.build?.lib)
-  const serverDelivery = preloads.length ? detectServerEntryDelivery(root) : 'none'
+  let cachedServerDelivery
+  const serverDelivery = () =>
+    (cachedServerDelivery ??= preloads.length ? detectServerEntryDelivery(root) : 'none')
   const delivery =
     diagnostics.delivery ??
     resolvePreloadDelivery(options, {
@@ -256,16 +272,16 @@ export async function diagnoseResolvedConfig(
     checks.push(
       check('pass', `SSR build defers document preload delivery to its client or server output`),
     )
-  } else if (serverDelivery === 'link-header') {
+  } else if (serverDelivery() === 'link-header') {
     checks.push(check('pass', `the Start server entry will deliver font preload Link headers`))
-  } else if (serverDelivery === 'early-hints') {
+  } else if (serverDelivery() === 'early-hints') {
     checks.push(
       check(
         'warning',
         `the Start server entry enables Early Hints without a Link-header fallback; delivery depends on the runtime and protocol`,
       ),
     )
-  } else if (serverDelivery === 'unknown') {
+  } else if (serverDelivery() === 'unknown') {
     checks.push(
       check(
         'warning',

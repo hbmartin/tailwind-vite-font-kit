@@ -6,7 +6,7 @@
 
 import puppeteer from 'puppeteer'
 import { writeFileSync } from 'node:fs'
-import { staticAudit } from './static-audit.mjs'
+import { emptyStaticAudit, staticAudit } from './static-audit.mjs'
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, arr) => {
@@ -226,22 +226,7 @@ try {
   // The browser measurements above are expensive and remain useful evidence even when
   // the independent static audit fails. Persist an empty audit with the cause so the gate
   // can report it after the result file has been written.
-  stat = {
-    stylesheetHrefs: [],
-    inlineStyleTags: 0,
-    totalFontFaceBlocks: 0,
-    facesWithSizeAdjust: 0,
-    facesWithAscentOverride: 0,
-    facesWithLocalSrc: 0,
-    supportsGuards: 0,
-    fontFamiliesDeclared: [],
-    sampleFallbackFace: null,
-    headPreloadFontLinks: [],
-    navigationLinkHeader: '',
-    headerPreloadFontLinks: [],
-    sampleFontResponse: null,
-    errors: [`static audit failed: ${error.message}`],
-  }
+  stat = emptyStaticAudit(error)
 }
 const out = {
   label: LABEL,

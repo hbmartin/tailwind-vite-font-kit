@@ -34,8 +34,9 @@ import {
 const VIRTUAL_ID = 'virtual:fonts'
 const RESOLVED_VIRTUAL_ID = '\0virtual:fonts'
 const FULL_URL_BASE_RE = /^(?:https?:)?\/\//
+const FONT_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+const FONT_CORS_ORIGIN = '*'
 const DEFAULT_OPTIONS = {
-  subsets: ['latin'],
   publicPath: '/fonts',
   assets: 'emit',
   output: 'cache',
@@ -43,6 +44,8 @@ const DEFAULT_OPTIONS = {
   preloadHtml: 'auto',
   silent: false,
 }
+
+const defaultOptions = () => ({ ...DEFAULT_OPTIONS, subsets: ['latin'] })
 
 function assignDefined(target, ...sources) {
   for (const source of sources) {
@@ -171,7 +174,7 @@ export function fonts(userOptions = {}) {
   // `families` is filled in by resolveFamilies() below, which throws if neither the
   // call site nor fonts.config.mjs supplied any — so every hook can assume it is set.
   const opts = /** @type {import('./generate.mjs').ResolvedOptions} */ (
-    assignDefined({}, DEFAULT_OPTIONS, userOptions)
+    assignDefined({}, defaultOptions(), userOptions)
   )
   const warningEvents = []
   const doctorMode = () => isDoctorContext()
@@ -267,7 +270,8 @@ export function fonts(userOptions = {}) {
   let generatedFiles = new Set()
   let fontRulesAreScoped = true
   let warnedMissingHtmlTransform = false
-  let buildFailed = false
+  let failedBuildEnvironments = new WeakSet()
+  let buildFailedWithoutEnvironment = false
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -313,8 +317,8 @@ export function fonts(userOptions = {}) {
   }
 
   const setFontPolicyHeaders = (res) => {
-    res.setHeader('access-control-allow-origin', '*')
-    res.setHeader('cache-control', 'public, max-age=31536000, immutable')
+    res.setHeader('access-control-allow-origin', FONT_CORS_ORIGIN)
+    res.setHeader('cache-control', FONT_CACHE_CONTROL)
   }
 
   const setFontHeaders = (res) => {
@@ -332,7 +336,7 @@ export function fonts(userOptions = {}) {
 
     async config(config, env) {
       for (const key of Object.keys(opts)) delete opts[key]
-      assignDefined(opts, DEFAULT_OPTIONS, userOptions)
+      assignDefined(opts, defaultOptions(), userOptions)
       warningEvents.length = 0
       entrySeen = 0
       warnedConflict = false
@@ -341,7 +345,8 @@ export function fonts(userOptions = {}) {
       htmlEntryDetected = false
       htmlTransforms = 0
       warnedMissingHtmlTransform = false
-      buildFailed = false
+      failedBuildEnvironments = new WeakSet()
+      buildFailedWithoutEnvironment = false
       gen = undefined
       generatedFiles = new Set()
       fontRulesAreScoped = true
@@ -486,8 +491,8 @@ export function fonts(userOptions = {}) {
       if (!fontsShareDocumentNamespace) {
         routeRules[`${routePath}/**`] = {
           headers: {
-            'cache-control': 'public, max-age=31536000, immutable',
-            'access-control-allow-origin': '*',
+            'cache-control': FONT_CACHE_CONTROL,
+            'access-control-allow-origin': FONT_CORS_ORIGIN,
           },
         }
       }
@@ -533,6 +538,8 @@ export function fonts(userOptions = {}) {
     // outDir at `.output/public`, so `fileName: 'fonts/x.woff2'` lands at
     // `.output/public/fonts/x.woff2` and serves at `/fonts/x.woff2`.
     buildStart() {
+      if (this.environment) failedBuildEnvironments.delete(this.environment)
+      else buildFailedWithoutEnvironment = false
       // emitFile throws "not supported in serve mode"; buildStart still runs for the dev
       // module graph. Dev is covered by the middleware below.
       if (isServe) return
@@ -606,7 +613,10 @@ export function fonts(userOptions = {}) {
       hasNitro = Boolean(resolved.plugins?.some((p) => p.name?.includes('nitro')))
       isSsrBuild = finalIsSsrBuild
       isLibraryBuild = finalIsLibraryBuild
-      htmlEntryDetected = hasConventionalHtmlEntry(root, resolved, {
+      // A shared plugin sees every environment's config before any environment builds.
+      // Keep the client HTML capability once observed; a later server config has no HTML
+      // entry of its own, but must not disable the client's transformIndexHtml hook.
+      htmlEntryDetected ||= hasConventionalHtmlEntry(root, resolved, {
         isSsrBuild: finalIsSsrBuild,
         isLibraryBuild: finalIsLibraryBuild,
       })
@@ -709,8 +719,8 @@ export function fonts(userOptions = {}) {
             statusCode === 304 ||
             ((statusCode === 200 || statusCode === 206) && /^font\/woff2(?:;|$)/i.test(contentType))
           if (isFontResponse) {
-            set('access-control-allow-origin', '*')
-            set('cache-control', 'public, max-age=31536000, immutable')
+            set('access-control-allow-origin', FONT_CORS_ORIGIN)
+            set('cache-control', FONT_CACHE_CONTROL)
           }
           return writeHead.call(this, statusCode, ...args)
         }
@@ -801,7 +811,8 @@ export function fonts(userOptions = {}) {
 
     buildEnd(error) {
       if (error) {
-        buildFailed = true
+        if (this.environment) failedBuildEnvironments.add(this.environment)
+        else buildFailedWithoutEnvironment = true
         return
       }
       // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
@@ -810,7 +821,8 @@ export function fonts(userOptions = {}) {
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {
-        buildFailed = true
+        if (this.environment) failedBuildEnvironments.add(this.environment)
+        else buildFailedWithoutEnvironment = true
         this.error(
           "[tss-fonts] never saw a stylesheet containing `@import 'tailwindcss'`, so the " +
             '@theme block was NOT injected and no fonts were applied.\n' +
@@ -823,7 +835,15 @@ export function fonts(userOptions = {}) {
     closeBundle() {
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
-      if (isSsrBuild || isLibraryBuild || buildFailed) return
+      const environmentBuild = this.environment?.config?.build
+      const environmentIsSsrBuild =
+        environmentBuild?.ssr !== undefined ? Boolean(environmentBuild.ssr) : isSsrBuild
+      const environmentIsLibraryBuild =
+        environmentBuild?.lib !== undefined ? Boolean(environmentBuild.lib) : isLibraryBuild
+      const environmentBuildFailed = this.environment
+        ? failedBuildEnvironments.has(this.environment)
+        : buildFailedWithoutEnvironment
+      if (environmentIsSsrBuild || environmentIsLibraryBuild || environmentBuildFailed) return
       if (this.environment && this.environment.config?.consumer !== 'client') return
       const delivery = currentDelivery()
       if (

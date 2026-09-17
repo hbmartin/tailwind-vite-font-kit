@@ -1,6 +1,33 @@
 // Follow the served HTML -> stylesheets -> @import chain in Node so cross-origin CSS can
 // be inspected without the browser's stylesheet access restrictions.
-import { decodeHtmlHref, parseHtmlLinks } from '../src/preload-delivery.mjs'
+import {
+  decodeHtmlHref,
+  htmlLinkAttribute,
+  htmlLinkRelTokens,
+  isHtmlFontPreload,
+  parseHtmlLinks,
+} from '../src/preload-delivery.mjs'
+
+export function emptyStaticAudit(error) {
+  const unavailableReason = String(error?.message || error)
+  return {
+    stylesheetHrefs: [],
+    inlineStyleTags: 0,
+    totalFontFaceBlocks: 0,
+    facesWithSizeAdjust: 0,
+    facesWithAscentOverride: 0,
+    facesWithLocalSrc: 0,
+    supportsGuards: 0,
+    fontFamiliesDeclared: [],
+    sampleFallbackFace: null,
+    headPreloadFontLinks: [],
+    navigationLinkHeader: '',
+    headerPreloadFontLinks: [],
+    sampleFontResponse: null,
+    unavailableReason,
+    errors: [],
+  }
+}
 
 export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(url)
@@ -13,19 +40,16 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
     .map((link) => link.trim())
   const headerPreloadFontLinks = [...rawHeaderPreloadFontLinks]
   const htmlLinks = parseHtmlLinks(html)
-  const attribute = (link, name) => link.attributes.get(name)?.value
-  const rel = (link) => attribute(link, 'rel')?.toLowerCase().split(/\s+/) ?? []
+  const htmlFontPreloads = htmlLinks.filter(isHtmlFontPreload)
   const hrefs = htmlLinks
-    .filter((link) => rel(link).includes('stylesheet') && attribute(link, 'href'))
-    .map((link) => decodeHtmlHref(attribute(link, 'href')))
+    .filter(
+      (link) => htmlLinkRelTokens(link).includes('stylesheet') && htmlLinkAttribute(link, 'href'),
+    )
+    .map((link) => decodeHtmlHref(htmlLinkAttribute(link, 'href')))
   const inlineStyles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(
     (match) => match[1],
   )
-  const rawHeadPreloadFontLinks = htmlLinks
-    .filter(
-      (link) => rel(link).includes('preload') && attribute(link, 'as')?.toLowerCase() === 'font',
-    )
-    .map((link) => link.raw)
+  const rawHeadPreloadFontLinks = htmlFontPreloads.map((link) => link.raw)
   const headPreloadFontLinks = [...rawHeadPreloadFontLinks]
   const auditErrors = []
   const seen = new Set()
@@ -81,11 +105,8 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
       }
     }
   }
-  for (const link of htmlLinks.filter(
-    (candidate) =>
-      rel(candidate).includes('preload') && attribute(candidate, 'as')?.toLowerCase() === 'font',
-  )) {
-    const href = attribute(link, 'href')
+  for (const link of htmlFontPreloads) {
+    const href = htmlLinkAttribute(link, 'href')
     if (href) {
       try {
         preloadUrls.add(new URL(decodeHtmlHref(href), documentUrl).href)
