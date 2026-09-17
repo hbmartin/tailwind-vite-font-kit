@@ -2,6 +2,7 @@
 // Validate the weekly browser report and always leave a compact, issue-friendly result.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { hasAnonymousCrossorigin, parseHtmlLinks } from '../src/preload-delivery.mjs'
 
 const EXPECTED_KEYS = [
   'desktop/hero',
@@ -19,6 +20,52 @@ const FALLBACK_FAMILY_RE = /^(.+?) Fallback: .+$/
 
 const DEFAULT_THRESHOLD = 0.02
 const finiteNonnegative = (value) => Number.isFinite(value) && value >= 0
+
+function hasAnonymousLinkCrossorigin(link) {
+  const parameters = []
+  let start = link.indexOf('>') + 1
+  let quote = null
+  let escaped = false
+  for (let index = start; index <= link.length; index++) {
+    const char = link[index]
+    if (quote) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === quote) quote = null
+      continue
+    }
+    // HTTP quoted-string uses double quotes. Apostrophes are legal token characters.
+    if (char === '"') {
+      quote = char
+      continue
+    }
+    if (char === ';' || index === link.length) {
+      parameters.push(link.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  for (const parameter of parameters) {
+    const match = /^crossorigin(?:\s*=\s*(.*))?$/i.exec(parameter)
+    if (!match) continue
+    const value = match[1]
+      ?.trim()
+      .replace(/^"(.*)"$/, '$1')
+      .toLowerCase()
+    return value === undefined || value === '' || value === 'anonymous'
+  }
+  return false
+}
+
+const hasAnonymousHtmlCrossorigin = (tag) => {
+  const [link] = parseHtmlLinks(tag)
+  return Boolean(link && hasAnonymousCrossorigin(link))
+}
 
 const [
   reportPath = 'cls.json',
@@ -54,18 +101,26 @@ if (!finiteNonnegative(threshold)) errors.push(`invalid threshold: ${JSON.string
 if (!Array.isArray(report.results)) errors.push('cls.json results must be an array')
 
 const staticAudit = report.staticAudit
-const documentPreloads = [
-  ...(Array.isArray(staticAudit?.headerPreloadFontLinks) ? staticAudit.headerPreloadFontLinks : []),
-  ...(Array.isArray(staticAudit?.headPreloadFontLinks) ? staticAudit.headPreloadFontLinks : []),
-]
 if (!staticAudit) {
   errors.push('the static font delivery audit is missing')
+} else if (staticAudit.unavailableReason) {
+  errors.push(`the static font delivery audit is unavailable (${staticAudit.unavailableReason})`)
 } else {
   for (const error of Array.isArray(staticAudit.errors) ? staticAudit.errors : []) {
     errors.push(`static font delivery audit: ${error}`)
   }
-  if (!documentPreloads.length) errors.push('the document carries no font preload')
-  else if (!documentPreloads.every((link) => /\bcrossorigin\b/i.test(link))) {
+  const headerPreloads = Array.isArray(staticAudit.headerPreloadFontLinks)
+    ? staticAudit.headerPreloadFontLinks
+    : []
+  const htmlPreloads = Array.isArray(staticAudit.headPreloadFontLinks)
+    ? staticAudit.headPreloadFontLinks
+    : []
+  if (!headerPreloads.length && !htmlPreloads.length) {
+    errors.push('the document carries no font preload')
+  } else if (
+    !headerPreloads.every(hasAnonymousLinkCrossorigin) ||
+    !htmlPreloads.every(hasAnonymousHtmlCrossorigin)
+  ) {
     errors.push('one or more document font preloads are missing crossorigin')
   }
   const font = staticAudit.sampleFontResponse

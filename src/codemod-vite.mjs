@@ -204,38 +204,54 @@ export function mask(src, { keepStrings = false } = {}) {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** Callable local expressions introduced by one visible static root-package import. */
-function callableBindings(statement) {
+/**
+ * Local expressions introduced by one visible static import. The caller names which
+ * exports are callable; keeping the import grammar here prevents every static analyzer
+ * from growing a subtly different copy.
+ *
+ * @param {string} statement
+ * @param {{namedExports?: string[], namespaceExports?: string[], includeDefault?: boolean}} [options]
+ */
+export function staticImportBindings(
+  statement,
+  { namedExports = [], namespaceExports = namedExports, includeDefault = true } = {},
+) {
   const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(statement)
   if (!match || /^type\b/.test(match[1].trim())) return []
 
   const clause = match[1].trim()
   const bindings = []
 
-  // The package's default export is fonts(), so any default binding is callable.
-  const defaultBinding = /^([\w$]+)(?:\s*,|$)/.exec(clause)?.[1]
-  if (defaultBinding) bindings.push(defaultBinding)
+  if (includeDefault) {
+    const defaultBinding = /^([\w$]+)(?:\s*,|$)/.exec(clause)?.[1]
+    if (defaultBinding) bindings.push(defaultBinding)
+  }
 
   const named = /\{([\s\S]*?)\}/.exec(clause)?.[1]
   if (named) {
     for (const raw of named.split(',')) {
       const part = raw.trim()
       if (!part || /^type\b/.test(part)) continue
-      const imported = /^fonts(?:\s+as\s+([\w$]+))?$/.exec(part)
-      if (imported) {
-        bindings.push(imported[1] ?? 'fonts')
-        continue
+      const imported = /^([\w$]+)(?:\s+as\s+([\w$]+))?$/.exec(part)
+      if (imported && namedExports.includes(imported[1])) {
+        bindings.push(imported[2] ?? imported[1])
       }
-      const importedDefault = /^default\s+as\s+([\w$]+)$/.exec(part)
-      if (importedDefault) bindings.push(importedDefault[1])
     }
   }
 
-  // A namespace import is not itself callable, but both names point at fonts().
+  // A namespace import is not itself callable; only the named members are.
   const namespace = /\*\s+as\s+([\w$]+)/.exec(clause)?.[1]
-  if (namespace) bindings.push(`${namespace}.fonts`, `${namespace}.default`)
+  if (namespace) bindings.push(...namespaceExports.map((name) => `${namespace}.${name}`))
 
   return bindings
+}
+
+/** Callable local expressions introduced by one visible static root-package import. */
+function callableBindings(statement) {
+  return staticImportBindings(statement, {
+    namedExports: ['fonts', 'default'],
+    namespaceExports: ['fonts', 'default'],
+  })
 }
 
 /**

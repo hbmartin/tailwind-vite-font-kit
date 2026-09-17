@@ -693,6 +693,29 @@ test('HTML preload parsing respects attribute boundaries, quotes, and unquoted v
   for (const html of cases) assert.equal(plugin.transformIndexHtml(html), undefined, html)
 })
 
+test('HTML preload parsing treats quotes inside unquoted values as ordinary characters', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const html = `<link rel=preload as=font href=${attrs.href} title=can't><main>after</main>`
+  const repaired = plugin.transformIndexHtml(html)
+  assert.equal(repaired.tags.length, 0, 'the existing browser-recognized preload was missed')
+  assert.match(repaired.html, /title=can't crossorigin="anonymous"><main>/)
+  assert.doesNotMatch(repaired.html, /<\/main crossorigin=/)
+})
+
+test('HTML preload parsing does not repair across an unclosed quoted attribute', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const html = `<link rel=preload as=font href=${attrs.href} title="oops><main>after</main>`
+  const result = plugin.transformIndexHtml(html)
+  assert.equal(result.html, html, 'malformed source markup must not be rewritten at document end')
+  assert.equal(result.tags.length, 1, 'Vite can inject a separate well-formed preload safely')
+})
+
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t)
@@ -728,6 +751,40 @@ test('closeBundle never warns about HTML transforms for an SSR-only build', asyn
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 
+test('a shared server config cannot hide the client environment HTML warning', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin, root } = await routeRules(t, { preloadHtml: true })
+  plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: false } })
+  plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
+  plugin.transform.handler.call(
+    {
+      warn() {},
+      error(message) {
+        throw new Error(message)
+      },
+    },
+    `@import 'tailwindcss';`,
+    join(root, 'styles.css'),
+  )
+  const environment = { config: { consumer: 'client', build: { ssr: false } } }
+  plugin.buildEnd.call({
+    environment,
+    error(message) {
+      throw new Error(message)
+    },
+  })
+  plugin.closeBundle.call({ environment })
+  assert.match(warned.join('\n'), /Vite transformed no HTML entry/)
+})
+
+test('a shared server config cannot disable automatic client HTML injection', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [], appType: 'spa', build: { ssr: false } })
+  plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
+  assert.equal(htmlTags(plugin.transformIndexHtml('<head></head>')).length, 1)
+})
+
 test('closeBundle suppresses missing-HTML warnings after a failed build', async (t) => {
   const warned = captureWarnings(t)
   const { plugin } = await routeRules(t, { preloadHtml: true })
@@ -735,6 +792,30 @@ test('closeBundle suppresses missing-HTML warnings after a failed build', async 
   plugin.buildEnd.call({}, new Error('the real build failure'))
   plugin.closeBundle.call({})
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
+})
+
+test('buildStart clears a previous watch rebuild failure for the same environment', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin, root } = await routeRules(t, { preloadHtml: true })
+  plugin.configResolved({ plugins: [], appType: 'custom' })
+  plugin.transform.handler.call(
+    {
+      warn() {},
+      error(message) {
+        throw new Error(message)
+      },
+    },
+    `@import 'tailwindcss';`,
+    join(root, 'styles.css'),
+  )
+  const environment = { config: { consumer: 'client', build: {} } }
+  plugin.buildEnd.call({ environment }, new Error('failed rebuild'))
+  plugin.closeBundle.call({ environment })
+  assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
+
+  plugin.buildStart.call({ environment, emitFile() {} })
+  plugin.closeBundle.call({ environment })
+  assert.match(warned.join('\n'), /Vite transformed no HTML entry/)
 })
 
 // ---------------------------------------------------------------------------
@@ -978,6 +1059,13 @@ test('a reused plugin resets warnings, conflict reporting, and entry detection',
       }),
     /never saw a stylesheet/,
   )
+})
+
+test('default option arrays are not shared across plugin instances', () => {
+  const first = fonts()
+  first.api.getDiagnostics().options.subsets.push('cyrillic')
+  const second = fonts()
+  assert.deepEqual(second.api.getDiagnostics().options.subsets, ['latin'])
 })
 
 test('virtual:fonts exposes the preloads and the family map', async (t) => {

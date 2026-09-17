@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { diagnoseResolvedConfig, loadProjectVite } from '../src/doctor.mjs'
 import { isDoctorContext, runInDoctorContext } from '../src/doctor-context.mjs'
 import { resolvePreloadDelivery } from '../src/preload-delivery.mjs'
@@ -236,6 +236,69 @@ test('doctor recognizes the package Start server entry and classifies its guaran
       scenario.name,
     )
   }
+})
+
+test('doctor discovers supported server-entry extensions and custom source paths', async (t) => {
+  for (const relativePath of ['src/server.tsx', 'src/server.mts', 'application/http-entry.jsx']) {
+    const item = fixture(t)
+    const file = join(item.root, relativePath)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry({ linkHeader: true })\n`,
+    )
+    const diagnostics = item.font.api.getDiagnostics()
+    diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+      preloadCount: diagnostics.generation.preloads.length,
+      hasNitro: false,
+      htmlEntryDetected: false,
+    })
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(
+      checks.some(
+        (check) =>
+          check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+      ),
+      relativePath,
+    )
+  }
+})
+
+test('doctor reports indirect server-entry wiring as unknown rather than absent', async (t) => {
+  const item = fixture(t)
+  mkdirSync(join(item.root, 'src'))
+  writeFileSync(
+    join(item.root, 'src/server.ts'),
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `const entry = createFontsServerEntry({ linkHeader: true })\n` +
+      `export default entry\n`,
+  )
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'warning' && /could not be verified/.test(check.message),
+    ),
+  )
+  assert.equal(
+    checks.some((check) => /no automatic Nitro or HTML delivery path/.test(check.message)),
+    false,
+  )
+})
+
+test('doctor does not inspect a server entry when Nitro already guarantees delivery', async (t) => {
+  const item = fixture(t, { diagnostics: { hasNitro: true } })
+  mkdirSync(join(item.root, 'src/server.ts'), { recursive: true })
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some((check) => check.status === 'pass' && /Nitro will deliver/.test(check.message)),
+  )
 })
 
 test('doctor does not assign document delivery responsibility to SSR or library builds', async (t) => {

@@ -66,20 +66,23 @@ export const decodeHtmlHref = (href) => href.replace(/&(?:amp|#0*38|#x0*26);/gi,
 
 const SPACE_RE = /\s/
 
-function parseAttributes(html, tagStart, tagEnd) {
+function parseLink(html, tagStart) {
   const attributes = new Map()
   let index = tagStart + 5 // immediately after `<link`
-  const contentEnd = tagEnd - 1 // the closing `>`
-  while (index < contentEnd) {
-    while (index < contentEnd && SPACE_RE.test(html[index])) index++
-    if (index >= contentEnd || html[index] === '>') break
+  while (index < html.length) {
+    while (index < html.length && SPACE_RE.test(html[index])) index++
+    if (index >= html.length) return null
+    if (html[index] === '>') {
+      const end = index + 1
+      return { raw: html.slice(tagStart, end), start: tagStart, end, attributes }
+    }
     if (html[index] === '/') {
       index++
       continue
     }
 
     const start = index
-    while (index < contentEnd && !SPACE_RE.test(html[index]) && !/[=/>]/.test(html[index])) {
+    while (index < html.length && !SPACE_RE.test(html[index]) && !/[=/>]/.test(html[index])) {
       index++
     }
     if (index === start) {
@@ -87,20 +90,27 @@ function parseAttributes(html, tagStart, tagEnd) {
       continue
     }
     const name = html.slice(start, index).toLowerCase()
-    while (index < contentEnd && SPACE_RE.test(html[index])) index++
+    while (index < html.length && SPACE_RE.test(html[index])) index++
 
     let value
     if (html[index] === '=') {
       index++
-      while (index < contentEnd && SPACE_RE.test(html[index])) index++
+      while (index < html.length && SPACE_RE.test(html[index])) index++
       const quote = html[index] === '"' || html[index] === "'" ? html[index++] : null
       const valueStart = index
       if (quote) {
-        while (index < contentEnd && html[index] !== quote) index++
+        while (index < html.length && html[index] !== quote) index++
+        // Without a closing quote the browser never reaches a `>` in the tag state.
+        // Stop the whole scan: later `<link` text is part of this attribute, not another
+        // tag, and rescanning every occurrence would make malformed input quadratic.
+        if (index >= html.length) return null
         value = html.slice(valueStart, index)
-        if (html[index] === quote) index++
+        index++
       } else {
-        while (index < contentEnd && !SPACE_RE.test(html[index]) && html[index] !== '>') index++
+        // Quotes inside an unquoted value are parse errors in HTML, but browsers retain
+        // them as ordinary value characters. Treating one as a delimiter can consume the
+        // rest of the document and move a repair onto an unrelated closing tag.
+        while (index < html.length && !SPACE_RE.test(html[index]) && html[index] !== '>') index++
         value = html.slice(valueStart, index)
       }
     }
@@ -108,7 +118,7 @@ function parseAttributes(html, tagStart, tagEnd) {
     // Browsers retain the first duplicate HTML attribute and ignore later copies.
     if (!attributes.has(name)) attributes.set(name, { name, value, start, end: index })
   }
-  return attributes
+  return null
 }
 
 /**
@@ -121,35 +131,27 @@ export function parseHtmlLinks(html) {
   const starts = /<link(?=[\s/>])/gi
   let match
   while ((match = starts.exec(html))) {
-    const start = match.index
-    let index = start + match[0].length
-    let quote = null
-    while (index < html.length) {
-      const char = html[index]
-      if (quote) {
-        if (char === quote) quote = null
-      } else if (char === '"' || char === "'") {
-        quote = char
-      } else if (char === '>') {
-        index++
-        break
-      }
-      index++
-    }
-    if (index > html.length || html[index - 1] !== '>') continue
-    starts.lastIndex = index
-    links.push({
-      raw: html.slice(start, index),
-      start,
-      end: index,
-      attributes: parseAttributes(html, start, index),
-    })
+    const link = parseLink(html, match.index)
+    if (!link) break
+    starts.lastIndex = link.end
+    links.push(link)
   }
   return links
 }
 
-const attributeValue = (link, name) => link.attributes.get(name)?.value
-const relTokens = (link) => attributeValue(link, 'rel')?.toLowerCase().split(/\s+/) ?? []
+export const htmlLinkAttribute = (link, name) => link.attributes.get(name)?.value
+export const htmlLinkRelTokens = (link) =>
+  htmlLinkAttribute(link, 'rel')?.toLowerCase().split(/\s+/) ?? []
+
+export const isHtmlFontPreload = (link) =>
+  htmlLinkRelTokens(link).includes('preload') &&
+  htmlLinkAttribute(link, 'as')?.toLowerCase() === 'font'
+
+export function hasAnonymousCrossorigin(link) {
+  const crossorigin = link.attributes.get('crossorigin')
+  const value = crossorigin?.value?.toLowerCase()
+  return crossorigin !== undefined && (value === undefined || value === '' || value === 'anonymous')
+}
 
 function crossoriginEdit(html, link) {
   const current = link.attributes.get('crossorigin')
@@ -167,18 +169,13 @@ export function normalizeHtmlFontPreloads(html, preloads) {
   const present = new Set()
   const edits = []
   for (const link of parseHtmlLinks(html)) {
-    const as = attributeValue(link, 'as')?.toLowerCase()
-    const href = attributeValue(link, 'href')
-    if (!relTokens(link).includes('preload') || as !== 'font' || !href) continue
+    const href = htmlLinkAttribute(link, 'href')
+    if (!isHtmlFontPreload(link) || !href) continue
     const decoded = decodeHtmlHref(href)
     if (!wanted.has(decoded)) continue
 
-    const crossorigin = link.attributes.get('crossorigin')
-    const value = crossorigin?.value?.toLowerCase()
-    const compatible =
-      crossorigin !== undefined && (value === undefined || value === '' || value === 'anonymous')
     present.add(decoded)
-    if (!compatible) edits.push(crossoriginEdit(html, link))
+    if (!hasAnonymousCrossorigin(link)) edits.push(crossoriginEdit(html, link))
   }
 
   let normalizedHtml = html
