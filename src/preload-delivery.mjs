@@ -74,17 +74,23 @@ const RAW_TEXT_ELEMENTS = new Set([
   'iframe',
   'noembed',
   'noframes',
+  'noscript',
 ])
 
-function parseLink(html, tagStart) {
+const asciiLower = (value) =>
+  value.replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32))
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function parseStartTag(html, tagStart, nameEnd, name) {
   const attributes = new Map()
-  let index = tagStart + 5 // immediately after `<link`
+  let index = nameEnd
   while (index < html.length) {
     while (index < html.length && SPACE_RE.test(html[index])) index++
     if (index >= html.length) return null
     if (html[index] === '>') {
       const end = index + 1
-      return { raw: html.slice(tagStart, end), start: tagStart, end, attributes }
+      return { name, raw: html.slice(tagStart, end), start: tagStart, end, attributes }
     }
     if (html[index] === '/') {
       index++
@@ -99,7 +105,8 @@ function parseLink(html, tagStart) {
       index++
       continue
     }
-    const name = html.slice(start, index).toLowerCase()
+    const attributeName = asciiLower(html.slice(start, index))
+    let attributeEnd = index
     while (index < html.length && SPACE_RE.test(html[index])) index++
 
     let value
@@ -123,76 +130,96 @@ function parseLink(html, tagStart) {
         while (index < html.length && !SPACE_RE.test(html[index]) && html[index] !== '>') index++
         value = html.slice(valueStart, index)
       }
+      attributeEnd = index
     }
 
     // Browsers retain the first duplicate HTML attribute and ignore later copies.
-    if (!attributes.has(name)) attributes.set(name, { name, value, start, end: index })
+    if (!attributes.has(attributeName)) {
+      attributes.set(attributeName, {
+        name: attributeName,
+        value,
+        start,
+        end: attributeEnd,
+      })
+    }
   }
   return null
 }
 
 /**
- * Parse link tags without mistaking attribute-shaped quoted text for real attributes.
- * Attribute source ranges are absolute offsets into `html` so callers can repair a tag
- * without serialising or otherwise changing unrelated markup.
+ * Scan the HTML once without mistaking quoted tag-shaped text, comments, or raw-text
+ * contents for live elements. Source ranges are absolute offsets into `html` so callers
+ * can repair a tag without serialising or otherwise changing unrelated markup.
  */
-export function parseHtmlLinks(html) {
+export function scanHtml(html) {
   const links = []
-  const lower = html.toLowerCase()
+  const styles = []
   let index = 0
   while ((index = html.indexOf('<', index)) !== -1) {
     if (html.startsWith('<!--', index)) {
+      // The HTML tokenizer closes these empty-comment forms at their first `>`.
+      if (html[index + 4] === '>') {
+        index += 5
+        continue
+      }
+      if (html[index + 4] === '-' && html[index + 5] === '>') {
+        index += 6
+        continue
+      }
       const end = html.indexOf('-->', index + 4)
       if (end === -1) break
       index = end + 3
       continue
     }
 
-    const nameMatch = /^<([a-z][a-z0-9:-]*)(?=[\s/>])/i.exec(html.slice(index))
-    if (!nameMatch) {
+    // HTML's tag-open state requires an ASCII letter. Once in the tag-name state, `_`,
+    // `.`, and non-ASCII characters are retained until a real tag-name delimiter.
+    if (!/[A-Za-z]/.test(html[index + 1] ?? '')) {
       index++
       continue
     }
-    const name = nameMatch[1].toLowerCase()
-    if (name === 'link') {
-      const link = parseLink(html, index)
-      // A genuinely unclosed quote in live markup keeps the browser in the tag's
-      // attribute-value state, so later link-shaped text is not another element.
-      if (!link) break
-      links.push(link)
-      index = link.end
-      continue
+    let nameEnd = index + 2
+    while (
+      nameEnd < html.length &&
+      !SPACE_RE.test(html[nameEnd]) &&
+      html[nameEnd] !== '/' &&
+      html[nameEnd] !== '>'
+    ) {
+      nameEnd++
     }
-
-    let quote = null
-    let tagEnd = -1
-    for (let cursor = index + nameMatch[0].length; cursor < html.length; cursor++) {
-      const char = html[cursor]
-      if (quote) {
-        if (char === quote) quote = null
-      } else if (char === '"' || char === "'") {
-        quote = char
-      } else if (char === '>') {
-        tagEnd = cursor + 1
-        break
-      }
-    }
-    if (tagEnd === -1) break
+    const name = asciiLower(html.slice(index + 1, nameEnd))
+    const tag = parseStartTag(html, index, nameEnd, name)
+    // A genuinely unclosed quote in live markup keeps the browser in the tag's
+    // attribute-value state, so later tag-shaped text is not another element.
+    if (!tag) break
+    if (name === 'link') links.push(tag)
 
     if (RAW_TEXT_ELEMENTS.has(name)) {
-      const closing = new RegExp(`</${name}(?=[\\s/>])`, 'g')
-      closing.lastIndex = tagEnd
-      const match = closing.exec(lower)
-      if (!match) break
+      // Search the original source. Case-folding a copy can change its length (`İ` is the
+      // smallest counterexample) and makes every later source position unsafe.
+      const closing = new RegExp(`</${escapeRegExp(name)}(?=[\\s/>])`, 'gi')
+      closing.lastIndex = tag.end
+      const match = closing.exec(html)
+      if (!match) {
+        if (name === 'style') {
+          styles.push({ text: html.slice(tag.end), start: tag.end, end: html.length })
+        }
+        break
+      }
+      if (name === 'style') {
+        styles.push({ text: html.slice(tag.end, match.index), start: tag.end, end: match.index })
+      }
       const closingEnd = html.indexOf('>', match.index + match[0].length)
       if (closingEnd === -1) break
       index = closingEnd + 1
     } else {
-      index = tagEnd
+      index = tag.end
     }
   }
-  return links
+  return { links, styles }
 }
+
+export const parseHtmlLinks = (html) => scanHtml(html).links
 
 const HTTP_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+/
 const HTTP_PARAMETER_VALUE_RE = /^[!#$%&'()*+\-./:<=>?@[\]^_`{|}~0-9A-Za-z]+/
@@ -287,31 +314,28 @@ export function parseLinkHeader(value) {
   return entries
 }
 
+const relationTokens = (value) => value?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+const isFontPreload = (rel, as) => relationTokens(rel).includes('preload') && as === 'font'
+const hasAnonymousValue = (values) => {
+  const crossorigin = values.get('crossorigin')
+  return crossorigin !== undefined && crossorigin.value?.toLowerCase() !== 'use-credentials'
+}
+
 export const headerLinkParameter = (link, name) => link.parameters.get(name)?.value
-export const headerLinkRelTokens = (link) =>
-  headerLinkParameter(link, 'rel')?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+export const headerLinkRelTokens = (link) => relationTokens(headerLinkParameter(link, 'rel'))
 
 export const isHeaderFontPreload = (link) =>
-  headerLinkRelTokens(link).includes('preload') &&
-  headerLinkParameter(link, 'as')?.toLowerCase() === 'font'
+  isFontPreload(headerLinkParameter(link, 'rel'), headerLinkParameter(link, 'as')?.toLowerCase())
 
-export function hasAnonymousHeaderCrossorigin(link) {
-  const crossorigin = link.parameters.get('crossorigin')
-  return crossorigin !== undefined && crossorigin.value?.toLowerCase() !== 'use-credentials'
-}
+export const hasAnonymousHeaderCrossorigin = (link) => hasAnonymousValue(link.parameters)
 
 export const htmlLinkAttribute = (link, name) => link.attributes.get(name)?.value
-export const htmlLinkRelTokens = (link) =>
-  htmlLinkAttribute(link, 'rel')?.toLowerCase().split(/\s+/) ?? []
+export const htmlLinkRelTokens = (link) => relationTokens(htmlLinkAttribute(link, 'rel'))
 
 export const isHtmlFontPreload = (link) =>
-  htmlLinkRelTokens(link).includes('preload') &&
-  htmlLinkAttribute(link, 'as')?.toLowerCase() === 'font'
+  isFontPreload(htmlLinkAttribute(link, 'rel'), htmlLinkAttribute(link, 'as')?.toLowerCase())
 
-export function hasAnonymousCrossorigin(link) {
-  const crossorigin = link.attributes.get('crossorigin')
-  return crossorigin !== undefined && crossorigin.value?.toLowerCase() !== 'use-credentials'
-}
+export const hasAnonymousCrossorigin = (link) => hasAnonymousValue(link.attributes)
 
 function crossoriginEdit(html, link) {
   const current = link.attributes.get('crossorigin')

@@ -216,7 +216,7 @@ export function staticImportBindings(
   statement,
   { namedExports = [], namespaceExports = namedExports, includeDefault = true } = {},
 ) {
-  const match = /^\s*import\s+([\s\S]*?)\s+from\s*['"]/m.exec(statement)
+  const match = /^\s*import\s+([\s\S]*?)\s*from\b\s*['"]/m.exec(statement)
   if (!match || /^type\b/.test(match[1].trim())) return []
 
   const clause = match[1].trim()

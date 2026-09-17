@@ -1,11 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { init, parse } from 'es-module-lexer'
 import { mask, staticImportBindings } from './codemod-vite.mjs'
 import { assertFontHost } from './font-host.mjs'
-import { detectTailwindEntry, themeBlocks, walk } from './detect.mjs'
+import { DEFAULT_SKIP_DIRS, detectTailwindEntry, themeBlocks, walk } from './detect.mjs'
 import { runInDoctorContext } from './doctor-context.mjs'
 import { resolvePreloadDelivery } from './preload-delivery.mjs'
 import { requestHasRangedOpsz } from './opsz.mjs'
@@ -13,6 +13,8 @@ import { requestHasRangedOpsz } from './opsz.mjs'
 const FONT_PLUGIN = 'tailwind-vite-font-kit'
 const TAILWIND_PLUGIN = '@tailwindcss/vite'
 const SERVER_ENTRY_SPECIFIER = 'tailwind-vite-font-kit/start-server'
+const START_SERVER_ENTRY_ALIAS = 'virtual:tanstack-start-server-entry'
+const SERVER_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.tsx', '.jsx']
 
 await init
 
@@ -118,12 +120,179 @@ function classifyServerEntrySource(source) {
   return 'unknown'
 }
 
-function detectServerEntryDelivery(root) {
-  const extensions = ['.ts', '.js', '.mts', '.mjs', '.tsx', '.jsx']
-  const conventional = extensions
-    .map((extension) => join(root, 'src', `server${extension}`))
-    .filter(existsSync)
+const isFile = (file) => {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+function inputValues(input) {
+  if (typeof input === 'string') return [input]
+  if (Array.isArray(input)) return input
+  if (input && typeof input === 'object') return Object.values(input)
+  return []
+}
+
+function configuredAliases(resolved) {
+  const aliases = resolved.resolve?.alias
+  if (Array.isArray(aliases)) return aliases
+  if (!aliases || typeof aliases !== 'object') return []
+  return Object.entries(aliases).map(([find, replacement]) => ({ find, replacement }))
+}
+
+function applyStringAlias(specifier, resolved) {
+  for (const alias of configuredAliases(resolved)) {
+    if (typeof alias.find !== 'string' || typeof alias.replacement !== 'string') continue
+    if (specifier === alias.find) return alias.replacement
+    if (specifier.startsWith(`${alias.find}/`)) {
+      return alias.replacement + specifier.slice(alias.find.length)
+    }
+  }
+  return specifier
+}
+
+function inputFile(root, input, resolved) {
+  if (typeof input !== 'string') return null
+  const withoutQuery = input.split(/[?#]/, 1)[0]
+  const aliased = applyStringAlias(withoutQuery, resolved)
+  if (/^(?:\0|virtual:)/.test(aliased)) return null
+  const file = isAbsolute(aliased) ? aliased : resolve(root, aliased)
+  return isFile(file) ? file : null
+}
+
+function resolvedServerEntry(root, resolved) {
+  const ssrBuild = resolved.environments?.ssr?.build
+  const rawInputs = [
+    ...inputValues(ssrBuild?.rollupOptions?.input),
+    ...inputValues(ssrBuild?.rolldownOptions?.input),
+  ]
+  const inputMetadataPresent = rawInputs.length > 0
+  const inputFiles = [
+    ...new Set(rawInputs.map((input) => inputFile(root, input, resolved)).filter(Boolean)),
+  ]
+  if (inputFiles.length === 1) return { available: true, file: inputFiles[0] }
+  if (inputFiles.length > 1 || inputMetadataPresent) return { available: true, file: null }
+
+  const alias = configuredAliases(resolved).find(
+    (candidate) => candidate.find === START_SERVER_ENTRY_ALIAS,
+  )
+  if (!alias) return { available: false, file: null }
+  return {
+    available: true,
+    file: inputFile(root, alias.replacement, resolved),
+  }
+}
+
+function withinRoot(root, file) {
+  const path = relative(root, file)
+  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+}
+
+function localModuleFile(root, importer, specifier, resolved) {
+  let candidate
+  if (specifier.startsWith('.')) candidate = resolve(dirname(importer), specifier)
+  else if (specifier.startsWith('/')) candidate = resolve(root, `.${specifier}`)
+  else {
+    const aliased = applyStringAlias(specifier, resolved)
+    if (aliased === specifier) return null
+    candidate = isAbsolute(aliased) ? aliased : resolve(root, aliased)
+  }
+  if (!withinRoot(root, candidate)) return null
+
+  const candidates = [
+    candidate,
+    ...SERVER_EXTENSIONS.map((extension) => candidate + extension),
+    ...SERVER_EXTENSIONS.map((extension) => join(candidate, `index${extension}`)),
+  ]
+  return candidates.find(isFile) ?? null
+}
+
+function defaultExportTarget(source, imports) {
+  const active = mask(source)
+  const targets = []
+  for (const entry of imports) {
+    if (entry.d !== -1 || !entry.n) continue
+    const statement = source.slice(entry.ss, entry.se)
+    const activeStatement = active.slice(entry.ss, entry.se)
+    const reexport = /^\s*export\s*\{([\s\S]*?)\}\s*from\b/.exec(activeStatement)
+    if (reexport) {
+      for (const raw of reexport[1].split(',')) {
+        const part = raw.trim()
+        if (part === 'default' || /^default\s+as\s+default$/.test(part)) {
+          targets.push({ specifier: entry.n, supported: true })
+        } else if (/^[\w$]+\s+as\s+default$/.test(part)) {
+          targets.push({ specifier: entry.n, supported: false })
+        }
+      }
+      continue
+    }
+
+    const bindings = staticImportBindings(statement, {
+      namedExports: [],
+      namespaceExports: [],
+    })
+    for (const binding of bindings) {
+      const expression = escapeRe(binding)
+      if (
+        new RegExp(`\\bexport\\s+default\\s+${expression}\\b`).test(active) ||
+        new RegExp(`\\bexport\\s*\\{\\s*${expression}\\s+as\\s+default\\s*\\}`).test(active)
+      ) {
+        targets.push({ specifier: entry.n, supported: true })
+      }
+    }
+  }
+  return targets
+}
+
+function classifyServerEntryFile(root, file, resolved, seen = new Set(), depth = 0) {
+  if (depth > 12 || seen.has(file)) return 'unknown'
+  seen.add(file)
+  let source
+  try {
+    source = readFileSync(file, 'utf8')
+  } catch {
+    return 'unknown'
+  }
+
+  const direct = classifyServerEntrySource(source)
+  if (direct) return direct
+  // Package defaults are authoritative, but their internal implementation graph is not
+  // application wiring and should not be searched for this package's helper.
+  if (!withinRoot(root, file)) return 'none'
+
+  let imports
+  try {
+    ;[imports] = parse(source)
+  } catch {
+    return 'unknown'
+  }
+  const targets = defaultExportTarget(source, imports)
+  if (!targets.length) {
+    const hasDynamicImport = imports.some((entry) => entry.d !== -1)
+    const hasDefaultExport = /\bexport\s+default\b/.test(mask(source))
+    return hasDynamicImport && hasDefaultExport ? 'unknown' : 'none'
+  }
+  if (targets.length !== 1 || !targets[0].supported) return 'unknown'
+  const target = localModuleFile(root, file, targets[0].specifier, resolved)
+  if (!target) return 'unknown'
+  return classifyServerEntryFile(root, target, resolved, seen, depth + 1)
+}
+
+function detectServerEntryDelivery(root, resolved) {
+  const authoritative = resolvedServerEntry(root, resolved)
+  if (authoritative.available) {
+    return authoritative.file
+      ? classifyServerEntryFile(root, authoritative.file, resolved)
+      : 'unknown'
+  }
+
+  const conventional = SERVER_EXTENSIONS.map((extension) =>
+    join(root, 'src', `server${extension}`),
+  ).filter(existsSync)
   const ignoredDirectories = new Set([
+    ...DEFAULT_SKIP_DIRS,
     'test',
     'tests',
     '__tests__',
@@ -132,25 +301,28 @@ function detectServerEntryDelivery(root) {
     'docs',
     'public',
     '.cache',
-    'node_modules',
-    '.git',
-    'dist',
-    'build',
-    '.output',
-    '.nitro',
-    '.vinxi',
-    '.tanstack',
-    'coverage',
-    '.next',
-    '.vercel',
+    'scripts',
+    'e2e',
+    'cypress',
+    'playwright',
   ])
-  const files = conventional.length
-    ? conventional
-    : walk(root, extensions).filter((file) =>
-        relative(root, file)
-          .split(sep)
-          .every((part) => !ignoredDirectories.has(part)),
-      )
+  if (conventional.length) {
+    const candidates = conventional.map((file) => ({
+      file,
+      delivery: classifyServerEntryFile(root, file, resolved),
+    }))
+    return candidates.length === 1 ? candidates[0].delivery : 'unknown'
+  }
+
+  const files = walk(root, SERVER_EXTENSIONS, { skipDirs: ignoredDirectories })
+  const namedServerEntries = files.filter((file) =>
+    /^server\.(?:[cm]?[jt]sx?)$/.test(basename(file)),
+  )
+  if (namedServerEntries.length) {
+    return namedServerEntries.length === 1
+      ? classifyServerEntryFile(root, namedServerEntries[0], resolved)
+      : 'unknown'
+  }
   const candidates = []
 
   for (const file of files) {
@@ -293,7 +465,7 @@ export async function diagnoseResolvedConfig(
     })
   const serverDelivery =
     preloads.length && !isLibraryBuild && !delivery.headerActive && !isSsrBuild
-      ? detectServerEntryDelivery(root)
+      ? detectServerEntryDelivery(root, resolved)
       : 'none'
   if (!preloads.length) {
     checks.push(check('pass', `no font preloads are configured`))
