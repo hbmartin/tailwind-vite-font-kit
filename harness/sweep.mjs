@@ -219,7 +219,30 @@ const results = []
 for (const vp of VIEWPORTS) for (const p of PROBES) results.push(await runProbe(browser, p, vp))
 await browser.close()
 
-const stat = await staticAudit(`${BASE}/probe/hero`)
+let stat
+try {
+  stat = await staticAudit(`${BASE}/probe/hero`)
+} catch (error) {
+  // The browser measurements above are expensive and remain useful evidence even when
+  // the independent static audit fails. Persist an empty audit with the cause so the gate
+  // can report it after the result file has been written.
+  stat = {
+    stylesheetHrefs: [],
+    inlineStyleTags: 0,
+    totalFontFaceBlocks: 0,
+    facesWithSizeAdjust: 0,
+    facesWithAscentOverride: 0,
+    facesWithLocalSrc: 0,
+    supportsGuards: 0,
+    fontFamiliesDeclared: [],
+    sampleFallbackFace: null,
+    headPreloadFontLinks: [],
+    navigationLinkHeader: '',
+    headerPreloadFontLinks: [],
+    sampleFontResponse: null,
+    errors: [`static audit failed: ${error.message}`],
+  }
+}
 const out = {
   label: LABEL,
   base: BASE,

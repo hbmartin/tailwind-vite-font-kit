@@ -279,6 +279,10 @@ test('check-cls gates preload and font response delivery headers', (t) => {
     )
   }
   assert.equal(execute().status, 0)
+  report.staticAudit.headerPreloadFontLinks = [
+    `<https://cdn.test/${'long-segment-'.repeat(30)}font.woff2>; rel=preload; as=font; crossorigin`,
+  ]
+  assert.equal(execute().status, 0, 'crossorigin beyond the old audit truncation still passes')
   const failures = [
     [(audit) => (audit.headerPreloadFontLinks = []), /no font preload/],
     [
@@ -300,6 +304,7 @@ test('check-cls gates preload and font response delivery headers', (t) => {
       (audit) => (audit.sampleFontResponse.link = '</fonts/manrope.woff2>; rel=preload'),
       /incorrectly carries/,
     ],
+    [(audit) => (audit.errors = ['invalid HTML preload href']), /invalid HTML preload href/],
   ]
   for (const [breakAudit, expected] of failures) {
     report.staticAudit = structuredClone(GOOD_STATIC_AUDIT)

@@ -457,6 +457,43 @@ test('preloadHeader: false emits no link rule at all', async (t) => {
   assert.ok(rules['/fonts/**'].headers['cache-control'], 'caching is independent of preloading')
 })
 
+test('explicit undefined preload options retain their defaults everywhere', async (t) => {
+  captureWarnings(t)
+  const { rules, plugin } = await routeRules(t, {
+    preloadHeader: undefined,
+    preloadHtml: undefined,
+  })
+  assert.match(rules['/**'].headers.link, /rel=preload/)
+  plugin.configResolved({ plugins: [], appType: 'spa' })
+  const diagnostics = plugin.api.getDiagnostics()
+  assert.equal(diagnostics.options.preloadHeader, true)
+  assert.equal(diagnostics.options.preloadHtml, 'auto')
+  assert.equal(diagnostics.delivery.htmlInjectionEnabled, true)
+})
+
+test('explicit undefined preload options do not override config-file values', async (t) => {
+  const root = sandbox(t)
+  writeFileSync(
+    join(root, 'fonts.config.mjs'),
+    `export default ${JSON.stringify({
+      families: [FAMILY],
+      preloadHeader: false,
+      preloadHtml: false,
+    })}\n`,
+  )
+  const plugin = fonts({ preloadHeader: undefined, preloadHtml: undefined, silent: true })
+  const returned = await plugin.config({ root }, { command: 'build' })
+  assert.equal(returned.nitro.routeRules['/**'], undefined)
+  assert.equal(plugin.api.getDiagnostics().options.preloadHeader, false)
+  assert.equal(plugin.api.getDiagnostics().options.preloadHtml, false)
+})
+
+test('null preloadHeader is rejected before route rules and diagnostics can disagree', async (t) => {
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], preloadHeader: null })
+  await assert.rejects(() => plugin.config({ root }, { command: 'build' }), /preloadHeader/)
+})
+
 test('an unknown `output` value fails the build rather than silently caching', async (t) => {
   const root = sandbox(t)
   const plugin = fonts({ families: [FAMILY], silent: true, output: 'somewhere' })
@@ -578,12 +615,25 @@ test('automatic HTML injection requires a conventional Vite HTML entry', async (
 })
 
 test('automatic HTML injection stays disabled for an SSR build', async (t) => {
-  captureWarnings(t)
+  const warned = captureWarnings(t)
   const root = sandbox(t)
   const plugin = fonts({ families: [FAMILY], silent: true })
   await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'spa', build: { ssr: true } })
   assert.equal(plugin.transformIndexHtml('<head></head>'), undefined)
+  assert.doesNotMatch(warned.join('\n'), /no automatic font preloads will be delivered/)
+})
+
+test('library builds ignore a local index.html as a document delivery path', async (t) => {
+  const warned = captureWarnings(t)
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  const build = { lib: { entry: join(root, 'src', 'index.js') } }
+  await plugin.config({ root, build }, { command: 'build' })
+  plugin.configResolved({ plugins: [], appType: 'spa', build })
+  plugin.closeBundle.call({})
+  assert.equal(plugin.transformIndexHtml('<head></head>'), undefined)
+  assert.doesNotMatch(warned.join('\n'), /no automatic font preloads|Vite transformed no HTML/)
 })
 
 test('HTML preload injection deduplicates a matching existing link', async (t) => {
@@ -630,6 +680,19 @@ test('HTML preload deduplication understands escaped query-string hrefs', async 
   assert.match(repaired.html, /crossorigin="anonymous"/)
 })
 
+test('HTML preload parsing respects attribute boundaries, quotes, and unquoted values', async (t) => {
+  captureWarnings(t)
+  const { plugin } = await routeRules(t)
+  plugin.configResolved({ plugins: [] })
+  const [{ attrs }] = htmlTags(plugin.transformIndexHtml('<head></head>'))
+  const cases = [
+    `<link rel=preload as=font hreflang=en href=${attrs.href} crossorigin>`,
+    `<link title="quoted href=/wrong > text" href="${attrs.href}" as="font" rel="other preload" crossorigin>`,
+    `<link href="${attrs.href}" href="/ignored.woff2" crossorigin rel=preload as=font>`,
+  ]
+  for (const html of cases) assert.equal(plugin.transformIndexHtml(html), undefined, html)
+})
+
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {
   const warned = captureWarnings(t)
   const { plugin, root } = await routeRules(t)
@@ -661,6 +724,15 @@ test('closeBundle never warns about HTML transforms for an SSR-only build', asyn
   const plugin = fonts({ families: [FAMILY], preloadHtml: true, silent: true })
   await plugin.config({ root, build: { ssr: true } }, { command: 'build' })
   plugin.configResolved({ plugins: [], appType: 'custom', build: { ssr: true } })
+  plugin.closeBundle.call({})
+  assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
+})
+
+test('closeBundle suppresses missing-HTML warnings after a failed build', async (t) => {
+  const warned = captureWarnings(t)
+  const { plugin } = await routeRules(t, { preloadHtml: true })
+  plugin.configResolved({ plugins: [], appType: 'custom' })
+  plugin.buildEnd.call({}, new Error('the real build failure'))
   plugin.closeBundle.call({})
   assert.doesNotMatch(warned.join('\n'), /Vite transformed no HTML entry/)
 })
@@ -771,14 +843,14 @@ test('the bundle-root dev middleware serves only generated woff2 requests', asyn
   assert.equal(request('/not-a-generated-font.woff2').nexted, true)
 })
 
-test('preview middleware adds headers only to successful WOFF2 responses', async (t) => {
+test('preview middleware adds headers to successful and not-modified WOFF2 responses', async (t) => {
   const plugin = await built(t)
   let middleware
   plugin.configurePreviewServer({
     middlewares: { use: (fn) => (middleware = fn) },
   })
   const [, href] = /"href":"([^"]+\.woff2)"/.exec(plugin.load('\0virtual:fonts'))
-  const request = (status, contentType) => {
+  const request = (status, contentType, { statusMessage = false, noHeaders = false } = {}) => {
     const headers = {}
     let nexted = false
     const res = {
@@ -788,21 +860,33 @@ test('preview middleware adds headers only to successful WOFF2 responses', async
       getHeader(key) {
         return headers[key.toLowerCase()]
       },
-      writeHead(_status, responseHeaders = {}) {
+      writeHead(_status, ...args) {
+        const responseHeaders = (typeof args[0] === 'string' ? args[1] : args[0]) ?? {}
         for (const [key, value] of Object.entries(responseHeaders)) {
           headers[key.toLowerCase()] = value
         }
       },
     }
     middleware({ url: new URL(href, 'http://vite.dev').pathname }, res, () => (nexted = true))
-    res.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-cache' })
+    const responseHeaders = { 'Cache-Control': 'no-cache' }
+    if (contentType) responseHeaders['Content-Type'] = contentType
+    if (noHeaders) res.writeHead(status)
+    else if (statusMessage) res.writeHead(status, 'status message', responseHeaders)
+    else res.writeHead(status, responseHeaders)
     return { headers, nexted }
   }
 
-  const font = request(200, 'font/woff2')
-  assert.equal(font.nexted, true, 'Vite still serves the built response body')
-  assert.match(font.headers['cache-control'], /immutable/)
-  assert.equal(font.headers['access-control-allow-origin'], '*')
+  for (const [status, type, options] of [
+    [200, 'font/woff2', {}],
+    [206, 'font/woff2; charset=binary', {}],
+    [304, undefined, { statusMessage: true }],
+    [304, undefined, { noHeaders: true }],
+  ]) {
+    const font = request(status, type, options)
+    assert.equal(font.nexted, true, 'Vite still serves the built response body')
+    assert.match(font.headers['cache-control'], /immutable/)
+    assert.equal(font.headers['access-control-allow-origin'], '*')
+  }
 
   for (const [status, type] of [
     [404, 'text/plain'],
@@ -857,9 +941,43 @@ test('the transform warns once about a Google import and an inline theme', async
   assert.match(warnings[0], /--font-sans inside `@theme inline`/)
   assert.match(warnings[0], /tss-fonts adopt/, 'it should say how to fix it')
 
-  // Warned once per process, not once per stylesheet per build.
+  // Warned once per build, not once per stylesheet.
   plugin.transform.handler.call(ctx, code, '/p/b.css')
   assert.equal(warnings.length, 1)
+})
+
+test('a reused plugin resets warnings, conflict reporting, and entry detection', async (t) => {
+  captureWarnings(t)
+  const root = sandbox(t)
+  const plugin = fonts({ families: [FAMILY], silent: true })
+  const rollupWarnings = []
+  const transformContext = { warn: (message) => rollupWarnings.push(message), error() {} }
+  const conflict = `@import 'tailwindcss';
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400');`
+
+  await plugin.config({ root }, { command: 'build' })
+  plugin.configResolved({ plugins: [], appType: 'custom' })
+  assert.ok(plugin.api.getDiagnostics().warningEvents.length > 0)
+  plugin.transform.handler.call(transformContext, conflict, join(root, 'first.css'))
+  assert.equal(rollupWarnings.length, 1)
+
+  await plugin.config({ root }, { command: 'build' })
+  plugin.configResolved({ plugins: [{ name: 'vite:nitro' }], appType: 'custom' })
+  assert.deepEqual(plugin.api.getDiagnostics().warningEvents, [])
+  plugin.transform.handler.call(transformContext, conflict, join(root, 'second.css'))
+  assert.equal(rollupWarnings.length, 2, 'the new build reports its own conflict')
+
+  await plugin.config({ root }, { command: 'build' })
+  assert.throws(
+    () =>
+      plugin.buildEnd.call({
+        environment: { config: { consumer: 'client' } },
+        error(message) {
+          throw new Error(message)
+        },
+      }),
+    /never saw a stylesheet/,
+  )
 })
 
 test('virtual:fonts exposes the preloads and the family map', async (t) => {

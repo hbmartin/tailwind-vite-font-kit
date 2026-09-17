@@ -75,3 +75,49 @@ test('static audit does not substitute an unrelated face when no preload matches
   })
   assert.equal(audit.sampleFontResponse, null)
 })
+
+test('static audit parses unquoted links, preserves long links, and records malformed URLs', async () => {
+  const longPath = `/fonts/${'very-long-segment-'.repeat(20)}target.woff2`
+  const documentUrl = 'https://site.test/'
+  const fontUrl = new URL(longPath, documentUrl).href
+  const audit = await staticAudit(documentUrl, {
+    fetchImpl: async (url) => {
+      const current = String(url)
+      if (current === documentUrl) {
+        return response(
+          documentUrl,
+          `<link href=/assets/app.css rel=stylesheet>
+           <link hreflang=en href=${longPath} as=font rel=preload crossorigin>
+           <link rel=preload as=font href="http://[" crossorigin>`,
+          {
+            headers: {
+              link: `<${longPath}>; rel=preload; as=font; crossorigin, <http://[>; rel=preload; as=font; crossorigin`,
+            },
+          },
+        )
+      }
+      if (current === 'https://site.test/assets/app.css') {
+        return response(current, `@font-face { font-family: Target; src: url(${longPath}) }`)
+      }
+      if (current === fontUrl) {
+        return response(current, 'wOF2font', {
+          headers: {
+            'cache-control': 'public, max-age=31536000, immutable',
+            'access-control-allow-origin': '*',
+          },
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    },
+  })
+
+  assert.deepEqual(audit.stylesheetHrefs, ['/assets/app.css'])
+  assert.equal(audit.sampleFontResponse.url, fontUrl)
+  assert.ok(audit.headPreloadFontLinks[0].length > 200)
+  assert.match(audit.headPreloadFontLinks[0], /crossorigin>$/)
+  assert.ok(audit.headerPreloadFontLinks[0].length > 300)
+  assert.match(audit.headerPreloadFontLinks[0], /crossorigin$/)
+  assert.equal(audit.errors.length, 2)
+  assert.match(audit.errors.join('\n'), /invalid Link-header preload href/)
+  assert.match(audit.errors.join('\n'), /invalid HTML preload href/)
+})

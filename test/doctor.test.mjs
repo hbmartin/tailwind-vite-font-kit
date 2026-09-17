@@ -133,8 +133,8 @@ test('doctor handles Nitro, explicit HTML, manual, and missing delivery paths', 
       options: { preloadHeader: false, preloadHtml: true },
       diagnostics: { hasNitro: true },
       htmlEntryDetected: false,
-      status: 'pass',
-      message: /explicit HTML preload injection is enabled with Nitro/,
+      status: 'warning',
+      message: /Nitro production HTML does not use Vite's HTML transform/,
     },
     {
       name: 'manual HTML',
@@ -168,6 +168,103 @@ test('doctor handles Nitro, explicit HTML, manual, and missing delivery paths', 
         (check) => check.status === scenario.status && scenario.message.test(check.message),
       ),
       scenario.name,
+    )
+  }
+})
+
+test('doctor recognizes the package Start server entry and classifies its guarantees', async (t) => {
+  const scenarios = [
+    {
+      name: 'Link fallback',
+      args: '{ linkHeader: true }',
+      status: 'pass',
+      message: /deliver font preload Link headers/,
+    },
+    {
+      name: 'quoted Link fallback',
+      args: "{ 'linkHeader': true }",
+      status: 'pass',
+      message: /deliver font preload Link headers/,
+    },
+    {
+      name: 'Early Hints only',
+      args: '',
+      status: 'warning',
+      message: /Early Hints without a Link-header fallback/,
+    },
+    {
+      name: 'dynamic options',
+      args: 'serverOptions',
+      declaration: 'const serverOptions = getServerOptions()\n',
+      status: 'warning',
+      message: /could not be verified/,
+    },
+    {
+      name: 'nested unrelated option',
+      args: '{ createHandler: { linkHeader: true } }',
+      status: 'warning',
+      message: /Early Hints without a Link-header fallback/,
+    },
+    {
+      name: 'disabled delivery',
+      args: '{ earlyHints: false, linkHeader: false }',
+      status: 'failure',
+      message: /no automatic Nitro or HTML delivery path/,
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const item = fixture(t)
+    mkdirSync(join(item.root, 'src'))
+    writeFileSync(
+      join(item.root, 'src', 'server.ts'),
+      `import { createFontsServerEntry as makeFontsServer } from 'tailwind-vite-font-kit/start-server'\n` +
+        (scenario.declaration ?? '') +
+        `export default makeFontsServer(${scenario.args})\n`,
+    )
+    const diagnostics = item.font.api.getDiagnostics()
+    diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+      preloadCount: diagnostics.generation.preloads.length,
+      hasNitro: false,
+      htmlEntryDetected: false,
+    })
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(
+      checks.some(
+        (check) => check.status === scenario.status && scenario.message.test(check.message),
+      ),
+      scenario.name,
+    )
+  }
+})
+
+test('doctor does not assign document delivery responsibility to SSR or library builds', async (t) => {
+  for (const [name, diagnostics, build, message] of [
+    ['SSR', { isSsrBuild: true }, { ssr: true }, /SSR build defers document preload delivery/],
+    [
+      'library',
+      { isLibraryBuild: true },
+      { lib: { entry: 'src/index.js' } },
+      /library builds do not produce a document preload response/,
+    ],
+  ]) {
+    const item = fixture(t, { diagnostics })
+    item.resolved.build = build
+    const pluginDiagnostics = item.font.api.getDiagnostics()
+    pluginDiagnostics.delivery = resolvePreloadDelivery(pluginDiagnostics.options, {
+      preloadCount: pluginDiagnostics.generation.preloads.length,
+      hasNitro: false,
+      htmlEntryDetected: false,
+    })
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(
+      checks.some((check) => check.status === 'pass' && message.test(check.message)),
+      name,
+    )
+    assert.equal(
+      checks.some((check) => /no automatic Nitro or HTML delivery path/.test(check.message)),
+      false,
+      name,
     )
   }
 })
@@ -241,4 +338,16 @@ test('doctor context is async-scoped rather than process-wide', async () => {
   release()
   assert.equal(await inside, true)
   assert.equal(isDoctorContext(), false)
+})
+
+test('doctor context is shared by independently evaluated package copies', async () => {
+  const nonce = `${Date.now()}-${Math.random()}`
+  const first = await import(`../src/doctor-context.mjs?copy=first-${nonce}`)
+  const second = await import(`../src/doctor-context.mjs?copy=second-${nonce}`)
+  assert.equal(first.isDoctorContext(), false)
+  assert.equal(second.isDoctorContext(), false)
+  const observed = await first.runInDoctorContext(async () => second.isDoctorContext())
+  assert.equal(observed, true)
+  assert.equal(first.isDoctorContext(), false)
+  assert.equal(second.isDoctorContext(), false)
 })

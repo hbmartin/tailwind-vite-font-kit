@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadAndValidate, validateFamilies, validateOptions } from '../src/config.mjs'
+import { resolvePreloadDelivery } from '../src/preload-delivery.mjs'
 
 /** One valid family, with `extra` merged over it. */
 const fam = (extra) => [{ name: 'Manrope', themeVar: '--font-sans', weights: [400], ...extra }]
@@ -28,15 +29,32 @@ test('fontDisplay and explicit text options are validated', () => {
   assert.throws(() => validateFamilies(fam({ subsetTextMetrics: 'latin' }), 'test'), /without/)
 })
 
-test('preloadHtml and preloadBudgetKb accept their documented values', () => {
+test('preload options and preloadBudgetKb accept only their documented values', () => {
   for (const preloadHtml of ['auto', true, false]) {
     assert.doesNotThrow(() => validateOptions({ preloadHtml }, 'test'))
+  }
+  for (const preloadHeader of [true, false, {}, { exclude: ['/api/**'] }]) {
+    assert.doesNotThrow(() => validateOptions({ preloadHeader }, 'test'))
   }
   for (const preloadBudgetKb of [0, 12.5]) {
     assert.doesNotThrow(() => validateOptions({ preloadBudgetKb }, 'test'))
   }
+  assert.doesNotThrow(() => validateOptions({ preloadHtml: undefined }, 'test'))
+  assert.doesNotThrow(() => validateOptions({ preloadHeader: undefined }, 'test'))
   assert.throws(() => validateOptions({ preloadHtml: 'yes' }, 'test'), /preloadHtml/)
+  assert.throws(() => validateOptions({ preloadHtml: null }, 'test'), /preloadHtml/)
+  for (const preloadHeader of [null, 'yes', [], 1]) {
+    assert.throws(() => validateOptions({ preloadHeader }, 'test'), /preloadHeader/)
+  }
   assert.throws(() => validateOptions({ preloadBudgetKb: -1 }, 'test'), /preloadBudgetKb/)
+})
+
+test('delivery resolution applies defaults to omitted preload options', () => {
+  const delivery = resolvePreloadDelivery(
+    { preloadHeader: undefined, preloadHtml: undefined },
+    { preloadCount: 1, htmlEntryDetected: true },
+  )
+  assert.equal(delivery.htmlInjectionEnabled, true)
 })
 
 test("opszPin accepts a positive number or 'auto', and nothing else", () => {
