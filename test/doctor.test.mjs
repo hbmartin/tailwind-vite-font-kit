@@ -265,6 +265,120 @@ test('doctor discovers supported server-entry extensions and custom source paths
   }
 })
 
+test('a conventional server entry is authoritative over a wired example', async (t) => {
+  const item = fixture(t)
+  mkdirSync(join(item.root, 'src'))
+  mkdirSync(join(item.root, 'examples'))
+  writeFileSync(
+    join(item.root, 'src/server.ts'),
+    `import { createStartHandler } from '@tanstack/react-start/server'\n` +
+      `export default createStartHandler({})\n`,
+  )
+  writeFileSync(
+    join(item.root, 'examples/fonts-entry.ts'),
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) =>
+        check.status === 'failure' &&
+        /font preloads have no automatic Nitro or HTML delivery path/.test(check.message),
+    ),
+  )
+})
+
+test('type-only imports and re-exports do not create custom server-entry candidates', async (t) => {
+  const item = fixture(t)
+  mkdirSync(join(item.root, 'application'))
+  writeFileSync(
+    join(item.root, 'application/types.ts'),
+    `import type { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n`,
+  )
+  writeFileSync(
+    join(item.root, 'application/reexport.ts'),
+    `export type { FontsServerEntryOptions } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n`,
+  )
+  writeFileSync(
+    join(item.root, 'application/side-effect.ts'),
+    `import 'tailwind-vite-font-kit/start-server'\n`,
+  )
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) =>
+        check.status === 'failure' &&
+        /font preloads have no automatic Nitro or HTML delivery path/.test(check.message),
+    ),
+  )
+  assert.equal(
+    checks.some((check) => /could not be verified/.test(check.message)),
+    false,
+  )
+})
+
+test('ignored source trees cannot make a valid custom server entry ambiguous', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'application/http-entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  for (const directory of [
+    'test',
+    'tests',
+    '__tests__',
+    'fixtures',
+    'examples',
+    'docs',
+    'public',
+    '.cache',
+  ]) {
+    const ignored = join(item.root, directory, 'server.ts')
+    mkdirSync(dirname(ignored), { recursive: true })
+    writeFileSync(
+      ignored,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry()\n`,
+    )
+  }
+  const diagnostics = item.font.api.getDiagnostics()
+  diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
+    preloadCount: diagnostics.generation.preloads.length,
+    hasNitro: false,
+    htmlEntryDetected: false,
+  })
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(
+    checks.some(
+      (check) => check.status === 'pass' && /deliver font preload Link headers/.test(check.message),
+    ),
+  )
+  assert.equal(
+    checks.some((check) => /could not be verified/.test(check.message)),
+    false,
+  )
+})
+
 test('doctor reports indirect server-entry wiring as unknown rather than absent', async (t) => {
   const item = fixture(t)
   mkdirSync(join(item.root, 'src'))

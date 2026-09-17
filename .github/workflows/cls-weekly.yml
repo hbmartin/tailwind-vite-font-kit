@@ -80,12 +80,10 @@ jobs:
       - name: Use this commit's measurement harness
         working-directory: reference-app
         run: |
-          mkdir -p .font-kit-ci/harness .font-kit-ci/src
-          cp ../harness/sweep.mjs .font-kit-ci/harness/sweep.mjs
-          cp ../harness/clswidth.mjs .font-kit-ci/harness/clswidth.mjs
-          cp ../harness/waterfall.mjs .font-kit-ci/harness/waterfall.mjs
-          cp ../harness/static-audit.mjs .font-kit-ci/harness/static-audit.mjs
-          cp ../src/preload-delivery.mjs .font-kit-ci/src/preload-delivery.mjs
+          mkdir -p .font-kit-ci
+          cp -R ../harness .font-kit-ci/
+          cp -R ../src .font-kit-ci/
+          printf '\n/.font-kit-ci/\n' >> .gitignore
 
       - name: Install the reference app's browser
         working-directory: reference-app

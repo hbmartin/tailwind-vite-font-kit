@@ -91,9 +91,10 @@ Not removable, and specifically **v4** — v3 has no `@theme`.
   >=4.38. That is why the peer range starts at Vite 7 rather than 6: on Vite 6.0-6.2 the
   filter is silently ignored and the hook runs on every module. CI builds the fixture at the
   floor of each supported major so the range is tested rather than asserted.
-- `sharedDuringBuild: true` — generation happens once in `config()`, the earliest async
-  hook, rather than in `buildStart()`, which fires per-environment and would race Tailwind's
-  transform in a multi-environment build.
+- `sharedDuringBuild: true` — generation stays in `config()`, the earliest async hook.
+  Vite may repeat that hook while resolving environments on the shared plugin instance;
+  client HTML capability is accumulated for the whole run. `buildStart()` remains
+  per-environment and would race Tailwind's transform in a multi-environment build.
 - `emitFile` in `buildStart()` for the client bundle; `configureServer()` middleware for
   dev, which has no bundle; `transformIndexHtml()` and `configurePreviewServer()` for the
   plain-Vite build/preview path.

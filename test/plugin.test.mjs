@@ -11,6 +11,7 @@ const FAMILIES = [
 test('an entry that already imports fonts.gen.css still counts as seen', () => {
   const plugin = fonts({ families: FAMILIES })
   const ctx = {
+    environment: { config: { consumer: 'client' } },
     warn() {},
     error(msg) {
       throw new Error(msg)

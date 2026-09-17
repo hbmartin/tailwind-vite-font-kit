@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { init, parse } from 'es-module-lexer'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const run = (command, args, cwd, env = process.env) =>
@@ -23,16 +32,48 @@ const GOOD_STATIC_AUDIT = {
   },
 }
 
-test('weekly CLS stages the complete static-audit module graph', () => {
+test('weekly CLS recursively stages an ignored, import-complete harness before building', async (t) => {
   const workflow = readFileSync(join(root, '.github/workflows/cls-weekly.yml'), 'utf8')
-  for (const path of [
-    '../harness/sweep.mjs',
-    '../harness/static-audit.mjs',
-    '../src/preload-delivery.mjs',
+  assert.match(workflow, /cp -R \.\.\/harness \.font-kit-ci\//)
+  assert.match(workflow, /cp -R \.\.\/src \.font-kit-ci\//)
+  const stageAt = workflow.indexOf('cp -R ../harness .font-kit-ci/')
+  const ignoreAt = workflow.indexOf("printf '\\n/.font-kit-ci/\\n' >> .gitignore")
+  const buildAt = workflow.indexOf('pnpm build', ignoreAt)
+  assert.ok(stageAt !== -1 && ignoreAt > stageAt && buildAt > ignoreAt)
+  for (const command of [
+    'node .font-kit-ci/harness/sweep.mjs',
+    'node .font-kit-ci/harness/clswidth.mjs',
+    'node .font-kit-ci/harness/waterfall.mjs',
   ]) {
-    assert.ok(workflow.includes(path), `${path} is missing from the staged harness`)
+    assert.ok(workflow.includes(command), `${command} does not use the staged harness`)
   }
-  assert.match(workflow, /node \.font-kit-ci\/harness\/sweep\.mjs/)
+
+  const dir = mkdtempSync(join(tmpdir(), 'font-kit-staging-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const staged = join(dir, '.font-kit-ci')
+  mkdirSync(staged)
+  cpSync(join(root, 'harness'), join(staged, 'harness'), { recursive: true })
+  cpSync(join(root, 'src'), join(staged, 'src'), { recursive: true })
+  await init
+  const pending = [join(staged, 'harness', 'sweep.mjs')]
+  const visited = new Set()
+  while (pending.length) {
+    const file = pending.pop()
+    if (visited.has(file)) continue
+    visited.add(file)
+    const [imports] = parse(readFileSync(file, 'utf8'))
+    for (const imported of imports
+      .map((entry) => entry.n)
+      .filter((name) => name?.startsWith('.'))) {
+      const target = resolve(dirname(file), imported)
+      assert.ok(existsSync(target), `${relative(staged, file)} imports missing ${imported}`)
+      assert.ok(
+        !relative(staged, target).startsWith(`..${sep}`),
+        `${relative(staged, file)} escapes the staged module graph`,
+      )
+      pending.push(target)
+    }
+  }
 })
 
 test('write-note keeps metrics and CLS histories on separate refs', (t) => {
@@ -295,8 +336,35 @@ test('check-cls gates preload and font response delivery headers', (t) => {
     `<https://cdn.test/${'long-segment-'.repeat(30)}font.woff2>; rel=preload; as=font; crossorigin`,
   ]
   assert.equal(execute().status, 0, 'crossorigin beyond the old audit truncation still passes')
+  report.staticAudit.headerPreloadFontLinks = [
+    '</fonts/manrope.woff2>; rel="preload alternate"; as=font; title="a,b"; crossorigin=true',
+  ]
+  assert.equal(execute().status, 0, 'quoted commas and invalid anonymous-mode values pass')
+  report.staticAudit.headerPreloadFontLinks = []
+  report.staticAudit.headPreloadFontLinks = [
+    '<link rel="preload" as="font" href="/fonts/manrope.woff2" crossorigin="true">',
+  ]
+  assert.equal(execute().status, 0, 'HTML treats a present invalid crossorigin as anonymous')
   const failures = [
     [(audit) => (audit.headerPreloadFontLinks = []), /no font preload/],
+    [(audit) => (audit.headerPreloadFontLinks = [null]), /no font preload/],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = [
+          '</font.woff2?rel=preload&as=font>; title=query; crossorigin',
+        ]),
+      /no font preload/,
+    ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = ['</font.woff2>; rel=preloadx; as=font; crossorigin']),
+      /no font preload/,
+    ],
+    [
+      (audit) =>
+        (audit.headerPreloadFontLinks = ['</font.woff2>; rel=preload; as=fontx; crossorigin']),
+      /no font preload/,
+    ],
     [
       (audit) => (audit.headerPreloadFontLinks = ['</fonts/manrope.woff2>; rel=preload; as=font']),
       /missing crossorigin/,

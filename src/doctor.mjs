@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { init, parse } from 'es-module-lexer'
@@ -79,24 +79,29 @@ function classifyServerOptions(source) {
 }
 
 function classifyServerEntrySource(source) {
+  // Most application files never mention the server helper. Avoid invoking the lexer for
+  // those files; custom-entry discovery may inspect a large source tree.
+  if (!source.includes(SERVER_ENTRY_SPECIFIER)) return null
+
   let imports
   try {
     ;[imports] = parse(source)
   } catch {
-    return source.includes(SERVER_ENTRY_SPECIFIER) ? 'unknown' : null
+    return 'unknown'
   }
   const serverImports = imports.filter(
     (entry) => entry.n === SERVER_ENTRY_SPECIFIER && entry.d === -1,
   )
   if (!serverImports.length) return null
-  const bindings = serverImports.flatMap((entry) => {
-    if (entry.n !== SERVER_ENTRY_SPECIFIER || entry.d !== -1) return []
-    return staticImportBindings(source.slice(entry.ss, entry.se), {
+  const bindings = serverImports.flatMap((entry) =>
+    staticImportBindings(source.slice(entry.ss, entry.se), {
       namedExports: ['createFontsServerEntry', 'default'],
       namespaceExports: ['createFontsServerEntry', 'default'],
-    })
-  })
-  if (!bindings.length) return 'unknown'
+    }),
+  )
+  // Type-only imports, re-exports and side-effect imports do not introduce a callable
+  // factory binding and therefore cannot make this file a server-entry candidate.
+  if (!bindings.length) return null
 
   const active = mask(source)
   for (const binding of bindings) {
@@ -115,8 +120,37 @@ function classifyServerEntrySource(source) {
 
 function detectServerEntryDelivery(root) {
   const extensions = ['.ts', '.js', '.mts', '.mjs', '.tsx', '.jsx']
-  const conventional = extensions.map((extension) => join(root, 'src', `server${extension}`))
-  const files = [...new Set([...conventional, ...walk(root, extensions)])]
+  const conventional = extensions
+    .map((extension) => join(root, 'src', `server${extension}`))
+    .filter(existsSync)
+  const ignoredDirectories = new Set([
+    'test',
+    'tests',
+    '__tests__',
+    'fixtures',
+    'examples',
+    'docs',
+    'public',
+    '.cache',
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    '.output',
+    '.nitro',
+    '.vinxi',
+    '.tanstack',
+    'coverage',
+    '.next',
+    '.vercel',
+  ])
+  const files = conventional.length
+    ? conventional
+    : walk(root, extensions).filter((file) =>
+        relative(root, file)
+          .split(sep)
+          .every((part) => !ignoredDirectories.has(part)),
+      )
   const candidates = []
 
   for (const file of files) {
@@ -135,11 +169,7 @@ function detectServerEntryDelivery(root) {
   }
 
   if (!candidates.length) return 'none'
-  const namedServerEntries = candidates.filter((candidate) =>
-    /^server\.(?:[cm]?[jt]sx?)$/.test(basename(candidate.file)),
-  )
-  const plausibleEntries = namedServerEntries.length ? namedServerEntries : candidates
-  return plausibleEntries.length === 1 ? plausibleEntries[0].delivery : 'unknown'
+  return candidates.length === 1 ? candidates[0].delivery : 'unknown'
 }
 
 async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
@@ -254,9 +284,6 @@ export async function diagnoseResolvedConfig(
   const preloads = generation.preloads ?? []
   const isSsrBuild = diagnostics.isSsrBuild ?? Boolean(resolved.build?.ssr)
   const isLibraryBuild = diagnostics.isLibraryBuild ?? Boolean(resolved.build?.lib)
-  let cachedServerDelivery
-  const serverDelivery = () =>
-    (cachedServerDelivery ??= preloads.length ? detectServerEntryDelivery(root) : 'none')
   const delivery =
     diagnostics.delivery ??
     resolvePreloadDelivery(options, {
@@ -264,6 +291,10 @@ export async function diagnoseResolvedConfig(
       hasNitro: diagnostics.hasNitro,
       htmlEntryDetected: false,
     })
+  const serverDelivery =
+    preloads.length && !isLibraryBuild && !delivery.headerActive && !isSsrBuild
+      ? detectServerEntryDelivery(root)
+      : 'none'
   if (!preloads.length) {
     checks.push(check('pass', `no font preloads are configured`))
   } else if (isLibraryBuild) {
@@ -281,16 +312,16 @@ export async function diagnoseResolvedConfig(
     checks.push(
       check('pass', `SSR build defers document preload delivery to its client or server output`),
     )
-  } else if (serverDelivery() === 'link-header') {
+  } else if (serverDelivery === 'link-header') {
     checks.push(check('pass', `the Start server entry will deliver font preload Link headers`))
-  } else if (serverDelivery() === 'early-hints') {
+  } else if (serverDelivery === 'early-hints') {
     checks.push(
       check(
         'warning',
         `the Start server entry enables Early Hints without a Link-header fallback; delivery depends on the runtime and protocol`,
       ),
     )
-  } else if (serverDelivery() === 'unknown') {
+  } else if (serverDelivery === 'unknown') {
     checks.push(
       check(
         'warning',

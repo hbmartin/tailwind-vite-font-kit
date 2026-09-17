@@ -6,9 +6,9 @@
 //
 //   config()          fetch css2 + download woff2 (cached), write fonts.gen.css, and hand
 //                     Nitro two route rules: `immutable` on the fonts, and a `Link:`
-//                     preload header on documents. `config` is the earliest async hook
-//                     and runs once per config resolution — `buildStart` fires per-environment and
-//                     would race Tailwind's transform in a multi-environment build.
+//                     preload header on documents. `config` is the earliest async hook;
+//                     Vite may repeat it while resolving build environments, whereas
+//                     `buildStart` fires after configuration and per environment.
 //   transform()       rewrite the Tailwind ENTRY in-memory to `@import` that file.
 //                     Tailwind bypasses Vite for its own @imports, so the target must be
 //                     a real file — but the entry itself does pass through Vite.
@@ -271,7 +271,11 @@ export function fonts(userOptions = {}) {
   let fontRulesAreScoped = true
   let warnedMissingHtmlTransform = false
   let failedBuildEnvironments = new WeakSet()
-  let buildFailedWithoutEnvironment = false
+  // Vite 8 can call config() again for each environment on one shared plugin instance.
+  // Client HTML capability must remain sticky throughout that configuration run. A
+  // completed or failed build arms the reset for the next run without changing the
+  // current run's already-resolved delivery state.
+  let resetHtmlEntryOnNextConfig = true
 
   const outDirFor = (r, output = opts.output) =>
     output === 'commit' ? resolve(r, '.tss-fonts') : join(r, 'node_modules', '.cache', 'tss-fonts')
@@ -335,6 +339,10 @@ export function fonts(userOptions = {}) {
     sharedDuringBuild: true,
 
     async config(config, env) {
+      if (resetHtmlEntryOnNextConfig) {
+        htmlEntryDetected = false
+        resetHtmlEntryOnNextConfig = false
+      }
       for (const key of Object.keys(opts)) delete opts[key]
       assignDefined(opts, defaultOptions(), userOptions)
       warningEvents.length = 0
@@ -342,11 +350,9 @@ export function fonts(userOptions = {}) {
       warnedConflict = false
       configFile = null
       hasNitro = false
-      htmlEntryDetected = false
       htmlTransforms = 0
       warnedMissingHtmlTransform = false
       failedBuildEnvironments = new WeakSet()
-      buildFailedWithoutEnvironment = false
       gen = undefined
       generatedFiles = new Set()
       fontRulesAreScoped = true
@@ -538,12 +544,11 @@ export function fonts(userOptions = {}) {
     // outDir at `.output/public`, so `fileName: 'fonts/x.woff2'` lands at
     // `.output/public/fonts/x.woff2` and serves at `/fonts/x.woff2`.
     buildStart() {
-      if (this.environment) failedBuildEnvironments.delete(this.environment)
-      else buildFailedWithoutEnvironment = false
+      failedBuildEnvironments.delete(this.environment)
       // emitFile throws "not supported in serve mode"; buildStart still runs for the dev
       // module graph. Dev is covered by the middleware below.
       if (isServe) return
-      if (this.environment?.config?.consumer !== 'client') return
+      if (this.environment.config.consumer !== 'client') return
 
       // Directory mode already wrote the files in config(); publicDir handles serving.
       if (opts.assets !== 'emit') return
@@ -673,8 +678,8 @@ export function fonts(userOptions = {}) {
 
     configureServer(server) {
       const generated = requireGeneration()
-      // Generation happens once, in config() — a config-file edit needs a restart, and
-      // configFileDependencies does not cover files loaded by a plugin, so watch it here.
+      // Generation happens during config resolution — a config-file edit needs a restart,
+      // and configFileDependencies does not cover files loaded by a plugin, so watch it here.
       if (configFile) {
         server.watcher.add(configFile)
         server.watcher.on('change', (f) => {
@@ -811,18 +816,18 @@ export function fonts(userOptions = {}) {
 
     buildEnd(error) {
       if (error) {
-        if (this.environment) failedBuildEnvironments.add(this.environment)
-        else buildFailedWithoutEnvironment = true
+        failedBuildEnvironments.add(this.environment)
+        resetHtmlEntryOnNextConfig = true
         return
       }
       // The Tailwind entry is only guaranteed to pass through the CLIENT environment;
       // an SSR/nitro pass that never transforms CSS must not report a false failure.
-      if (this.environment && this.environment.config?.consumer !== 'client') return
+      if (this.environment.config.consumer !== 'client') return
       // Two `pre` plugins resolve by array order. If someone moves fonts() after
       // tailwindcss(), injection silently stops and the app loses every font — fail loud.
       if (entrySeen === 0) {
-        if (this.environment) failedBuildEnvironments.add(this.environment)
-        else buildFailedWithoutEnvironment = true
+        failedBuildEnvironments.add(this.environment)
+        resetHtmlEntryOnNextConfig = true
         this.error(
           "[tss-fonts] never saw a stylesheet containing `@import 'tailwindcss'`, so the " +
             '@theme block was NOT injected and no fonts were applied.\n' +
@@ -833,18 +838,17 @@ export function fonts(userOptions = {}) {
     },
 
     closeBundle() {
+      resetHtmlEntryOnNextConfig = true
       // Vite transforms and emits index.html after Rollup's buildEnd hook. Check here so a
       // valid HTML build is not reported missing merely because its transform ran later.
-      const environmentBuild = this.environment?.config?.build
+      const environmentBuild = this.environment.config.build
       const environmentIsSsrBuild =
         environmentBuild?.ssr !== undefined ? Boolean(environmentBuild.ssr) : isSsrBuild
       const environmentIsLibraryBuild =
         environmentBuild?.lib !== undefined ? Boolean(environmentBuild.lib) : isLibraryBuild
-      const environmentBuildFailed = this.environment
-        ? failedBuildEnvironments.has(this.environment)
-        : buildFailedWithoutEnvironment
+      const environmentBuildFailed = failedBuildEnvironments.has(this.environment)
       if (environmentIsSsrBuild || environmentIsLibraryBuild || environmentBuildFailed) return
-      if (this.environment && this.environment.config?.consumer !== 'client') return
+      if (this.environment.config.consumer !== 'client') return
       const delivery = currentDelivery()
       if (
         !isServe &&
