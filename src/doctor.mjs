@@ -7,7 +7,7 @@ import { mask, staticImportBindings } from './codemod-vite.mjs'
 import { assertFontHost } from './font-host.mjs'
 import { DEFAULT_SKIP_DIRS, detectTailwindEntry, themeBlocks, walk } from './detect.mjs'
 import { runInDoctorContext } from './doctor-context.mjs'
-import { resolvePreloadDelivery } from './preload-delivery.mjs'
+import { environmentInput, inputValues, resolvePreloadDelivery } from './preload-delivery.mjs'
 import { requestHasRangedOpsz } from './opsz.mjs'
 import { escapeRegExp } from './string.mjs'
 
@@ -17,9 +17,15 @@ const SERVER_ENTRY_SPECIFIER = 'tailwind-vite-font-kit/start-server'
 const START_SERVER_ENTRY_ALIAS = 'virtual:tanstack-start-server-entry'
 const SERVER_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.cts', '.cjs', '.tsx', '.jsx']
 
+/** @typedef {(source: string, file: string) =>
+ * Promise<string | {code?: string} | null> | string | {code?: string} | null} ServerSourceTransform */
+
 await init
 
 const check = (status, message) => ({ status, message })
+
+const bindingExpressionPattern = (binding) =>
+  binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
 
 function closingParen(masked, open) {
   let depth = 1
@@ -111,8 +117,8 @@ function classifyServerEntrySource(source, analysis) {
   if (!bindings.length) return null
 
   for (const binding of bindings) {
-    const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
-    const call = new RegExp(`\\bexport\\s+default\\s+${expression}\\s*\\(`).exec(active)
+    const expression = bindingExpressionPattern(binding)
+    const call = new RegExp(`\\bexport\\s+default\\s+${expression}(?![\\w$])\\s*\\(`).exec(active)
     if (!call) continue
     const open = call.index + call[0].lastIndexOf('(')
     const close = closingParen(active, open)
@@ -148,41 +154,40 @@ function aliasMatches(find, specifier) {
   return matches
 }
 
-const inputValues = (input) => {
-  if (typeof input === 'string') return [input]
-  if (Array.isArray(input)) return input
-  if (input && typeof input === 'object') return Object.values(input)
-  return []
-}
-
 const isDependencyFile = (file) => file.split(sep).includes('node_modules')
 
 async function resolvedModuleTarget(resolveId, specifier, importer) {
-  if (typeof resolveId !== 'function') return { kind: 'unknown' }
+  if (typeof resolveId !== 'function') return { kind: 'unavailable' }
   let id
   try {
     id = await resolveId(specifier, importer)
   } catch {
-    return { kind: 'unknown' }
+    return { kind: 'unavailable' }
   }
   if (!id) return { kind: 'missing' }
   const clean = id.split(/[?#]/, 1)[0]
-  if (/^(?:\0|virtual:)/.test(clean)) return { kind: 'unknown' }
+  if (/^(?:\0|virtual:)/.test(clean)) return { kind: 'opaque' }
   if (clean.startsWith('node:') || !isAbsolute(clean)) return { kind: 'package' }
-  if (!isFile(clean)) return { kind: 'unknown' }
+  if (!isFile(clean)) return { kind: 'unresolved' }
   return isDependencyFile(clean) ? { kind: 'package' } : { kind: 'file', file: clean }
 }
 
 async function resolvedInputTarget(root, resolveId, input) {
   const target = await resolvedModuleTarget(resolveId, input)
-  if (target.kind !== 'missing') return target
+  if (target.kind !== 'missing' && target.kind !== 'unavailable') return target
+
   const clean = input.split(/[?#]/, 1)[0]
   if (/^(?:\0|virtual:|node:)/.test(clean)) return target
   const rooted =
     isAbsolute(clean) && isFile(clean)
       ? clean
       : resolve(root, isAbsolute(clean) ? `.${clean}` : clean)
-  return resolvedModuleTarget(resolveId, rooted)
+  const rootedTarget = await resolvedModuleTarget(resolveId, rooted)
+  if (rootedTarget.kind !== 'missing' && rootedTarget.kind !== 'unavailable') {
+    return rootedTarget
+  }
+  if (isFile(rooted)) return { kind: 'file', file: rooted }
+  return target.kind === 'unavailable' ? target : rootedTarget
 }
 
 const hasTanStackStartPlugin = (resolved) =>
@@ -197,47 +202,60 @@ async function resolvedServerEntry(root, resolved, resolveId) {
     aliasMatches(candidate.find, START_SERVER_ENTRY_ALIAS),
   )
   const aliasTarget = await resolvedModuleTarget(resolveId, START_SERVER_ENTRY_ALIAS)
-  if (aliasTarget.kind !== 'missing') return { available: true, target: aliasTarget }
+  if (
+    aliasTarget.kind === 'file' ||
+    aliasTarget.kind === 'package' ||
+    aliasTarget.kind === 'opaque'
+  ) {
+    return { available: true, target: aliasTarget }
+  }
 
   if (hasTanStackStartPlugin(resolved)) {
-    const ssrBuild = resolved.environments?.ssr?.build
-    const rawInputs = [
-      ...inputValues(ssrBuild?.rollupOptions?.input),
-      ...inputValues(ssrBuild?.rolldownOptions?.input),
-    ]
+    const rawInputs = inputValues(environmentInput(resolved, 'ssr'))
     if (rawInputs.length) {
       if (rawInputs.length !== 1) {
         return { available: true, target: { kind: 'unknown' } }
       }
-      const targets = await Promise.all(
-        rawInputs.map((input) =>
-          typeof input === 'string'
-            ? resolvedInputTarget(root, resolveId, input)
-            : Promise.resolve({ kind: 'unknown' }),
-        ),
-      )
-      if (targets[0].kind === 'file') {
-        return { available: true, target: targets[0] }
+      const target =
+        typeof rawInputs[0] === 'string'
+          ? await resolvedInputTarget(root, resolveId, rawInputs[0])
+          : { kind: 'unknown' }
+      if (target.kind === 'file') {
+        return { available: true, target }
       }
-      if (targets[0].kind === 'package') {
+      if (target.kind === 'package') {
         return { available: true, target: { kind: 'package' } }
       }
       return { available: true, target: { kind: 'unknown' } }
     }
   }
 
-  return aliasConfigured
+  return aliasConfigured || aliasTarget.kind === 'unresolved'
     ? { available: true, target: { kind: 'unknown' } }
     : { available: false, target: { kind: 'missing' } }
 }
 
-function exportsBindingAsDefault({ active, exports }, binding) {
-  const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
-  if (new RegExp(`\\bexport\\s+default\\s+${expression}\\s*(?:;|$)`, 'm').test(active)) {
-    return true
+function directDefaultExportSupport(active, binding) {
+  const expression = bindingExpressionPattern(binding)
+  const match = new RegExp(`\\bexport\\s+default\\s+${expression}(?![\\w$])`).exec(active)
+  if (!match) return null
+
+  let index = match.index + match[0].length
+  let lineBreak = false
+  while (/\s/.test(active[index] ?? '')) {
+    lineBreak ||= active[index] === '\n' || active[index] === '\r'
+    index++
   }
-  if (binding.includes('.')) return false
-  return exports.some((entry) => entry.n === 'default' && entry.ln === binding)
+  if (active[index] === ';' || !active[index]) return true
+  if (!lineBreak) return false
+  return !['.', '?', '[', '(', '`'].includes(active[index])
+}
+
+function exportsBindingAsDefault({ active, exports }, binding) {
+  const direct = directDefaultExportSupport(active, binding)
+  if (direct !== null) return direct
+  if (binding.includes('.')) return null
+  return exports.some((entry) => entry.n === 'default' && entry.ln === binding) ? true : null
 }
 
 function defaultExportTarget(source, { active, imports, exports }) {
@@ -264,15 +282,33 @@ function defaultExportTarget(source, { active, imports, exports }) {
       namespaceExports: ['default'],
     })
     for (const binding of bindings) {
-      if (exportsBindingAsDefault({ active, exports }, binding)) {
-        targets.push({ specifier: entry.n, supported: true })
+      const supported = exportsBindingAsDefault({ active, exports }, binding)
+      if (supported !== null) {
+        targets.push({ specifier: entry.n, supported })
       }
     }
   }
   return targets
 }
 
-async function classifyServerEntryFile(file, resolveId, seen = new Set(), depth = 0) {
+async function transformServerSource(source, file, transformSourceFn) {
+  if (typeof transformSourceFn !== 'function') return source
+  try {
+    const transformed = await transformSourceFn(source, file)
+    if (typeof transformed === 'string') return transformed
+    return typeof transformed?.code === 'string' ? transformed.code : null
+  } catch {
+    return null
+  }
+}
+
+async function classifyServerEntryFile(
+  file,
+  resolveId,
+  transformSourceFn,
+  seen = new Set(),
+  depth = 0,
+) {
   if (depth > 12 || seen.has(file)) return 'unknown'
   seen.add(file)
   // Package defaults are authoritative, but their implementation graph is not application
@@ -285,6 +321,8 @@ async function classifyServerEntryFile(file, resolveId, seen = new Set(), depth 
     return 'unknown'
   }
 
+  source = await transformServerSource(source, file, transformSourceFn)
+  if (source === null) return 'unknown'
   const analysis = analyzeServerModule(source)
   if (!analysis) return 'unknown'
   const direct = classifyServerEntrySource(source, analysis)
@@ -295,21 +333,22 @@ async function classifyServerEntryFile(file, resolveId, seen = new Set(), depth 
     const hasDefaultExport = /\bexport\s+default\b/.test(analysis.active)
     return hasDynamicImport && hasDefaultExport ? 'unknown' : 'none'
   }
-  if (targets.length !== 1 || !targets[0].supported) return 'unknown'
+  if (targets.length !== 1) return 'unknown'
   const target = await resolvedModuleTarget(resolveId, targets[0].specifier, file)
   if (target.kind === 'package') return 'none'
+  if (!targets[0].supported) return 'unknown'
   if (target.kind !== 'file') return 'unknown'
-  return classifyServerEntryFile(target.file, resolveId, seen, depth + 1)
+  return classifyServerEntryFile(target.file, resolveId, transformSourceFn, seen, depth + 1)
 }
 
-async function detectServerEntryDelivery(root, resolved) {
+async function detectServerEntryDelivery(root, resolved, transformSourceFn) {
   const resolveId =
     typeof resolved.createResolver === 'function' ? resolved.createResolver() : undefined
   const authoritative = await resolvedServerEntry(root, resolved, resolveId)
   if (authoritative.available) {
     if (authoritative.target.kind === 'package') return 'none'
     return authoritative.target.kind === 'file'
-      ? classifyServerEntryFile(authoritative.target.file, resolveId)
+      ? classifyServerEntryFile(authoritative.target.file, resolveId, transformSourceFn)
       : 'unknown'
   }
 
@@ -333,7 +372,7 @@ async function detectServerEntryDelivery(root, resolved) {
   ])
   if (conventional.length > 1) return 'unknown'
   if (conventional.length === 1) {
-    return classifyServerEntryFile(conventional[0], resolveId)
+    return classifyServerEntryFile(conventional[0], resolveId, transformSourceFn)
   }
 
   const files = walk(root, SERVER_EXTENSIONS, { skipDirs: ignoredDirectories })
@@ -341,7 +380,7 @@ async function detectServerEntryDelivery(root, resolved) {
     /^server\.(?:[cm]?[jt]sx?)$/.test(basename(file)),
   )
   const namedDeliveries = await Promise.all(
-    namedServerEntries.map((file) => classifyServerEntryFile(file, resolveId)),
+    namedServerEntries.map((file) => classifyServerEntryFile(file, resolveId, transformSourceFn)),
   )
   const positiveNamedDeliveries = namedDeliveries.filter((delivery) => delivery !== 'none')
   if (
@@ -353,8 +392,10 @@ async function detectServerEntryDelivery(root, resolved) {
   }
   if (positiveNamedDeliveries.length === 1) return positiveNamedDeliveries[0]
   const candidates = []
+  const namedServerEntrySet = new Set(namedServerEntries)
 
   for (const file of files) {
+    if (namedServerEntrySet.has(file)) continue
     if (!isFile(file)) continue
     let source
     try {
@@ -362,15 +403,20 @@ async function detectServerEntryDelivery(root, resolved) {
     } catch {
       // A conventional or discovered source file that cannot be inspected is uncertainty,
       // not grounds to abort every unrelated doctor check.
+      if (namedServerEntries.length) return 'unknown'
       candidates.push({ file, delivery: 'unknown' })
       continue
     }
-    const delivery = classifyServerEntrySource(source)
-    if (delivery) candidates.push({ file, delivery })
+    if (!source.includes(SERVER_ENTRY_SPECIFIER)) continue
+    source = await transformServerSource(source, file, transformSourceFn)
+    const delivery = source === null ? 'unknown' : classifyServerEntrySource(source)
+    if (delivery) {
+      if (namedServerEntries.length) return 'unknown'
+      candidates.push({ file, delivery })
+    }
   }
 
   if (!candidates.length) return 'none'
-  if (namedServerEntries.length) return 'unknown'
   return candidates.length === 1 ? candidates[0].delivery : 'unknown'
 }
 
@@ -417,11 +463,15 @@ async function preloadBytes(preloads, generation, fetchImpl, timeoutMs) {
 /**
  * Diagnose an already-resolved Vite config. Exported so the rules can be tested without
  * loading a fixture or touching the network.
+ * @param {string} root
+ * @param {any} resolved
+ * @param {{fetchImpl?: typeof fetch, preloadTimeoutMs?: number,
+ * transformSourceFn?: ServerSourceTransform}} [options]
  */
 export async function diagnoseResolvedConfig(
   root,
   resolved,
-  { fetchImpl = fetch, preloadTimeoutMs = 60_000 } = {},
+  { fetchImpl = fetch, preloadTimeoutMs = 60_000, transformSourceFn } = {},
 ) {
   const checks = []
   const plugins = resolved.plugins ?? []
@@ -495,7 +545,7 @@ export async function diagnoseResolvedConfig(
     })
   const serverDelivery =
     preloads.length && !isLibraryBuild && !delivery.headerActive && !isSsrBuild
-      ? await detectServerEntryDelivery(root, resolved)
+      ? await detectServerEntryDelivery(root, resolved, transformSourceFn)
       : 'none'
   if (!preloads.length) {
     checks.push(check('pass', `no font preloads are configured`))
@@ -657,11 +707,12 @@ export async function loadProjectVite(projectRoot) {
   return import(pathToFileURL(entry).href)
 }
 
-/** @param {{root?: string, resolveConfigFn?: Function, fetchImpl?: typeof fetch,
- * preloadTimeoutMs?: number}} [options] */
+/** @param {{root?: string, resolveConfigFn?: Function, transformSourceFn?: ServerSourceTransform,
+ * fetchImpl?: typeof fetch, preloadTimeoutMs?: number}} [options] */
 export async function runDoctor({
   root = process.cwd(),
   resolveConfigFn,
+  transformSourceFn,
   fetchImpl = fetch,
   preloadTimeoutMs = 60_000,
 } = {}) {
@@ -669,9 +720,16 @@ export async function runDoctor({
   let checks
   try {
     checks = await runInDoctorContext(async () => {
-      const resolveVite = resolveConfigFn ?? (await loadProjectVite(projectRoot)).resolveConfig
+      const vite = resolveConfigFn ? undefined : await loadProjectVite(projectRoot)
+      const resolveVite = resolveConfigFn ?? vite.resolveConfig
+      const transformServerModule =
+        transformSourceFn ?? vite?.transformWithOxc ?? vite?.transformWithEsbuild
       const resolved = await resolveVite({ root: projectRoot }, 'build', 'production')
-      return diagnoseResolvedConfig(projectRoot, resolved, { fetchImpl, preloadTimeoutMs })
+      return diagnoseResolvedConfig(projectRoot, resolved, {
+        fetchImpl,
+        preloadTimeoutMs,
+        transformSourceFn: transformServerModule,
+      })
     })
   } catch (error) {
     checks = [check('failure', `could not resolve and generate the Vite project: ${error.message}`)]

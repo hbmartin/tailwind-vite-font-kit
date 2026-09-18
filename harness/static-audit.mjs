@@ -1,7 +1,6 @@
 // Follow the served HTML -> stylesheets -> @import chain in Node so cross-origin CSS can
 // be inspected without the browser's stylesheet access restrictions.
 import {
-  decodeHtmlHref,
   htmlLinkAttribute,
   htmlLinkRelTokens,
   isHeaderFontPreload,
@@ -62,17 +61,19 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
       return null
     }
     const href = htmlLinkAttribute(link, 'href')
-    return href ? decodeHtmlHref(href) : null
+    return href || null
   }
   const hrefs = [
     ...new Set(
       htmlLinks
-        .sort((left, right) => left.start - right.start)
+        .filter((link) => !link.inShadowRoot)
         .map((link) => stylesheetHref(link))
         .filter((href) => typeof href === 'string'),
     ),
   ]
-  const inlineStyles = inlineStyleRecords.map((style) => style.text)
+  const inlineStyles = inlineStyleRecords
+    .filter((style) => !style.inShadowRoot)
+    .map((style) => style.text)
   const rawHeadPreloadFontLinks = htmlFontPreloads.map((link) => link.raw)
   const headPreloadFontLinks = [...rawHeadPreloadFontLinks]
   const auditErrors = []
@@ -133,7 +134,7 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
     const href = htmlLinkAttribute(link, 'href')
     if (href) {
       try {
-        preloadUrls.add(new URL(decodeHtmlHref(href), documentUrl).href)
+        preloadUrls.add(new URL(href, documentUrl).href)
       } catch (error) {
         auditErrors.push(`invalid HTML preload href ${JSON.stringify(href)}: ${error.message}`)
       }

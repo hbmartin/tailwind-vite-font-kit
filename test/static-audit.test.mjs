@@ -71,6 +71,16 @@ test('HTML scanning keeps inline styles after malformed tokenizer constructs', (
       prefix,
     )
   }
+
+  const scan = scanHtml(
+    `<link rel=stylesheet href=/first.css><noscript><link href=/hidden.css></noscript>` +
+      `<link rel=stylesheet href=/second.css>`,
+  )
+  assert.deepEqual(
+    scan.links.map((link) => link.attributes.get('href')?.value),
+    ['/first.css', '/second.css'],
+  )
+  assert.equal('noscripts' in scan, false)
 })
 
 test('static audit follows stylesheet-relative imports and samples the preloaded face', async () => {
@@ -138,7 +148,8 @@ test('static audit models JavaScript-on CSS without noscript or inert style prel
       if (current === documentUrl) {
         return response(
           documentUrl,
-          `<link rel=preload as=style href=/app.css onload="this.rel='stylesheet'">
+          `<link rel=preload as=style href=/app.css
+             onload="this&period;rel&equals;&QUOT;stylesheet&QUOT;">
            <noscript>
              <link rel=stylesheet href=/app.css>
              <link rel=stylesheet href=/fallback.css>
@@ -178,13 +189,15 @@ test('static audit models JavaScript-on CSS without noscript or inert style prel
   assert.equal(audit.sampleFontResponse.url, fontUrl)
 })
 
-test('static audit includes active declarative shadow-root styles exactly once', async () => {
+test('static audit separates shadow-root CSS while retaining live font preloads', async () => {
   const documentUrl = 'https://site.test/'
   const shadowCssUrl = 'https://site.test/shadow.css'
   const closedCssUrl = 'https://site.test/closed.css'
+  const calls = []
   const audit = await staticAudit(documentUrl, {
     fetchImpl: async (url) => {
       const current = String(url)
+      calls.push(current)
       if (current === documentUrl) {
         return response(
           documentUrl,
@@ -195,11 +208,23 @@ test('static audit includes active declarative shadow-root styles exactly once',
            <template shadowrootmode=open>
              <style>@font-face { font-family: InlineShadow; src: url(/inline.woff2) }</style>
              <link rel=stylesheet href=/shadow.css>
+             <link rel=preload as=font href=/fonts/shadow.woff2 crossorigin>
            </template>
            <template shadowrootmode=closed>
              <link rel=preload as=style href=/closed.css
                onload="this.setAttribute('rel', 'stylesheet')">
-           </template>`,
+             <link rel=preload as=font href=/fonts/duplicate.woff2 crossorigin>
+           </template>
+           <head>
+             <template shadowrootmode=open>
+               <link rel=preload as=font href=/fonts/head.woff2 crossorigin>
+             </template>
+           </head>
+           <button>
+             <template shadowrootmode=open>
+               <link rel=preload as=font href=/fonts/invalid-host.woff2 crossorigin>
+             </template>
+           </button>`,
         )
       }
       if (current === shadowCssUrl) {
@@ -218,14 +243,35 @@ test('static audit includes active declarative shadow-root styles exactly once',
     },
   })
 
-  assert.deepEqual(audit.stylesheetHrefs, ['/shadow.css', '/closed.css'])
-  assert.equal(audit.inlineStyleTags, 1)
-  assert.equal(audit.totalFontFaceBlocks, 3)
-  assert.deepEqual(audit.fontFamiliesDeclared.sort(), [
-    'ClosedShadow',
-    'InlineShadow',
-    'LinkedShadow',
-  ])
+  assert.deepEqual(audit.stylesheetHrefs, [])
+  assert.equal(audit.inlineStyleTags, 0)
+  assert.equal(audit.totalFontFaceBlocks, 0)
+  assert.deepEqual(audit.fontFamiliesDeclared, [])
+  assert.deepEqual(calls, [documentUrl])
+  assert.equal(audit.headPreloadFontLinks.length, 1)
+  assert.match(audit.headPreloadFontLinks[0], /shadow\.woff2/)
+  assert.doesNotMatch(audit.headPreloadFontLinks.join('\n'), /duplicate|head|invalid-host/)
+})
+
+test('static audit decodes numeric references in promoted preload handlers', async () => {
+  const audit = await staticAudit('https://site.test/', {
+    fetchImpl: async (url) => {
+      if (String(url) === 'https://site.test/') {
+        return response(
+          'https://site.test/',
+          `<link rel=preload as=style href=/app.css ` +
+            `onload="this&#46;setAttribute&#40;&#39;rel&#39;&#44;&#39;stylesheet&#39;&#41;">`,
+        )
+      }
+      if (String(url) === 'https://site.test/app.css') {
+        return response(String(url), `@font-face { font-family: Decoded; src: url(/font.woff2) }`)
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    },
+  })
+
+  assert.deepEqual(audit.stylesheetHrefs, ['/app.css'])
+  assert.deepEqual(audit.fontFamiliesDeclared, ['Decoded'])
 })
 
 test('static audit does not substitute an unrelated face when no preload matches', async () => {
