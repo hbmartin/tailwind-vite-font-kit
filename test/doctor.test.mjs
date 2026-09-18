@@ -1,97 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
+import { resolveConfig as resolveViteConfig } from 'vite'
 import { diagnoseResolvedConfig, loadProjectVite } from '../src/doctor.mjs'
 import { isDoctorContext, runInDoctorContext } from '../src/doctor-context.mjs'
 import { resolvePreloadDelivery } from '../src/preload-delivery.mjs'
-
-const VITE_EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json']
-
-function fixtureFile(candidate) {
-  const exact = (() => {
-    try {
-      return statSync(candidate).isFile() ? candidate : undefined
-    } catch {
-      return undefined
-    }
-  })()
-  if (exact) return exact
-
-  const extension = extname(candidate)
-  const replacements =
-    extension === '.js'
-      ? ['.ts', '.tsx']
-      : extension === '.mjs'
-        ? ['.mts']
-        : extension === '.cjs'
-          ? ['.cts']
-          : extension === '.jsx'
-            ? ['.tsx']
-            : []
-  for (const replacement of replacements) {
-    const file = candidate.slice(0, -extension.length) + replacement
-    if (existsSync(file)) return file
-  }
-  if (!extension) {
-    for (const suffix of VITE_EXTENSIONS) {
-      const file = candidate + suffix
-      if (existsSync(file)) return file
-    }
-    for (const suffix of VITE_EXTENSIONS) {
-      const file = join(candidate, `index${suffix}`)
-      if (existsSync(file)) return file
-    }
-  }
-  return undefined
-}
-
-function fixtureResolver(root, config) {
-  return async (specifier, importer) => {
-    let id = specifier
-    let aliasApplied = false
-    const configured = config.resolve?.alias
-    const aliases = Array.isArray(configured)
-      ? configured
-      : configured && typeof configured === 'object'
-        ? Object.entries(configured).map(([find, replacement]) => ({ find, replacement }))
-        : []
-    for (const alias of aliases) {
-      const matches =
-        typeof alias.find === 'string'
-          ? id === alias.find || id.startsWith(`${alias.find}/`)
-          : (() => {
-              alias.find.lastIndex = 0
-              return alias.find.test(id)
-            })()
-      if (!matches) continue
-      if (alias.find instanceof RegExp) alias.find.lastIndex = 0
-      id = id.replace(alias.find, alias.replacement)
-      aliasApplied = true
-      break
-    }
-
-    if (/^(?:\0|virtual:)/.test(id)) return aliasApplied ? id : undefined
-    if (id.startsWith('node:')) return id
-    const clean = id.split(/[?#]/, 1)[0]
-    let candidate
-    if (isAbsolute(clean)) {
-      candidate = fixtureFile(clean) ? clean : resolve(root, `.${clean}`)
-    } else if (clean.startsWith('./') || clean.startsWith('../')) {
-      candidate = resolve(importer ? dirname(importer) : root, clean)
-    } else if (aliasApplied) {
-      candidate = resolve(root, clean)
-    } else {
-      const packageName = clean.startsWith('@')
-        ? clean.split('/').slice(0, 2).join('/')
-        : clean.split('/', 1)[0]
-      const packageSubpath = clean.slice(packageName.length).replace(/^\//, '')
-      candidate = join(root, 'node_modules', packageName, packageSubpath)
-    }
-    return fixtureFile(candidate)
-  }
-}
 
 function fixture(t, overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), 'tss-fonts-doctor-'))
@@ -141,12 +56,21 @@ function fixture(t, overrides = {}) {
     api: { getDiagnostics: () => diagnostics },
   }
   const resolved = { plugins: [font, { name: '@tailwindcss/vite:scan' }] }
-  resolved.createResolver = () => fixtureResolver(root, resolved)
   return {
     root,
     font,
     resolved,
   }
+}
+
+async function attachViteResolver(item, config = {}) {
+  const viteResolved = await resolveViteConfig(
+    { root: item.root, resolve: item.resolved.resolve, ...config },
+    'build',
+    'production',
+  )
+  item.resolved.createResolver = (...args) => viteResolved.createResolver(...args)
+  return viteResolved
 }
 
 function disableAutomaticDelivery(item) {
@@ -388,6 +312,7 @@ test('doctor follows the resolved Start entry through a local default re-export'
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -429,6 +354,7 @@ test('doctor follows root-absolute and string-alias default-export chains', asyn
       { find: '#server', replacement: join(item.root, 'src') },
     ],
   }
+  await attachViteResolver(item)
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -462,6 +388,7 @@ test('the authoritative Start alias accepts Vite replacement path forms and quer
         },
       ],
     }
+    await attachViteResolver(item)
     disableAutomaticDelivery(item)
 
     const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -487,6 +414,7 @@ test('configured local aliases are followed through the Vite resolver', async (t
         { find: alias, replacement: join(item.root, 'src') },
       ],
     }
+    await attachViteResolver(item)
     disableAutomaticDelivery(item)
 
     const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -507,6 +435,7 @@ test('an authoritative entry in a sibling workspace package is inspected', async
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -535,6 +464,7 @@ test('the resolved Start entry is authoritative over unrelated helper users', as
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -568,6 +498,7 @@ test('filesystem fallback prefers a server-named helper entry', async (t) => {
     `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
       `export default createFontsServerEntry()\n`,
   )
+  await attachViteResolver(item)
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -600,6 +531,7 @@ test('dynamic authoritative default-export flows are uncertain rather than absen
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   const diagnostics = item.font.api.getDiagnostics()
   diagnostics.delivery = resolvePreloadDelivery(diagnostics.options, {
     preloadCount: diagnostics.generation.preloads.length,
@@ -672,7 +604,7 @@ test('generic SSR inputs do not masquerade as the resolved Start server entry', 
   }
 })
 
-test('TanStack Start SSR input is a gated fallback when the virtual alias is unavailable', async (t) => {
+test('Vite 8 aliased build options expose one TanStack Start SSR input', async (t) => {
   const item = fixture(t)
   const entry = join(item.root, 'application/http-entry.ts')
   mkdirSync(dirname(entry), { recursive: true })
@@ -682,17 +614,51 @@ test('TanStack Start SSR input is a gated fallback when the virtual alias is una
       `export default createFontsServerEntry({ linkHeader: true })\n`,
   )
   item.resolved.plugins.push({ name: 'tanstack-start:config' })
-  item.resolved.environments = {
-    ssr: { build: { rollupOptions: { input: 'application/http-entry.ts' } } },
-  }
+  const viteResolved = await attachViteResolver(item, {
+    environments: {
+      ssr: { build: { rollupOptions: { input: 'application/http-entry.ts' } } },
+    },
+  })
+  item.resolved.environments = viteResolved.environments
   disableAutomaticDelivery(item)
 
+  const ssrBuild = item.resolved.environments.ssr.build
+  assert.equal(ssrBuild.rollupOptions, ssrBuild.rolldownOptions)
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
 
-  item.resolved.environments.ssr.build.rolldownOptions = { input: entry }
-  const ambiguous = await diagnoseResolvedConfig(item.root, item.resolved)
-  assert.ok(hasCheck(ambiguous, 'warning', /could not be verified/))
+test('root-relative SSR inputs win over same-named packages', async (t) => {
+  const item = fixture(t)
+  const relativeEntry = 'application/http-entry.ts'
+  const entry = join(item.root, relativeEntry)
+  const dependencyDir = join(item.root, 'node_modules/application')
+  mkdirSync(dirname(entry), { recursive: true })
+  mkdirSync(dependencyDir, { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  writeFileSync(
+    join(dependencyDir, 'package.json'),
+    JSON.stringify({ name: 'application', version: '1.0.0' }),
+  )
+  writeFileSync(join(dependencyDir, 'http-entry.ts'), `export default function unrelated() {}\n`)
+  item.resolved.resolve = {
+    alias: [{ find: 'application', replacement: dependencyDir }],
+  }
+  item.resolved.plugins.push({ name: 'tanstack-start:config' })
+  const viteResolved = await attachViteResolver(item, {
+    environments: { ssr: { build: { rolldownOptions: { input: relativeEntry } } } },
+  })
+  item.resolved.environments = viteResolved.environments
+  disableAutomaticDelivery(item)
+
+  const packageResolution = await item.resolved.createResolver()(relativeEntry)
+  assert.match(packageResolution, /node_modules\/application\/http-entry\.ts$/)
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
 })
 
 test('an absent named entry plus a generic helper candidate is uncertain', async (t) => {
@@ -737,10 +703,97 @@ test('default-as imports, separate export lists, and TypeScript substitutions ar
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
+test('TypeScript assertions preserve imported default server-entry bindings', async (t) => {
+  for (const assertion of ['satisfies StartServerEntry', 'as StartServerEntry']) {
+    const item = fixture(t)
+    const entry = join(item.root, 'app/entry.ts')
+    const implementation = join(item.root, 'app/handler.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(
+      entry,
+      `import handler from './handler.js'\nexport default handler ${assertion}\n`,
+    )
+    writeFileSync(
+      implementation,
+      `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+        `export default createFontsServerEntry({ linkHeader: true })\n`,
+    )
+    item.resolved.resolve = {
+      alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+    }
+    await attachViteResolver(item)
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), assertion)
+  }
+})
+
+test('resolver unavailability falls back unless an explicit Start alias is configured', async (t) => {
+  const source =
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+    `export default createFontsServerEntry({ linkHeader: true })\n`
+
+  for (const resolver of ['missing', 'throwing']) {
+    const item = fixture(t)
+    mkdirSync(join(item.root, 'src'))
+    writeFileSync(join(item.root, 'src/server.ts'), source)
+    if (resolver === 'throwing') {
+      item.resolved.createResolver = () => async () => {
+        throw new Error('resolver unavailable')
+      }
+    }
+    disableAutomaticDelivery(item)
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), resolver)
+  }
+
+  const aliased = fixture(t)
+  mkdirSync(join(aliased.root, 'src'))
+  writeFileSync(join(aliased.root, 'src/server.ts'), source)
+  aliased.resolved.resolve = {
+    alias: [
+      {
+        find: 'virtual:tanstack-start-server-entry',
+        replacement: join(aliased.root, 'missing-server.ts'),
+      },
+    ],
+  }
+  aliased.resolved.createResolver = () => async () => {
+    throw new Error('resolver unavailable')
+  }
+  aliased.resolved.plugins.push({ name: 'tanstack-start:config' })
+  aliased.resolved.environments = {
+    ssr: { build: { rolldownOptions: { input: 'src/server.ts' } } },
+  }
+  disableAutomaticDelivery(aliased)
+  const aliasedChecks = await diagnoseResolvedConfig(aliased.root, aliased.resolved)
+  assert.ok(hasCheck(aliasedChecks, 'warning', /could not be verified/))
+  assert.equal(hasCheck(aliasedChecks, 'pass', /deliver font preload Link headers/), false)
+})
+
+test('opaque resolved Start aliases remain authoritative over filesystem candidates', async (t) => {
+  const item = fixture(t)
+  mkdirSync(join(item.root, 'src'))
+  writeFileSync(
+    join(item.root, 'src/server.ts'),
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.createResolver = () => async (specifier) =>
+    specifier === 'virtual:tanstack-start-server-entry' ? '\0opaque-start-entry' : undefined
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'warning', /could not be verified/))
+  assert.equal(hasCheck(checks, 'pass', /deliver font preload Link headers/), false)
 })
 
 test('literal JavaScript targets win over TypeScript substitutions', async (t) => {
@@ -757,6 +810,7 @@ test('literal JavaScript targets win over TypeScript substitutions', async (t) =
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -772,6 +826,7 @@ test('import.meta is not mistaken for an unresolved dynamic default export', asy
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
   }
+  await attachViteResolver(item)
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -794,6 +849,7 @@ test('unresolved package-like defaults are uncertain and resolved dependencies a
     item.resolved.resolve = {
       alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
     }
+    await attachViteResolver(item)
     disableAutomaticDelivery(item)
 
     const checks = await diagnoseResolvedConfig(item.root, item.resolved)
@@ -812,6 +868,7 @@ test('unresolved package-like defaults are uncertain and resolved dependencies a
   item.resolved.resolve = {
     alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: dependencyEntry }],
   }
+  await attachViteResolver(item)
   disableAutomaticDelivery(item)
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
   assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/))

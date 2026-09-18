@@ -7,7 +7,7 @@ import { mask, staticImportBindings } from './codemod-vite.mjs'
 import { assertFontHost } from './font-host.mjs'
 import { DEFAULT_SKIP_DIRS, detectTailwindEntry, themeBlocks, walk } from './detect.mjs'
 import { runInDoctorContext } from './doctor-context.mjs'
-import { resolvePreloadDelivery } from './preload-delivery.mjs'
+import { inputValues, resolvePreloadDelivery } from './preload-delivery.mjs'
 import { requestHasRangedOpsz } from './opsz.mjs'
 import { escapeRegExp } from './string.mjs'
 
@@ -148,22 +148,15 @@ function aliasMatches(find, specifier) {
   return matches
 }
 
-const inputValues = (input) => {
-  if (typeof input === 'string') return [input]
-  if (Array.isArray(input)) return input
-  if (input && typeof input === 'object') return Object.values(input)
-  return []
-}
-
 const isDependencyFile = (file) => file.split(sep).includes('node_modules')
 
 async function resolvedModuleTarget(resolveId, specifier, importer) {
-  if (typeof resolveId !== 'function') return { kind: 'unknown' }
+  if (typeof resolveId !== 'function') return { kind: 'unavailable' }
   let id
   try {
     id = await resolveId(specifier, importer)
   } catch {
-    return { kind: 'unknown' }
+    return { kind: 'unavailable' }
   }
   if (!id) return { kind: 'missing' }
   const clean = id.split(/[?#]/, 1)[0]
@@ -174,15 +167,20 @@ async function resolvedModuleTarget(resolveId, specifier, importer) {
 }
 
 async function resolvedInputTarget(root, resolveId, input) {
-  const target = await resolvedModuleTarget(resolveId, input)
-  if (target.kind !== 'missing') return target
   const clean = input.split(/[?#]/, 1)[0]
-  if (/^(?:\0|virtual:|node:)/.test(clean)) return target
+  if (/^(?:\0|virtual:|node:)/.test(clean)) {
+    return resolvedModuleTarget(resolveId, input)
+  }
   const rooted =
     isAbsolute(clean) && isFile(clean)
       ? clean
       : resolve(root, isAbsolute(clean) ? `.${clean}` : clean)
-  return resolvedModuleTarget(resolveId, rooted)
+  if (isFile(rooted)) return { kind: 'file', file: rooted }
+  const rootedTarget = await resolvedModuleTarget(resolveId, rooted)
+  if (rootedTarget.kind !== 'missing' && rootedTarget.kind !== 'unavailable') {
+    return rootedTarget
+  }
+  return resolvedModuleTarget(resolveId, input)
 }
 
 const hasTanStackStartPlugin = (resolved) =>
@@ -197,47 +195,133 @@ async function resolvedServerEntry(root, resolved, resolveId) {
     aliasMatches(candidate.find, START_SERVER_ENTRY_ALIAS),
   )
   const aliasTarget = await resolvedModuleTarget(resolveId, START_SERVER_ENTRY_ALIAS)
-  if (aliasTarget.kind !== 'missing') return { available: true, target: aliasTarget }
+  if (aliasTarget.kind !== 'missing' && aliasTarget.kind !== 'unavailable') {
+    return { available: true, target: aliasTarget }
+  }
+  if (aliasConfigured) return { available: true, target: { kind: 'unknown' } }
 
   if (hasTanStackStartPlugin(resolved)) {
     const ssrBuild = resolved.environments?.ssr?.build
-    const rawInputs = [
-      ...inputValues(ssrBuild?.rollupOptions?.input),
-      ...inputValues(ssrBuild?.rolldownOptions?.input),
-    ]
+    const rawInputs = inputValues(
+      ssrBuild?.rolldownOptions?.input ?? ssrBuild?.rollupOptions?.input,
+    )
     if (rawInputs.length) {
       if (rawInputs.length !== 1) {
         return { available: true, target: { kind: 'unknown' } }
       }
-      const targets = await Promise.all(
-        rawInputs.map((input) =>
-          typeof input === 'string'
-            ? resolvedInputTarget(root, resolveId, input)
-            : Promise.resolve({ kind: 'unknown' }),
-        ),
-      )
-      if (targets[0].kind === 'file') {
-        return { available: true, target: targets[0] }
+      const target =
+        typeof rawInputs[0] === 'string'
+          ? await resolvedInputTarget(root, resolveId, rawInputs[0])
+          : { kind: 'unknown' }
+      if (target.kind === 'file') {
+        return { available: true, target }
       }
-      if (targets[0].kind === 'package') {
+      if (target.kind === 'package') {
         return { available: true, target: { kind: 'package' } }
       }
       return { available: true, target: { kind: 'unknown' } }
     }
   }
 
-  return aliasConfigured
-    ? { available: true, target: { kind: 'unknown' } }
-    : { available: false, target: { kind: 'missing' } }
+  return { available: false, target: { kind: 'missing' } }
+}
+
+function closingDelimiter(source, start, open, close) {
+  let depth = 1
+  for (let index = start + 1; index < source.length; index++) {
+    if (source[index] === open) depth++
+    else if (source[index] === close && --depth === 0) return index + 1
+  }
+  return -1
+}
+
+const skipHorizontalSpace = (source, start) => {
+  let index = start
+  while (source[index] === ' ' || source[index] === '\t') index++
+  return index
+}
+
+function typeTargetAtom(source, start) {
+  let index = skipHorizontalSpace(source, start)
+  if (/^const\b/.test(source.slice(index))) return index + 'const'.length
+  if (/^typeof\b/.test(source.slice(index))) {
+    index = skipHorizontalSpace(source, index + 'typeof'.length)
+  }
+
+  if ('{[('.includes(source[index])) {
+    const pairs = { '{': '}', '[': ']', '(': ')' }
+    index = closingDelimiter(source, index, source[index], pairs[source[index]])
+    if (index === -1) return -1
+  } else {
+    const identifier = /^[\w$]+/.exec(source.slice(index))
+    if (!identifier) return -1
+    index += identifier[0].length
+  }
+
+  for (;;) {
+    index = skipHorizontalSpace(source, index)
+    if (source[index] === '.') {
+      const property = /^[\w$]+/.exec(source.slice(skipHorizontalSpace(source, index + 1)))
+      if (!property) return -1
+      index = skipHorizontalSpace(source, index + 1) + property[0].length
+      continue
+    }
+    if (source[index] === '<') {
+      index = closingDelimiter(source, index, '<', '>')
+      if (index === -1) return -1
+      continue
+    }
+    if (source[index] === '[') {
+      index = closingDelimiter(source, index, '[', ']')
+      if (index === -1) return -1
+      continue
+    }
+    return index
+  }
+}
+
+function typeAssertionTarget(source, start) {
+  let index = skipHorizontalSpace(source, start)
+  const keyword = /^(?:as|satisfies)\b/.exec(source.slice(index))
+  if (!keyword) return -1
+  index = typeTargetAtom(source, index + keyword[0].length)
+  if (index === -1) return -1
+
+  for (;;) {
+    const operator = skipHorizontalSpace(source, index)
+    if (source[operator] !== '|' && source[operator] !== '&') return operator
+    index = typeTargetAtom(source, operator + 1)
+    if (index === -1) return -1
+  }
+}
+
+function directDefaultExportSupport(active, binding) {
+  const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
+  const match = new RegExp(`\\bexport\\s+default\\s+${expression}\\b`).exec(active)
+  if (!match) return null
+
+  let index = match.index + match[0].length
+  for (;;) {
+    index = skipHorizontalSpace(active, index)
+    if (
+      active[index] === ';' ||
+      active[index] === '\n' ||
+      active[index] === '\r' ||
+      !active[index]
+    ) {
+      return true
+    }
+    const next = typeAssertionTarget(active, index)
+    if (next === -1 || next === index) return false
+    index = next
+  }
 }
 
 function exportsBindingAsDefault({ active, exports }, binding) {
-  const expression = binding.split('.').map(escapeRegExp).join('\\s*\\.\\s*')
-  if (new RegExp(`\\bexport\\s+default\\s+${expression}\\s*(?:;|$)`, 'm').test(active)) {
-    return true
-  }
-  if (binding.includes('.')) return false
-  return exports.some((entry) => entry.n === 'default' && entry.ln === binding)
+  const direct = directDefaultExportSupport(active, binding)
+  if (direct !== null) return direct
+  if (binding.includes('.')) return null
+  return exports.some((entry) => entry.n === 'default' && entry.ln === binding) ? true : null
 }
 
 function defaultExportTarget(source, { active, imports, exports }) {
@@ -264,8 +348,9 @@ function defaultExportTarget(source, { active, imports, exports }) {
       namespaceExports: ['default'],
     })
     for (const binding of bindings) {
-      if (exportsBindingAsDefault({ active, exports }, binding)) {
-        targets.push({ specifier: entry.n, supported: true })
+      const supported = exportsBindingAsDefault({ active, exports }, binding)
+      if (supported !== null) {
+        targets.push({ specifier: entry.n, supported })
       }
     }
   }
@@ -353,8 +438,10 @@ async function detectServerEntryDelivery(root, resolved) {
   }
   if (positiveNamedDeliveries.length === 1) return positiveNamedDeliveries[0]
   const candidates = []
+  const namedServerEntrySet = new Set(namedServerEntries)
 
   for (const file of files) {
+    if (namedServerEntrySet.has(file)) continue
     if (!isFile(file)) continue
     let source
     try {
@@ -362,15 +449,18 @@ async function detectServerEntryDelivery(root, resolved) {
     } catch {
       // A conventional or discovered source file that cannot be inspected is uncertainty,
       // not grounds to abort every unrelated doctor check.
+      if (namedServerEntries.length) return 'unknown'
       candidates.push({ file, delivery: 'unknown' })
       continue
     }
     const delivery = classifyServerEntrySource(source)
-    if (delivery) candidates.push({ file, delivery })
+    if (delivery) {
+      if (namedServerEntries.length) return 'unknown'
+      candidates.push({ file, delivery })
+    }
   }
 
   if (!candidates.length) return 'none'
-  if (namedServerEntries.length) return 'unknown'
   return candidates.length === 1 ? candidates[0].delivery : 'unknown'
 }
 

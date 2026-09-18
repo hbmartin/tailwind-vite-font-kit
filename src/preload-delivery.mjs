@@ -4,7 +4,7 @@ import { escapeRegExp } from './string.mjs'
 
 const HTML_INPUT_RE = /\.html(?:$|[?#])/i
 
-function inputValues(input) {
+export function inputValues(input) {
   if (typeof input === 'string') return [input]
   if (Array.isArray(input)) return input
   if (input && typeof input === 'object') return Object.values(input)
@@ -179,10 +179,10 @@ function commentEnd(html, start) {
 export function scanHtml(html) {
   const links = []
   const styles = []
-  const noscripts = []
   let index = 0
   const templateStack = []
   let inertTemplateDepth = 0
+  let shadowRootDepth = 0
   while ((index = html.indexOf('<', index)) !== -1) {
     if (html.startsWith('<!--', index)) {
       const end = commentEnd(html, index)
@@ -222,7 +222,9 @@ export function scanHtml(html) {
       const tag = parseStartTag(html, index, nameEnd, name)
       if (!tag) break
       if (name === 'template' && templateStack.length) {
-        if (templateStack.pop()) inertTemplateDepth--
+        const template = templateStack.pop()
+        if (template.inert) inertTemplateDepth--
+        else if (template.shadowRoot) shadowRootDepth--
       }
       index = tag.end
       continue
@@ -248,14 +250,18 @@ export function scanHtml(html) {
     // A genuinely unclosed quote in live markup keeps the browser in the tag's
     // attribute-value state, so later tag-shaped text is not another element.
     if (!tag) break
-    if (name === 'link' && inertTemplateDepth === 0) links.push(tag)
+    if (name === 'link' && inertTemplateDepth === 0) {
+      links.push({ ...tag, inShadowRoot: shadowRootDepth > 0 })
+    }
 
     if (name === 'template') {
       const shadowRootMode = asciiLower(tag.attributes.get('shadowrootmode')?.value ?? '')
-      const inert =
-        inertTemplateDepth > 0 || (shadowRootMode !== 'open' && shadowRootMode !== 'closed')
-      templateStack.push(inert)
+      const shadowRoot =
+        inertTemplateDepth === 0 && (shadowRootMode === 'open' || shadowRootMode === 'closed')
+      const inert = inertTemplateDepth > 0 || !shadowRoot
+      templateStack.push({ inert, shadowRoot })
       if (inert) inertTemplateDepth++
+      else shadowRootDepth++
       index = tag.end
       continue
     }
@@ -268,14 +274,22 @@ export function scanHtml(html) {
       closing.lastIndex = tag.end
       const match = closing.exec(html)
       if (!match) {
-        const record = { text: html.slice(tag.end), start: tag.end, end: html.length }
+        const record = {
+          text: html.slice(tag.end),
+          start: tag.end,
+          end: html.length,
+          inShadowRoot: shadowRootDepth > 0,
+        }
         if (name === 'style' && inertTemplateDepth === 0) styles.push(record)
-        if (name === 'noscript' && inertTemplateDepth === 0) noscripts.push(record)
         break
       }
-      const record = { text: html.slice(tag.end, match.index), start: tag.end, end: match.index }
+      const record = {
+        text: html.slice(tag.end, match.index),
+        start: tag.end,
+        end: match.index,
+        inShadowRoot: shadowRootDepth > 0,
+      }
       if (name === 'style' && inertTemplateDepth === 0) styles.push(record)
-      if (name === 'noscript' && inertTemplateDepth === 0) noscripts.push(record)
       const closingTag = parseStartTag(html, match.index, match.index + 2 + name.length, name)
       if (!closingTag) break
       index = closingTag.end
@@ -283,7 +297,7 @@ export function scanHtml(html) {
       index = tag.end
     }
   }
-  return { links, styles, noscripts }
+  return { links, styles }
 }
 
 export const parseHtmlLinks = (html) => scanHtml(html).links
