@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { resolveConfig as resolveViteConfig } from 'vite'
+import { resolveConfig as resolveViteConfig, transformWithOxc } from 'vite'
 import { diagnoseResolvedConfig, loadProjectVite } from '../src/doctor.mjs'
 import { isDoctorContext, runInDoctorContext } from '../src/doctor-context.mjs'
 import { resolvePreloadDelivery } from '../src/preload-delivery.mjs'
@@ -628,7 +628,7 @@ test('Vite 8 aliased build options expose one TanStack Start SSR input', async (
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
 })
 
-test('root-relative SSR inputs win over same-named packages', async (t) => {
+test('Vite aliases win over same-named root-relative SSR input files', async (t) => {
   const item = fixture(t)
   const relativeEntry = 'application/http-entry.ts'
   const entry = join(item.root, relativeEntry)
@@ -657,6 +657,30 @@ test('root-relative SSR inputs win over same-named packages', async (t) => {
 
   const packageResolution = await item.resolved.createResolver()(relativeEntry)
   assert.match(packageResolution, /node_modules\/application\/http-entry\.ts$/)
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+  assert.ok(hasCheck(checks, 'failure', /no automatic Nitro or HTML delivery path/))
+  assert.equal(hasCheck(checks, 'pass', /deliver font preload Link headers/), false)
+})
+
+test('Vite 8 per-environment input supplies the Start SSR entry', async (t) => {
+  const item = fixture(t)
+  const relativeEntry = 'application/http-entry.ts'
+  const entry = join(item.root, relativeEntry)
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.plugins.push({ name: 'tanstack-start:config' })
+  const viteResolved = await attachViteResolver(item, {
+    environments: { ssr: { input: relativeEntry } },
+  })
+  item.resolved.environments = viteResolved.environments
+  disableAutomaticDelivery(item)
+
+  assert.equal(item.resolved.environments.ssr.input, relativeEntry)
+  assert.equal(item.resolved.environments.ssr.build.rolldownOptions.input, undefined)
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
 })
@@ -710,8 +734,14 @@ test('default-as imports, separate export lists, and TypeScript substitutions ar
   assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
 })
 
-test('TypeScript assertions preserve imported default server-entry bindings', async (t) => {
-  for (const assertion of ['satisfies StartServerEntry', 'as StartServerEntry']) {
+test('Vite TypeScript transforms preserve imported default server-entry bindings', async (t) => {
+  for (const assertion of [
+    'satisfies StartServerEntry',
+    'as StartServerEntry',
+    'satisfies Wrapper<() => string>',
+    'satisfies `server`',
+    'satisfies\n  StartServerEntry | OtherEntry',
+  ]) {
     const item = fixture(t)
     const entry = join(item.root, 'app/entry.ts')
     const implementation = join(item.root, 'app/handler.ts')
@@ -731,12 +761,124 @@ test('TypeScript assertions preserve imported default server-entry bindings', as
     await attachViteResolver(item)
     disableAutomaticDelivery(item)
 
-    const checks = await diagnoseResolvedConfig(item.root, item.resolved)
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved, {
+      transformSourceFn: transformWithOxc,
+    })
     assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), assertion)
   }
 })
 
-test('resolver unavailability falls back unless an explicit Start alias is configured', async (t) => {
+test('default bindings ending in $ are followed through local modules', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  const implementation = join(item.root, 'app/handler.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `import handler$ from './handler.js'\nexport default handler$\n`)
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  await attachViteResolver(item)
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved, {
+    transformSourceFn: transformWithOxc,
+  })
+  assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/))
+})
+
+test('continued default-export expressions are not mistaken for bare bindings', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  const implementation = join(item.root, 'app/handler.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(
+    entry,
+    `import handler from './handler.js'\nexport default handler\n  .withMiddleware(x)\n`,
+  )
+  writeFileSync(
+    implementation,
+    `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
+      `export default createFontsServerEntry({ linkHeader: true })\n`,
+  )
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  await attachViteResolver(item)
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved, {
+    transformSourceFn: transformWithOxc,
+  })
+  assert.ok(hasCheck(checks, 'warning', /could not be verified/))
+  assert.equal(hasCheck(checks, 'pass', /deliver font preload Link headers/), false)
+})
+
+test('derived dependency defaults are absent while derived local defaults are uncertain', async (t) => {
+  for (const dependency of [true, false]) {
+    const item = fixture(t)
+    const entry = join(item.root, 'app/entry.ts')
+    const imported = dependency
+      ? join(item.root, 'node_modules/server-package/index.js')
+      : join(item.root, 'app/server-package.ts')
+    mkdirSync(dirname(entry), { recursive: true })
+    mkdirSync(dirname(imported), { recursive: true })
+    writeFileSync(
+      entry,
+      `import createServer from '${dependency ? 'server-package' : './server-package.js'}'\n` +
+        `export default createServer()\n`,
+    )
+    if (dependency) {
+      writeFileSync(
+        join(item.root, 'node_modules/server-package/package.json'),
+        JSON.stringify({ name: 'server-package', version: '1.0.0', main: 'index.js' }),
+      )
+    }
+    writeFileSync(imported, `export default function createServer() { return {} }\n`)
+    item.resolved.resolve = {
+      alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+    }
+    await attachViteResolver(item)
+    disableAutomaticDelivery(item)
+
+    const checks = await diagnoseResolvedConfig(item.root, item.resolved, {
+      transformSourceFn: transformWithOxc,
+    })
+    assert.ok(
+      hasCheck(
+        checks,
+        dependency ? 'failure' : 'warning',
+        dependency ? /no automatic Nitro or HTML delivery path/ : /could not be verified/,
+      ),
+      dependency ? 'dependency' : 'local',
+    )
+  }
+})
+
+test('server-entry transform failures are uncertain', async (t) => {
+  const item = fixture(t)
+  const entry = join(item.root, 'app/entry.ts')
+  mkdirSync(dirname(entry), { recursive: true })
+  writeFileSync(entry, `export default function handler() {}\n`)
+  item.resolved.resolve = {
+    alias: [{ find: 'virtual:tanstack-start-server-entry', replacement: entry }],
+  }
+  await attachViteResolver(item)
+  disableAutomaticDelivery(item)
+
+  const checks = await diagnoseResolvedConfig(item.root, item.resolved, {
+    transformSourceFn: async () => {
+      throw new Error('transform failed')
+    },
+  })
+  assert.ok(hasCheck(checks, 'warning', /could not be verified/))
+})
+
+test('resolver unavailability falls back through unresolved Start aliases to an SSR input', async (t) => {
   const source =
     `import { createFontsServerEntry } from 'tailwind-vite-font-kit/start-server'\n` +
     `export default createFontsServerEntry({ linkHeader: true })\n`
@@ -755,28 +897,24 @@ test('resolver unavailability falls back unless an explicit Start alias is confi
     assert.ok(hasCheck(checks, 'pass', /deliver font preload Link headers/), resolver)
   }
 
-  const aliased = fixture(t)
-  mkdirSync(join(aliased.root, 'src'))
-  writeFileSync(join(aliased.root, 'src/server.ts'), source)
-  aliased.resolved.resolve = {
-    alias: [
-      {
-        find: 'virtual:tanstack-start-server-entry',
-        replacement: join(aliased.root, 'missing-server.ts'),
-      },
-    ],
+  for (const find of ['virtual:tanstack-start-server-entry', /^virtual:(.*)$/]) {
+    const aliased = fixture(t)
+    mkdirSync(join(aliased.root, 'src'))
+    writeFileSync(join(aliased.root, 'src/server.ts'), source)
+    aliased.resolved.resolve = {
+      alias: [{ find, replacement: join(aliased.root, 'missing-server.ts') }],
+    }
+    aliased.resolved.createResolver = () => async () => {
+      throw new Error('resolver unavailable')
+    }
+    aliased.resolved.plugins.push({ name: 'tanstack-start:config' })
+    aliased.resolved.environments = {
+      ssr: { build: { rolldownOptions: { input: 'src/server.ts' } } },
+    }
+    disableAutomaticDelivery(aliased)
+    const aliasedChecks = await diagnoseResolvedConfig(aliased.root, aliased.resolved)
+    assert.ok(hasCheck(aliasedChecks, 'pass', /deliver font preload Link headers/), String(find))
   }
-  aliased.resolved.createResolver = () => async () => {
-    throw new Error('resolver unavailable')
-  }
-  aliased.resolved.plugins.push({ name: 'tanstack-start:config' })
-  aliased.resolved.environments = {
-    ssr: { build: { rolldownOptions: { input: 'src/server.ts' } } },
-  }
-  disableAutomaticDelivery(aliased)
-  const aliasedChecks = await diagnoseResolvedConfig(aliased.root, aliased.resolved)
-  assert.ok(hasCheck(aliasedChecks, 'warning', /could not be verified/))
-  assert.equal(hasCheck(aliasedChecks, 'pass', /deliver font preload Link headers/), false)
 })
 
 test('opaque resolved Start aliases remain authoritative over filesystem candidates', async (t) => {
@@ -789,6 +927,10 @@ test('opaque resolved Start aliases remain authoritative over filesystem candida
   )
   item.resolved.createResolver = () => async (specifier) =>
     specifier === 'virtual:tanstack-start-server-entry' ? '\0opaque-start-entry' : undefined
+  item.resolved.plugins.push({ name: 'tanstack-start:config' })
+  item.resolved.environments = {
+    ssr: { build: { rolldownOptions: { input: 'src/server.ts' } } },
+  }
   disableAutomaticDelivery(item)
 
   const checks = await diagnoseResolvedConfig(item.root, item.resolved)

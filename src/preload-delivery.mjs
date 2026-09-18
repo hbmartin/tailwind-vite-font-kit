@@ -11,13 +11,26 @@ export function inputValues(input) {
   return []
 }
 
+export function environmentInput(resolved, name) {
+  const environment = resolved.environments?.[name]
+  const configured =
+    environment?.build?.rolldownOptions?.input ??
+    environment?.build?.rollupOptions?.input ??
+    environment?.input
+  if (configured !== undefined) return configured
+  if (name !== 'client' && !resolved.build?.ssr) return undefined
+  return (
+    resolved.build?.rolldownOptions?.input ?? resolved.build?.rollupOptions?.input ?? resolved.input
+  )
+}
+
 export function hasConventionalHtmlEntry(
   root,
   resolved,
   { isSsrBuild = false, isLibraryBuild = Boolean(resolved.build?.lib) } = {},
 ) {
   if (isSsrBuild || isLibraryBuild || resolved.appType === 'custom') return false
-  const input = resolved.build?.rollupOptions?.input
+  const input = environmentInput(resolved, 'client')
   if (input !== undefined) {
     return inputValues(input).some(
       (value) => typeof value === 'string' && HTML_INPUT_RE.test(value),
@@ -63,9 +76,22 @@ export function resolvePreloadDelivery(
   }
 }
 
-export const decodeHtmlHref = (href) => href.replace(/&(?:amp|#0*38|#x0*26);/gi, '&')
-
 const ASCII_WHITESPACE_RE = /[\t\n\f\r ]/
+const ATTRIBUTE_CHARACTER_REFERENCES = new Map([
+  ['amp', '&'],
+  ['AMP', '&'],
+  ['quot', '"'],
+  ['QUOT', '"'],
+  ['apos', "'"],
+  ['period', '.'],
+  ['equals', '='],
+  ['lpar', '('],
+  ['rpar', ')'],
+  ['comma', ','],
+  ['Tab', '\t'],
+  ['NewLine', '\n'],
+  ['nbsp', '\u00a0'],
+])
 const RAW_TEXT_ELEMENTS = new Set([
   'script',
   'style',
@@ -77,9 +103,106 @@ const RAW_TEXT_ELEMENTS = new Set([
   'noframes',
   'noscript',
 ])
+const VOID_ELEMENTS = new Set([
+  'area',
+  'base',
+  'basefont',
+  'bgsound',
+  'br',
+  'col',
+  'embed',
+  'frame',
+  'hr',
+  'img',
+  'input',
+  'keygen',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+])
+const STANDARD_SHADOW_HOSTS = new Set([
+  'article',
+  'aside',
+  'blockquote',
+  'body',
+  'div',
+  'footer',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'main',
+  'nav',
+  'p',
+  'section',
+  'span',
+])
+const RESERVED_CUSTOM_ELEMENT_NAMES = new Set([
+  'annotation-xml',
+  'color-profile',
+  'font-face',
+  'font-face-src',
+  'font-face-uri',
+  'font-face-format',
+  'font-face-name',
+  'missing-glyph',
+])
 
 const asciiLower = (value) =>
   value.replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32))
+
+function decodeHtmlAttribute(value) {
+  return value.replace(
+    /&#(?:[xX]([0-9A-Fa-f]+)|([0-9]+));?|&([A-Za-z][A-Za-z0-9]+);/g,
+    (raw, hex, decimal, named) => {
+      if (named) return ATTRIBUTE_CHARACTER_REFERENCES.get(named) ?? raw
+      const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10)
+      if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        return '\ufffd'
+      }
+      return String.fromCodePoint(codePoint)
+    },
+  )
+}
+
+const isPotentialCustomElementCharacter = (character) => {
+  const codePoint = character.codePointAt(0)
+  return (
+    character === '-' ||
+    character === '.' ||
+    character === '_' ||
+    (character >= '0' && character <= '9') ||
+    (character >= 'a' && character <= 'z') ||
+    codePoint === 0x00b7 ||
+    (codePoint >= 0x00c0 && codePoint <= 0x00d6) ||
+    (codePoint >= 0x00d8 && codePoint <= 0x00f6) ||
+    (codePoint >= 0x00f8 && codePoint <= 0x037d) ||
+    (codePoint >= 0x037f && codePoint <= 0x1fff) ||
+    (codePoint >= 0x200c && codePoint <= 0x200d) ||
+    (codePoint >= 0x203f && codePoint <= 0x2040) ||
+    (codePoint >= 0x2070 && codePoint <= 0x218f) ||
+    (codePoint >= 0x2c00 && codePoint <= 0x2fef) ||
+    (codePoint >= 0x3001 && codePoint <= 0xd7ff) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfdcf) ||
+    (codePoint >= 0xfdf0 && codePoint <= 0xfffd) ||
+    (codePoint >= 0x10000 && codePoint <= 0xeffff)
+  )
+}
+
+const isValidCustomElementName = (name) =>
+  /^[a-z]/.test(name) &&
+  name.includes('-') &&
+  [...name].every(isPotentialCustomElementCharacter) &&
+  !RESERVED_CUSTOM_ELEMENT_NAMES.has(name)
+
+const isValidShadowHostName = (name) =>
+  STANDARD_SHADOW_HOSTS.has(name) || isValidCustomElementName(name)
 
 function parseStartTag(html, tagStart, nameEnd, name) {
   const attributes = new Map()
@@ -146,7 +269,7 @@ function parseStartTag(html, tagStart, nameEnd, name) {
     if (!attributes.has(attributeName)) {
       attributes.set(attributeName, {
         name: attributeName,
-        value,
+        value: value === undefined ? undefined : decodeHtmlAttribute(value),
         start,
         end: attributeEnd,
       })
@@ -180,9 +303,26 @@ export function scanHtml(html) {
   const links = []
   const styles = []
   let index = 0
-  const templateStack = []
+  // transformIndexHtml accepts fragments. Browsers parse those in an element context, and
+  // treating that implicit context as <body> preserves standalone declarative roots.
+  /** @type {{name: string, shadowRoot: boolean, inert?: boolean}[]} */
+  const elementStack = [{ name: 'body', shadowRoot: false }]
   let inertTemplateDepth = 0
   let shadowRootDepth = 0
+
+  const closeElement = (name) => {
+    let match = elementStack.length - 1
+    while (match > 0 && elementStack[match].name !== name) match--
+    if (match === 0) return
+    while (elementStack.length - 1 >= match) {
+      const element = elementStack.pop()
+      if (!element) break
+      if (element.name !== 'template') continue
+      if (element.inert) inertTemplateDepth--
+      else if (element.shadowRoot) shadowRootDepth--
+    }
+  }
+
   while ((index = html.indexOf('<', index)) !== -1) {
     if (html.startsWith('<!--', index)) {
       const end = commentEnd(html, index)
@@ -221,11 +361,7 @@ export function scanHtml(html) {
       const name = asciiLower(html.slice(index + 2, nameEnd))
       const tag = parseStartTag(html, index, nameEnd, name)
       if (!tag) break
-      if (name === 'template' && templateStack.length) {
-        const template = templateStack.pop()
-        if (template.inert) inertTemplateDepth--
-        else if (template.shadowRoot) shadowRootDepth--
-      }
+      closeElement(name)
       index = tag.end
       continue
     }
@@ -256,10 +392,16 @@ export function scanHtml(html) {
 
     if (name === 'template') {
       const shadowRootMode = asciiLower(tag.attributes.get('shadowrootmode')?.value ?? '')
+      const parent = elementStack.at(-1)
+      if (!parent) break
       const shadowRoot =
-        inertTemplateDepth === 0 && (shadowRootMode === 'open' || shadowRootMode === 'closed')
+        inertTemplateDepth === 0 &&
+        (shadowRootMode === 'open' || shadowRootMode === 'closed') &&
+        isValidShadowHostName(parent.name) &&
+        !parent.shadowRoot
       const inert = inertTemplateDepth > 0 || !shadowRoot
-      templateStack.push({ inert, shadowRoot })
+      if (shadowRoot) parent.shadowRoot = true
+      elementStack.push({ name, inert, shadowRoot })
       if (inert) inertTemplateDepth++
       else shadowRootDepth++
       index = tag.end
@@ -294,6 +436,7 @@ export function scanHtml(html) {
       if (!closingTag) break
       index = closingTag.end
     } else {
+      if (!VOID_ELEMENTS.has(name)) elementStack.push({ name, shadowRoot: false })
       index = tag.end
     }
   }
@@ -440,10 +583,9 @@ export function normalizeHtmlFontPreloads(html, preloads) {
   for (const link of parseHtmlLinks(html)) {
     const href = htmlLinkAttribute(link, 'href')
     if (!isHtmlFontPreload(link) || !href) continue
-    const decoded = decodeHtmlHref(href)
-    if (!wanted.has(decoded)) continue
+    if (!wanted.has(href)) continue
 
-    present.add(decoded)
+    present.add(href)
     if (!hasAnonymousCrossorigin(link)) edits.push(crossoriginEdit(html, link))
   }
 

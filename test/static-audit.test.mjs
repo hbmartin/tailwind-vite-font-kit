@@ -149,7 +149,7 @@ test('static audit models JavaScript-on CSS without noscript or inert style prel
         return response(
           documentUrl,
           `<link rel=preload as=style href=/app.css
-             onload="this&period;rel&equals;&quot;stylesheet&quot;">
+             onload="this&period;rel&equals;&QUOT;stylesheet&QUOT;">
            <noscript>
              <link rel=stylesheet href=/app.css>
              <link rel=stylesheet href=/fallback.css>
@@ -213,7 +213,18 @@ test('static audit separates shadow-root CSS while retaining live font preloads'
            <template shadowrootmode=closed>
              <link rel=preload as=style href=/closed.css
                onload="this.setAttribute('rel', 'stylesheet')">
-           </template>`,
+             <link rel=preload as=font href=/fonts/duplicate.woff2 crossorigin>
+           </template>
+           <head>
+             <template shadowrootmode=open>
+               <link rel=preload as=font href=/fonts/head.woff2 crossorigin>
+             </template>
+           </head>
+           <button>
+             <template shadowrootmode=open>
+               <link rel=preload as=font href=/fonts/invalid-host.woff2 crossorigin>
+             </template>
+           </button>`,
         )
       }
       if (current === shadowCssUrl) {
@@ -239,6 +250,7 @@ test('static audit separates shadow-root CSS while retaining live font preloads'
   assert.deepEqual(calls, [documentUrl])
   assert.equal(audit.headPreloadFontLinks.length, 1)
   assert.match(audit.headPreloadFontLinks[0], /shadow\.woff2/)
+  assert.doesNotMatch(audit.headPreloadFontLinks.join('\n'), /duplicate|head|invalid-host/)
 })
 
 test('static audit decodes numeric references in promoted preload handlers', async () => {

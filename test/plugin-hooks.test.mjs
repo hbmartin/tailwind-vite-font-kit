@@ -614,6 +614,23 @@ test('automatic HTML injection requires a conventional Vite HTML entry', async (
   assert.equal(htmlTags(explicit.plugin.transformIndexHtml('<head></head>')).length, 1)
 })
 
+test('automatic HTML injection follows the Vite 8 client environment input', async (t) => {
+  const html = await routeRules(t)
+  rmSync(join(html.root, 'index.html'))
+  html.plugin.configResolved({
+    plugins: [],
+    environments: { client: { input: 'app.html', build: {} } },
+  })
+  assert.equal(htmlTags(html.plugin.transformIndexHtml('<head></head>')).length, 1)
+
+  const script = await routeRules(t)
+  script.plugin.configResolved({
+    plugins: [],
+    environments: { client: { input: 'src/main.ts', build: {} } },
+  })
+  assert.equal(script.plugin.transformIndexHtml('<head></head>'), undefined)
+})
+
 test('automatic HTML injection stays disabled for an SSR build', async (t) => {
   const warned = captureWarnings(t)
   const root = sandbox(t)
@@ -691,6 +708,12 @@ test('HTML preload deduplication understands escaped query-string hrefs', async 
   const repaired = plugin.transformIndexHtml(`<link rel="preload" as="font" href="${escaped}">`)
   assert.equal(repaired.tags.length, 0)
   assert.match(repaired.html, /crossorigin="anonymous"/)
+
+  const doubleEscaped = escaped.replaceAll('&amp;', '&amp;amp;')
+  const distinct = plugin.transformIndexHtml(
+    `<link rel="preload" as="font" href="${doubleEscaped}" crossorigin>`,
+  )
+  assert.equal(distinct.tags.length, 1)
 })
 
 test('HTML preload parsing respects attribute boundaries, quotes, and unquoted values', async (t) => {
@@ -702,6 +725,7 @@ test('HTML preload parsing respects attribute boundaries, quotes, and unquoted v
     `<link rel=preload as=font hreflang=en href=${attrs.href} crossorigin>`,
     `<link title="quoted href=/wrong > text" href="${attrs.href}" as="font" rel="other preload" crossorigin>`,
     `<link href="${attrs.href}" href="/ignored.woff2" crossorigin rel=preload as=font>`,
+    `<link rel="prelo&#97;d" as="fo&#110;t" href="${attrs.href}" crossorigin>`,
   ]
   for (const html of cases) assert.equal(plugin.transformIndexHtml(html), undefined, html)
 })
@@ -877,6 +901,26 @@ test('declarative shadow roots are live unless nested in an inert template', asy
     `<template shadowrootmode=open><template>${preload}</template></template>`,
   )
   assert.equal(ordinaryNested.tags.length, 1)
+
+  for (const host of ['div', 'font-shell', 'font-élement']) {
+    assert.equal(
+      plugin.transformIndexHtml(
+        `<${host}><template shadowrootmode=open>${preload}</template></${host}>`,
+      ),
+      undefined,
+      host,
+    )
+  }
+
+  for (const inert of [
+    `<head><template shadowrootmode=open>${preload}</template></head>`,
+    `<button><template shadowrootmode=open>${preload}</template></button>`,
+    `<div><template shadowrootmode=open></template>` +
+      `<template shadowrootmode=closed>${preload}</template></div>`,
+  ]) {
+    const result = plugin.transformIndexHtml(inert)
+    assert.equal(result.tags.length, 1, inert)
+  }
 })
 
 test('closeBundle warns when configured HTML injection transformed no HTML', async (t) => {

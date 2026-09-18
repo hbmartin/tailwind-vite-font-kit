@@ -1,7 +1,6 @@
 // Follow the served HTML -> stylesheets -> @import chain in Node so cross-origin CSS can
 // be inspected without the browser's stylesheet access restrictions.
 import {
-  decodeHtmlHref,
   htmlLinkAttribute,
   htmlLinkRelTokens,
   isHeaderFontPreload,
@@ -9,33 +8,6 @@ import {
   parseLinkHeader,
   scanHtml,
 } from '../src/preload-delivery.mjs'
-
-const HANDLER_CHARACTER_REFERENCES = new Map([
-  ['quot', '"'],
-  ['apos', "'"],
-  ['period', '.'],
-  ['equals', '='],
-  ['lpar', '('],
-  ['rpar', ')'],
-  ['comma', ','],
-  ['Tab', '\t'],
-  ['NewLine', '\n'],
-  ['nbsp', '\u00a0'],
-])
-
-function decodeHandlerAttribute(value) {
-  return value.replace(
-    /&#(?:[xX]([0-9A-Fa-f]+)|([0-9]+));?|&([A-Za-z][A-Za-z0-9]+);/g,
-    (raw, hex, decimal, named) => {
-      if (named) return HANDLER_CHARACTER_REFERENCES.get(named) ?? raw
-      const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10)
-      if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-        return '\ufffd'
-      }
-      return String.fromCodePoint(codePoint)
-    },
-  )
-}
 
 export function emptyStaticAudit(error) {
   const suppliedReason =
@@ -78,7 +50,7 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
   const stylesheetHref = (link) => {
     const relations = htmlLinkRelTokens(link)
     const as = htmlLinkAttribute(link, 'as')?.toLowerCase()
-    const onload = decodeHandlerAttribute(htmlLinkAttribute(link, 'onload') ?? '')
+    const onload = htmlLinkAttribute(link, 'onload') ?? ''
     const promotesPreload =
       /\bthis\s*\.\s*rel\s*=\s*(['"])stylesheet\1/i.test(onload) ||
       /\bthis\s*\.\s*setAttribute\s*\(\s*(['"])rel\1\s*,\s*(['"])stylesheet\2\s*\)/i.test(onload)
@@ -89,7 +61,7 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
       return null
     }
     const href = htmlLinkAttribute(link, 'href')
-    return href ? decodeHtmlHref(href) : null
+    return href || null
   }
   const hrefs = [
     ...new Set(
@@ -162,7 +134,7 @@ export async function staticAudit(url, { fetchImpl = fetch } = {}) {
     const href = htmlLinkAttribute(link, 'href')
     if (href) {
       try {
-        preloadUrls.add(new URL(decodeHtmlHref(href), documentUrl).href)
+        preloadUrls.add(new URL(href, documentUrl).href)
       } catch (error) {
         auditErrors.push(`invalid HTML preload href ${JSON.stringify(href)}: ${error.message}`)
       }
