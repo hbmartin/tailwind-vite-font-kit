@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@capsizecss/metrics':
         specifier: ^4
-        version: 4.2.0
+        version: 4.4.0
       es-module-lexer:
         specifier: ^2.3.2
         version: 2.3.2
@@ -69,8 +69,8 @@ packages:
   '@braidai/lang@1.1.2':
     resolution: {integrity: sha512-qBcknbBufNHlui137Hft8xauQMTZDKdophmLFv05r2eNmdIv/MlPuP4TdUknHG68UdWLgVZwgxVe735HzJNIwA==}
 
-  '@capsizecss/metrics@4.2.0':
-    resolution: {integrity: sha512-BkLX2NonSAVuHrStmxlRG/PVUxq4uQWeQGPY/G/4pi7GRQt/4A+7RzMWR8m85+0Tv7BsuBpR7JoniMS9QwuVRw==}
+  '@capsizecss/metrics@4.4.0':
+    resolution: {integrity: sha512-c2hY6gnHsHdt41zKv2RAbUM3v1m9TnBGKOWv0ksdScBMlwE5AdZPt+hjZEIziEiYUpdyytZ/ct07WqjzdBOIJw==}
 
   '@capsizecss/unpack@4.0.1':
     resolution: {integrity: sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ==}
@@ -1050,7 +1050,7 @@ snapshots:
 
   '@braidai/lang@1.1.2': {}
 
-  '@capsizecss/metrics@4.2.0': {}
+  '@capsizecss/metrics@4.4.0': {}
 
   '@capsizecss/unpack@4.0.1':
     dependencies:
